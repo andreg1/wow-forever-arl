@@ -55,6 +55,8 @@ local ASKER_COOLDOWN = 60 -- s before the same asker is answered again
 local HOST_WINDOW, HOST_MAX = 600, 6 -- our own invites (lane 3): at most 6 per 10 min
 local INVITE_GAP = 1
 local BURST, BURST_WAIT, ASK_MAX = 8, 1, 49 -- a search lists 50 players at most
+local ANYWAY_WAIT, ANYWAY_LATE = 3, 10 -- s after the last whisper: re-ask hosts that can't read their layer
+local BOOK_TTL, ASKED_FOR = 7 * 86400, 6 * 3600 -- known LayerSwap users; strangers not asked again for 6 h
 local WHO_WAIT = 15 -- the server can take a while (or refuse: "Unable to complete your request")
 local ASK_GAP = 10 -- s between two asks of ours
 local LEAVE_AFTER = 4
@@ -772,36 +774,126 @@ function F:OnWho()
   if not okN or Secret(n) or type(n) ~= "number" then
     n = 0
   end
-  local me, mates, others = MyName(), {}, {}
-  local guild = Str((GetGuildInfo("player")))
+  local book, asked = self:Book(), self:AskedList()
+  local okI, zinfo = pcall(C_Map.GetMapInfo, p.zone or 0)
+  local zoneName = okI and type(zinfo) == "table" and Str(zinfo.name) or nil
+  -- Order, as LayerSwap does: known hosts, other known LayerSwap users, then
+  -- players standing in our zone, then the rest. A stranger asked within
+  -- ASKED_FOR who didn't answer isn't asked again (whispering the same
+  -- players over and over gets players reported for spam).
+  local me, hosts, known, here, rest, skipped, areas = MyName(), {}, {}, {}, {}, 0, {}
   for i = 1, math.min(n, 50) do
     local ok, info = pcall(C_FriendList.GetWhoInfo, i)
     local full = ok and type(info) == "table" and not Secret(info) and Str(info.fullName)
     if full and Short(full) ~= me then
-      if guild and Str(info.fullGuildName) == guild then
-        mates[#mates + 1] = full
+      local area = Str(info.area)
+      if area then
+        areas[area] = (areas[area] or 0) + 1
+      end
+      local e = book[Short(full)]
+      if e and e.host then
+        hosts[#hosts + 1] = full
+      elseif e then
+        known[#known + 1] = full
+      elseif asked[full] and time() - asked[full] < ASKED_FOR then
+        skipped = skipped + 1
+      elseif zoneName and area == zoneName then
+        here[#here + 1] = full
       else
-        others[#others + 1] = full
+        rest[#rest + 1] = full
       end
     end
   end
   Unhush()
-  for _, list in ipairs({ mates, others }) do
+  for _, list in ipairs({ hosts, known, here, rest }) do
     for _, full in ipairs(list) do
       if #p.queue < ASK_MAX then
         p.queue[#p.queue + 1] = full
       end
     end
   end
-  self:Step("search answered: %d players (%d guildmates, %d others), asking %d", n, #mates, #others, #p.queue)
+  local where = {}
+  for area, k in pairs(areas) do
+    where[#where + 1] = area .. " " .. k
+  end
+  table.sort(where)
+  self:Step("search answered: %d players (known hosts %d, other LayerSwap users %d, in your zone %d, elsewhere %d, "
+    .. "asked lately %d), asking %d; where: %s", n, #hosts, #known, #here, #rest, skipped, #p.queue,
+    #where > 0 and table.concat(where, ", ", 1, math.min(#where, 5)) or "?")
   if run then
     run.whoFound = n
   end
   if #p.queue == 0 then
-    self:Print("nobody else found in your zone to ask.")
+    self:Print(skipped > 0 and "everyone this search found was asked lately and didn't answer; try later, or "
+      .. "another zone." or "nobody else found in your zone to ask.")
     return
   end
   self:Send(p)
+end
+
+-------------------------------------------------------------------------------
+-- What we know of other LayerSwap users (account-wide, self.shared):
+--   book[First Surname] = { at = time(), host = true|nil }  anyone who sent
+--     us a LayerSwap message (an answer, an ask); also imported once from
+--     LayerSwapDB.book when LayerSwap is installed
+--   asked[full name] = time()  strangers whispered by our asks
+-------------------------------------------------------------------------------
+
+function F:Book()
+  local book = self.shared.book
+  if type(book) ~= "table" then
+    book = {}
+    self.shared.book = book
+  end
+  return book
+end
+
+function F:AskedList()
+  local asked = self.shared.asked
+  if type(asked) ~= "table" then
+    asked = {}
+    self.shared.asked = asked
+  end
+  return asked
+end
+
+function F:Remember(sender, host)
+  local key = Short(sender)
+  if not key then
+    return
+  end
+  local book = self:Book()
+  local e = book[key] or {}
+  e.at = time()
+  if host ~= nil then
+    e.host = host or nil
+  end
+  book[key] = e
+end
+
+function F:PruneBook()
+  local now = time()
+  local book, asked = self:Book(), self:AskedList()
+  for k, e in pairs(book) do
+    if type(e) ~= "table" or type(e.at) ~= "number" or now - e.at > BOOK_TTL then
+      book[k] = nil
+    end
+  end
+  for k, at in pairs(asked) do
+    if type(at) ~= "number" or now - at > ASKED_FOR then
+      asked[k] = nil
+    end
+  end
+  -- LayerSwap's own book, when it's installed: the users it has met.
+  local ls = rawget(_G, "LayerSwapDB")
+  if type(ls) == "table" and type(ls.book) == "table" then
+    for k, e in pairs(ls.book) do
+      if type(k) == "string" and type(e) == "table" and type(e.at) == "number" and now - e.at <= BOOK_TTL
+        and not book[k] then
+        book[k] = { at = e.at, host = e.host and true or nil }
+      end
+    end
+  end
 end
 
 function F:Send(p)
@@ -814,10 +906,13 @@ function F:Send(p)
     if res == 3 then -- throttled: try this name again next round
       break
     end
-    table.remove(p.queue, 1)
+    local to = table.remove(p.queue, 1)
     n = n + 1
     if res == 0 then
       p.sent = p.sent + 1
+      if not self:Book()[Short(to)] then
+        self:AskedList()[to] = time()
+      end
       if run then
         run.sent = run.sent + 1
       end
@@ -834,6 +929,30 @@ function F:Send(p)
     self:Step("asks sent: %d whispered%s", p.sent,
       run and run.refused > 0 and (", " .. run.refused .. " refused (" .. tostring(run.refusedWhy) .. ")") or "")
     Log("asked", p.sent .. " players")
+    p.doneAt = GetTime()
+    for _, wait in ipairs({ ANYWAY_WAIT, ANYWAY_LATE }) do
+      self:After(wait, function(def)
+        def:Anyway(p)
+      end)
+    end
+  end
+end
+
+-- A host in our zone that hasn't read its own layer ("-" in its answer)
+-- skips an ask that names the layer we leave: it can't rule out standing on
+-- it. When no invite has come, each such host gets the ask once more without
+-- that layer, and then invites (LayerSwap does the same).
+function F:Anyway(p)
+  if ask ~= p or (run and #run.invites > 0) then
+    return
+  end
+  local line = "inv layer <LS " .. tostring(p.zone) .. ">"
+  for name, r in pairs(p.replies or {}) do
+    if r.host and r.layer == nil and not r.anyway and r.zone == tostring(p.zone) then
+      r.anyway = true
+      local res = Note(line, r.from)
+      self:Step("asked %s again without our layer (it hasn't read its own): result %s", name, tostring(res))
+    end
   end
 end
 
@@ -845,6 +964,7 @@ function F:OnReply(text, sender)
   end
   local name = Short(sender)
   if text == "same" then
+    self:Remember(sender, true)
     stats.same = stats.same + 1
     if run then
       run.same = run.same + 1
@@ -852,11 +972,15 @@ function F:OnReply(text, sender)
     self:Step("%s: \"same\" (a host already on your layer)", tostring(name))
     return
   end
-  local target, theirs, _, host = text:match("^heard (.-)|([^|]*)|([^|]*)|([^|]*)$")
+  local target, theirs, theirZone, host = text:match("^heard (.-)|([^|]*)|([^|]*)|([^|]*)$")
   if target and target ~= MyName() then
     self:Step("%s answered someone else (%s), not us (%s)", tostring(name), tostring(target), tostring(MyName()))
   end
   if target and target == MyName() then
+    self:Remember(sender, host == "h")
+    p.replies = p.replies or {}
+    p.replies[name or sender] = { from = sender, host = host == "h", zone = theirZone,
+      layer = theirs ~= "-" and theirs or nil }
     p.heard = p.heard + 1
     if p.rec then
       p.rec.heard = p.heard
@@ -1078,6 +1202,7 @@ function F:OnAddonMessage(_, prefix, text, kind, sender)
     return -- LayerSwap answers and reads its own messages
   end
   if kind == "WHISPER" and text:find("^inv layer") then
+    self:Remember(sender) -- a LayerSwap user (host or not: unknown)
     if self.db.host then
       self:AnswerLayerSwap(text, sender, "hidden ask")
     end
@@ -1124,6 +1249,7 @@ function F:OnEnable()
     pcall(C_ChatInfo.RegisterAddonMessagePrefix, PREFIX)
   end
   ResetLayer()
+  self:PruneBook()
   self:On("NAME_PLATE_UNIT_ADDED", function(def, _, unit)
     def:Observe(unit)
   end)
