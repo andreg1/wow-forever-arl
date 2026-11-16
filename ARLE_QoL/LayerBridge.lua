@@ -745,6 +745,9 @@ function F:Ask(via)
   local pool, wait = self:Pool()
   if via == "button" and self.armedPool then
     pool = self.armedPool
+    local fresh = self.preClickAt and GetTime() - self.preClickAt < 2
+    self:Step("pool decided %s: %s (macro: %s)", fresh and "at the click" or "EARLIER (PreClick didn't run)",
+      pool, tostring(self.armedText or "none"))
   end
   run.pool = pool
   if pool == "autolayer" then
@@ -1282,13 +1285,20 @@ local function BuildPad()
       sec:SetFrameLevel(f.swap:GetFrameLevel() + 5)
       sec:Show()
     end)
-    F:HookScript(sec, "PreClick", function()
-      if not InCombatLockdown() then
-        F:ArmButton()
+    -- SetScript, as Buff Back and Rare Objectives do on their host buttons
+    -- (a hooked PreClick on this template didn't run: 2026-11-16, a second
+    -- press 20 s after a line still went to AutoLayer). Our own button, ours
+    -- to script; errors caught through Debug.Call.
+    sec:SetScript("PreClick", function()
+      if F._active and not InCombatLockdown() then
+        F.preClickAt = GetTime()
+        ARLE.Debug.Call(F, F.ArmButton, F)
       end
     end)
-    F:HookScript(sec, "PostClick", function()
-      F:Ask("button")
+    sec:SetScript("PostClick", function()
+      if F._active then
+        ARLE.Debug.Call(F, F.Ask, F, "button")
+      end
     end)
     F:HookScript(sec, "OnEnter", function(self)
       f.swap:LockHighlight()
