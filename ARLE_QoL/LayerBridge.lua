@@ -54,7 +54,7 @@ local VOTES = 5
 local ASKER_COOLDOWN = 60 -- s before the same asker is answered again
 local HOST_WINDOW, HOST_MAX = 600, 6 -- our own invites (lane 3): at most 6 per 10 min
 local INVITE_GAP = 1
-local BURST, BURST_WAIT, ASK_MAX = 8, 1, 40
+local BURST, BURST_WAIT, ASK_MAX = 8, 1, 49 -- a search lists 50 players at most
 local WHO_WAIT = 15 -- the server can take a while (or refuse: "Unable to complete your request")
 local ASK_GAP = 10 -- s between two asks of ours
 local LEAVE_AFTER = 4
@@ -939,7 +939,7 @@ end
 
 local function BuildPad()
   local f = Skin:CreateTooltipWindow(nil, UIParent)
-  f:SetSize(150, 46)
+  f:SetSize(190, 46)
   f:SetFrameStrata("MEDIUM")
   f:SetClampedToScreen(true)
   f:SetMovable(true)
@@ -1006,6 +1006,24 @@ local function BuildPad()
   end
 end
 
+-- How the layer is shown. The real id is the creature GUID's server number
+-- (7100). LayerSwap numbers the layers it has seen in its own order (A, B,
+-- ... then 27, 28, ...), a nickname kept in LayerSwapDB.layers; when it has
+-- one for this layer, show that too so the two panels can be matched.
+function F:LayerLabel(id)
+  local db = Loaded("LayerSwap") and rawget(_G, "LayerSwapDB")
+  local okI, info = pcall(C_Map.GetMapInfo, ZoneMap() or 0)
+  local zoneName = okI and type(info) == "table" and Str(info.name) or nil
+  if type(db) == "table" and type(db.layers) == "table" then
+    for other, l in pairs(db.layers) do
+      if type(l) == "table" and l.letter and Key(other) == Key(id) and (l.zone == nil or l.zone == zoneName) then
+        return string.format("Layer %s (LayerSwap) · id %s", tostring(l.letter), tostring(Key(id)))
+      end
+    end
+  end
+  return "Layer id " .. tostring(Key(id))
+end
+
 function F:Paint()
   -- The pad holds a secure button: shown and hidden out of combat only.
   if not self._active or not self.db.button or InInstance() then
@@ -1021,7 +1039,7 @@ function F:Paint()
   if not pad then
     BuildPad()
   end
-  pad.text:SetText(layer.id and ("Layer " .. Key(layer.id)) or "|cff999999Layer unknown: look at a creature|r")
+  pad.text:SetText(layer.id and self:LayerLabel(layer.id) or "|cff999999Layer unknown: look at a creature|r")
   ARLE.Secure:Run(function()
     if F._active and F.db.button and not InInstance() then
       pad:Show()
