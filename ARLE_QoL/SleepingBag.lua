@@ -222,7 +222,10 @@ local function AttachUseButton()
   end
   use:SetParent(alert)
   use:ClearAllPoints()
-  use:SetPoint("CENTER", alert.icon, "CENTER")
+  -- On the icon, but anchored to the alert frame: a protected frame can't be
+  -- anchored to a region (the icon is a texture); the client refuses with
+  -- "Cannot anchor protected frames to regions". Same spot as the icon.
+  use:SetPoint("LEFT", alert, "LEFT", 12, 0)
   use:SetSize(42, 42)
   use:SetAttribute("type", "item")
   use:SetAttribute("item", "item:" .. ITEM)

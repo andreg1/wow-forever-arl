@@ -666,7 +666,14 @@ local function AttachUseButton()
   end
   use:SetParent(alert)
   use:ClearAllPoints()
-  use:SetPoint("CENTER", alert.icon, "CENTER")
+  -- On the icon, but anchored to the alert frame: a protected frame can't be
+  -- anchored to a region (the icon is a texture); the client refuses with
+  -- "Cannot anchor protected frames to regions". Same spot as the icon (Layout).
+  if F.db.iconMode then
+    use:SetPoint("CENTER", alert, "CENTER")
+  else
+    use:SetPoint("TOPLEFT", alert, "TOPLEFT", 12, -12)
+  end
   local size = alert.icon:GetWidth()
   use:SetSize(size, size)
   use:SetScript("OnEnter", function(self)
