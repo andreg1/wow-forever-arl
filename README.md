@@ -26,7 +26,7 @@ Copy every folder of this repo (`ARLExtensions` and the `ARLE_*` packs) into `Wo
 | Questie | Sub-Quest Filter: hides sub-quests until you can pick them up | `/arl subq` | Questie |
 | Questie | Rare Objectives: alerts and a scan key for rare quest mobs you still need | `/arl rare` | QuestieDB |
 | Questie | Quest Search: search quests by text, by zone they lead into, by faction | `/arl qs` | QuestieDB |
-| EllesmereUI | Quest Tracker: clickable quest item buttons and missing-item warnings in the quest tracker | `/arl qt` | EllesmereUI Quest Tracker |
+| EllesmereUI | Quest Tracker: clickable quest item buttons, missing-item warnings, zone focus, and "only the quests for where I am", including quests from other zones whose objectives or turn-in are here | `/arl qt` | EllesmereUI Quest Tracker (QuestieDB for "objectives here") |
 | EllesmereUI | Item Lock: Alt+Right-click locks a bag item so it can't be sold or destroyed | `/arl lock` | EllesmereUI Bags |
 | Auctionator | Darkmoon Tickets: Darkmoon Faire turn-ins ranked by gold per Prize Ticket | `/arl dmf` | Auctionator |
 | DungeonJournal | Dungeon Helper: dungeon window with BiS Finder, Quests and Clear Times | `/arl dh` | DungeonJournal (Forever Leveling BiS optional) |

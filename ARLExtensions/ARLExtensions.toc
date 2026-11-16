@@ -2,7 +2,7 @@
 ## Title: Associação Rei Leão's Extensions
 ## Notes: One place to enable, disable and configure small extensions for the addons you already use. /arl
 ## Author: aredpanda, andreg1
-## Version: 0.4.4
+## Version: 0.5.0
 ## SavedVariables: ARLExtensionsDB
 ## SavedVariablesPerCharacter: ARLExtensionsCharDB
 ## OptionalDeps: EllesmereUI, ElvUI
@@ -24,6 +24,7 @@ Secure\Secure.lua
 Secure\Macro.lua
 Bridge\Questie.lua
 Bridge\Others.lua
+Lib\QuestPlaces.lua
 UI\Skin.lua
 UI\Kit.lua
 UI\Window.lua

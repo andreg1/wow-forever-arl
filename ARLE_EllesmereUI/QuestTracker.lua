@@ -7,6 +7,24 @@
 -- keys "z:<quest log header>" and questIDs) and asks it to redraw, and only
 -- when the zone changes, so folding by hand afterwards sticks.
 --
+-- Only the quests for where I am: one switch for EllesmereUI's own Quest Tools
+-- settings "Filter Quests > Current Zone Only" and "Auto-track zone quests"
+-- (filterEnabled, filterZone, autoTrackZone), set through EQT.Set and applied
+-- with EQT.ApplyQuestWatches as its options page does. The values from before
+-- are kept per character and put back when the switch or the feature goes off.
+--
+-- Objectives here: EUI decides "in the current area" in EQT.QuestInArea (the
+-- quest log header is the zone, or the game's isOnMap flag, which Forever's
+-- vanilla quests mostly lack) and filters with EQT.IsQuestFiltered. Both are
+-- looked up on its global module table (_G.EllesmereUIQuestTracker) on every
+-- rebuild of the custom tracker, so self:Wrap widens them without editing
+-- EUI: a quest whose unfinished objectives, or whose turn-in once complete,
+-- QuestieDB places in the player's zone counts too (ARLE.Lib.QuestPlaces).
+-- Not inside instances (EUI's own header rule only there). Addon tables only:
+-- no Blizzard function is touched and no watch-list edit is ours. Zone focus
+-- unfolds such a quest's own zone group too (the user's choice: it keeps its
+-- group) and leaves that group's other quests folded.
+--
 -- Quest item buttons:
 -- Draws an item icon at the right end of each quest title through EUI's
 -- public row hook (EllesmereUI.RegisterQuestTrackerRow). EUI forbids secure
@@ -44,11 +62,16 @@ local mod = {
   commands = {
     { name = "check", args = "<questID>", help = "which item buttons a quest gets, and why", always = true,
       run = function(self, rest) self:CheckQuest(tonumber(rest)) end },
+    { name = "here", help = "quests from other zones whose objectives are here, and why", always = true,
+      run = function(self) self:PrintHere() end },
   },
-  description = "Quest item buttons, missing-item alerts and zone focus for EllesmereUI's quest tracker.",
+  description = "Quest item buttons, missing-item alerts, zone focus and only-the-quests-for-here for "
+    .. "EllesmereUI's quest tracker.",
   defaults = {
     zoneFocus = true,
     cityExtras = true,
+    zoneOnly = false,
+    objectivesHere = true,
     showButtons = true,
     showMissing = true,
     alertChat = true,
@@ -72,6 +95,25 @@ local mod = {
       type = "boolean",
       label = "In cities, also class and profession quests",
       tooltip = "In a capital city (Orgrimmar, Stormwind, ...) the categories for your class (e.g. Warlock), your professions and Crafting unfold as well.",
+    },
+    {
+      key = "zoneOnly",
+      type = "boolean",
+      label = "Show only the quests for where I am",
+      cmd = "only",
+      tooltip = "Turns on EllesmereUI's own Quest Tools settings Filter Quests > Current Zone Only and Auto-track zone "
+        .. "quests: quests for elsewhere leave the tracker and the ones for here join it. Turning this off puts "
+        .. "those settings back as they were.",
+    },
+    {
+      key = "objectivesHere",
+      type = "boolean",
+      requires = { "QuestieDB", "Questie" },
+      label = "Count quests whose objectives (or turn-in) are here",
+      cmd = "objectives",
+      tooltip = "A quest from another zone counts as here when Questie places one of its unfinished objectives, or "
+        .. "its turn-in once complete, in this zone. It stays in its own zone's group, which unfolds. "
+        .. "/arl qt here lists them.",
     },
     { type = "header", label = "Quest item buttons" },
     { key = "showButtons", type = "boolean", label = "Show quest item buttons" },
@@ -811,6 +853,138 @@ local function QuestCategories()
   return byQuest
 end
 
+-------------------------------------------------------------------------------
+-- Only the quests for where I am / objectives here
+-------------------------------------------------------------------------------
+
+local Places = ARLE.Lib.QuestPlaces
+
+local function EQT()
+  local eqt = _G.EllesmereUIQuestTracker
+  return type(eqt) == "table" and eqt or nil
+end
+
+-- Counts as here through Questie: open world only, the option on, data loaded.
+local function HereByQuestie(questID)
+  return mod._active and mod.db.objectivesHere and type(questID) == "number"
+    and not (IsInInstance and IsInInstance()) and Places and Places.IsHere(questID) or false
+end
+
+-- EUI's filters other than Current Zone (EllesmereUIQuestTracker_Forever.lua,
+-- IsFiltered), for a quest the zone filter alone would have taken off.
+local function OtherFilters(eqt, questID)
+  local Cfg = eqt.Cfg
+  if type(Cfg) ~= "function" or not Cfg("filterEnabled") then
+    return false
+  end
+  if Cfg("filterCompleted") and C_QuestLog.IsComplete(questID) then
+    return true
+  end
+  if Cfg("filterTrivial") and C_QuestLog.IsQuestTrivial and C_QuestLog.IsQuestTrivial(questID) then
+    return true
+  end
+  if Cfg("filterRepeatable") and C_QuestLog.GetLogIndexForQuestID then
+    local index = C_QuestLog.GetLogIndexForQuestID(questID)
+    local info = index and C_QuestLog.GetInfo(index)
+    local default = Enum and Enum.QuestFrequency and Enum.QuestFrequency.Default
+    if info and info.frequency and default and info.frequency ~= default then
+      return true
+    end
+  end
+  return false
+end
+
+local function Rebuild()
+  local eqt = EQT()
+  if eqt and type(eqt.ApplyQuestWatches) == "function" then
+    pcall(eqt.ApplyQuestWatches)
+  end
+end
+
+local wrapsTold = false
+local function InstallWraps(self)
+  local eqt = EQT()
+  local okArea = eqt and self:Wrap(eqt, "QuestInArea", function(orig, info, header, ...)
+    if orig(info, header, ...) then
+      return true
+    end
+    local here = type(info) == "table" and HereByQuestie(info.questID)
+    if here then
+      self:Debug("in area by Questie: %s", tostring(info.title or info.questID))
+    end
+    return here
+  end)
+  local okFilter = eqt and self:Wrap(eqt, "IsQuestFiltered", function(orig, questID, ...)
+    local filtered = orig(questID, ...)
+    if filtered and HereByQuestie(questID) then
+      return OtherFilters(eqt, questID)
+    end
+    return filtered
+  end)
+  if not (okArea and okFilter) and not wrapsTold then
+    wrapsTold = true
+    self:Print("couldn't hook EllesmereUI's quest tracker area check (it may have changed): quests whose "
+      .. "objectives are here won't be added.")
+  end
+end
+
+local ZONE_KEYS = { "filterEnabled", "filterZone", "autoTrackZone" }
+
+-- Turns EUI's Current Zone Only + Auto-track on while zoneOnly is on (and the
+-- feature is), and puts what they were back otherwise.
+local function ApplyZoneOnly()
+  local eqt = EQT()
+  if not (eqt and type(eqt.Set) == "function" and type(eqt.Cfg) == "function") then
+    return
+  end
+  local char = mod.char
+  local before = char and char.euiBefore
+  if mod._active and mod.db.zoneOnly then
+    if type(before) ~= "table" then
+      before = {}
+      for _, k in ipairs(ZONE_KEYS) do
+        before[k] = eqt.Cfg(k) == true
+      end
+      char.euiBefore = before
+    end
+    for _, k in ipairs(ZONE_KEYS) do
+      eqt.Set(k, true)
+    end
+  elseif type(before) == "table" then
+    for _, k in ipairs(ZONE_KEYS) do
+      eqt.Set(k, before[k] == true)
+    end
+    if char then
+      char.euiBefore = nil
+    end
+  else
+    return
+  end
+  Rebuild()
+end
+
+function mod:PrintHere()
+  if not Places or not ARLE.Bridge.QuestieDB.Ready() then
+    self:Print("needs QuestieDB.")
+    return
+  end
+  local zone = GetRealZoneText and GetRealZoneText() or "?"
+  local any = false
+  for i = 1, C_QuestLog.GetNumQuestLogEntries() do
+    local info = C_QuestLog.GetInfo(i)
+    if info and not info.isHeader and info.questID and Places.IsHere(info.questID) then
+      local why = Places.Why(info.questID)
+      any = true
+      self:Print(string.format("%s: %s", tostring(info.title), #why > 0 and table.concat(why, ", ") or "?"))
+    end
+  end
+  if not any then
+    self:Print("no quest in your log has objectives in " .. zone .. ".")
+  elseif not self.db.objectivesHere then
+    self:Print("(\"Count quests whose objectives are here\" is off, so the tracker doesn't use these.)")
+  end
+end
+
 -- Folds every zone category but the wanted ones and unfolds those (and their
 -- quests). Leaves the tracker alone when none of the wanted categories has a
 -- quest, so walking through a zone without quests folds nothing.
@@ -844,10 +1018,19 @@ local function FocusZone()
   end
 
   local byQuest = QuestCategories()
+  -- Quests from other zones whose objectives are here: their own group
+  -- unfolds too, with only them unfolded in it.
+  local hereHeaders, hereQuests = {}, {}
+  for questID, header in pairs(byQuest) do
+    if not wanted[header] and HereByQuestie(questID) then
+      hereHeaders[header], hereQuests[questID] = true, true
+      mod:Debug("zone focus: %s (%s) has objectives here", tostring(questID), tostring(header))
+    end
+  end
   local present, hit = {}, false
   for _, header in pairs(byQuest) do
     present[header] = true
-    if wanted[header] then
+    if wanted[header] or hereHeaders[header] then
       hit = true
     end
   end
@@ -855,11 +1038,13 @@ local function FocusZone()
     return
   end
   for header in pairs(present) do
-    collapsed["z:" .. header] = not wanted[header] or nil
+    collapsed["z:" .. header] = not (wanted[header] or hereHeaders[header]) or nil
   end
   for questID, header in pairs(byQuest) do
     if wanted[header] then
       collapsed[questID] = nil
+    elseif hereHeaders[header] then
+      collapsed[questID] = not hereQuests[questID] or nil
     end
   end
   RefreshRows()
@@ -930,6 +1115,14 @@ function mod:OnEnable()
   zoneEvents:RegisterEvent("ZONE_CHANGED_NEW_AREA")
   zoneEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
   C_Timer.After(LOGIN_GRACE, FocusZone)
+  -- Objectives here: EUI's area check and filter, widened while on (the
+  -- wrappers read the option at each call, so the switch applies live).
+  InstallWraps(self)
+  -- EUI's profile is ready a moment after login.
+  self:After(LOGIN_GRACE, function()
+    ApplyZoneOnly()
+    Rebuild()
+  end)
 end
 
 function mod:OnDisable()
@@ -948,6 +1141,9 @@ function mod:OnDisable()
   wipe(alerted)
   signature = nil
   RefreshRows()
+  -- EUI's zone settings back as they were (the wraps pass through while off).
+  ApplyZoneOnly()
+  Rebuild()
 end
 
 -- The standalone EllesmereUIQuestTracker_QuestItems' settings (account wide
@@ -971,6 +1167,12 @@ function mod:OnOptionChanged(key, value)
   RefreshRows()
   -- Turning zone focus (or the city extras) on applies it right away.
   if (key == "zoneFocus" or key == "cityExtras") and value then
+    FocusZone()
+  end
+  if key == "zoneOnly" then
+    ApplyZoneOnly()
+  elseif key == "objectivesHere" then
+    Rebuild()
     FocusZone()
   end
 end

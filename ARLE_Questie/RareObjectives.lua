@@ -130,30 +130,16 @@ local function IsRareTarget(npcId, needed)
   return needed == 1 or IsRareRank(npcId)
 end
 
--- The NPC's maps, or nil when unknown (then it counts as everywhere).
+-- The NPC's maps (spawns and waypoints, ARLE.Lib.QuestPlaces), else the
+-- quest's zone; nil when unknown (then it counts as everywhere).
 local function MapsFor(npcId, questId)
-  local maps, any = {}, false
-  for _, field in ipairs({ "spawns", "waypoints" }) do
-    local byZone = QDB.Npc(npcId, field)
-    if type(byZone) == "table" then
-      for areaId in pairs(byZone) do
-        local uiMap = Q.UiMapForArea(areaId)
-        if uiMap then
-          maps[uiMap] = true
-          any = true
-        end
-      end
-    end
+  local maps = Lib.QuestPlaces.NpcMaps(npcId)
+  if maps then
+    return maps
   end
-  if not any then
-    local zone = QDB.Quest(questId, "zoneOrSort")
-    local uiMap = type(zone) == "number" and zone > 0 and Q.UiMapForArea(zone)
-    if uiMap then
-      maps[uiMap] = true
-      any = true
-    end
-  end
-  return any and maps or nil
+  local zone = QDB.Quest(questId, "zoneOrSort")
+  local uiMap = type(zone) == "number" and zone > 0 and Q.UiMapForArea(zone)
+  return uiMap and { [uiMap] = true } or nil
 end
 
 local function ItemName(itemId)
@@ -236,24 +222,8 @@ local function ScanQuest(questId, title)
   end
 end
 
--- Zone-level maps only: a continent contains every zone, so two zones on one
--- continent must not match through it.
-local ZONE_TYPE = Enum and Enum.UIMapType and Enum.UIMapType.Zone or 3
-
-local function WalkToZone(m, fn)
-  local guard = 0
-  while m and m > 0 and guard < 10 do
-    local info = C_Map.GetMapInfo(m)
-    if not info or (info.mapType and info.mapType < ZONE_TYPE) then
-      return
-    end
-    if fn(m) then
-      return true
-    end
-    m = info.parentMapID
-    guard = guard + 1
-  end
-end
+-- Up to zone level, never a continent (shared with Quest Tracker).
+local WalkToZone = Lib.QuestPlaces.WalkToZone
 
 local function UpdatePlayerMaps()
   wipe(playerMaps)
