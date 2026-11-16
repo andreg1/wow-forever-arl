@@ -73,20 +73,21 @@ local F = {
     .. "your zone. Hosting with LayerSwap, you also invite AutoLayer users' asks. Needs AutoLayer or LayerSwap.",
   options = {
     { type = "info", text = function(def) return def:GetStatus() end },
+    { key = "layerswap", type = "boolean", label = "Work with LayerSwap users", default = true, cmd = "ls",
+      desc = "Your asks reach LayerSwap hosts in your zone, out of sight (a player search, then hidden whispers)." },
+    { key = "autolayer", type = "boolean", label = "Work with AutoLayer users", default = true, cmd = "al",
+      desc = "Joins the \"layer\" channel AutoLayer uses, and when you ask, puts \"inv layer\" for it in the chat "
+        .. "box: press Enter to send it (the game doesn't let addons send it themselves). Off leaves the channel "
+        .. "if ARL joined it." },
     { key = "host", type = "boolean", label = "Host for the other addon's users", default = false,
       desc = "Off: ARL never invites anyone or answers anyone's ask. On, and only while AutoLayer or LayerSwap "
         .. "hosts too: answer LayerSwap users (AutoLayer hosting) or invite AutoLayer users (LayerSwap hosting)." },
-    { key = "ask", type = "boolean", label = "Ask the other addon's hosts too", default = true,
-      desc = "AutoLayer's hop button also asks LayerSwap hosts in your zone, out of sight." },
-    { key = "box", type = "boolean", label = "Put \"inv layer\" in the chat box for AutoLayer hosts", default = true,
-      desc = "When you ask, the line for the layer channel waits in the chat box: press Enter to send it, so "
-        .. "AutoLayer hosts hear you too (the game doesn't let addons send it themselves). Needs /join layer." },
     { key = "leave", type = "boolean", label = "Leave the group after the move", default = true,
       desc = "After an ask of ours, leave the host's group once the layer has changed." },
     { key = "button", type = "boolean", label = "Show the Swap layer button", default = true,
       desc = "A small movable button: one click asks for another layer (and shows the layer you're on)." },
     ARLE.Options.Preset.ResetPosition(),
-    { type = "button", label = "Ask LayerSwap hosts now", nocmd = true,
+    { type = "button", label = "Swap layer now", nocmd = true,
       run = function(def) def:Ask("button") end },
   },
 }
@@ -463,16 +464,51 @@ local function ActiveBox()
   return ok and type(box) == "table" and box or nil
 end
 
+-- AutoLayer's channel. ARL joins it while "Work with AutoLayer users" is on
+-- and leaves it again only when ARL was the one that joined it.
+local LAYER_CHANNEL = "layer"
+
+local function LayerChannelId()
+  local id = GetChannelName(LAYER_CHANNEL)
+  return not Secret(id) and type(id) == "number" and id > 0 and id or nil
+end
+
+function F:JoinLayer()
+  if LayerChannelId() then
+    return true
+  end
+  local ok = pcall(JoinChannelByName, LAYER_CHANNEL)
+  if ok then
+    self.char.joinedLayer = true
+  end
+  self:Debug("join %s: %s", LAYER_CHANNEL, ok and "asked" or "refused")
+  return false
+end
+
+function F:LeaveLayer()
+  if self.char.joinedLayer and LayerChannelId() then
+    pcall(LeaveChannelByName, LAYER_CHANNEL)
+    self:Debug("left %s (ARL had joined it)", LAYER_CHANNEL)
+  end
+  self.char.joinedLayer = nil
+end
+
 local boxAt = 0
-function F:BoxLine(via)
-  if not self.db.box or GetTime() - boxAt < ASK_GAP then
+function F:BoxLine(via, retried)
+  if not self.db.autolayer or GetTime() - boxAt < ASK_GAP then
     return
   end
-  local id = GetChannelName("layer")
-  if Secret(id) or type(id) ~= "number" or id == 0 then
-    if not self.toldJoin then
+  local id = LayerChannelId()
+  if not id then
+    -- From a click a join goes through; the channel number comes a moment later.
+    self:JoinLayer()
+    if not retried then
+      self:After(1, function(def)
+        def:BoxLine(via, true)
+      end)
+    elseif not self.toldJoin then
       self.toldJoin = true
-      self:Print("to reach AutoLayer hosts too, join their channel: /join layer")
+      self:Print("couldn't join the \"layer\" channel AutoLayer uses; type /join layer and ask again.")
     end
     return
   end
@@ -504,9 +540,8 @@ function F:HookLayerSwap(tries)
   local button = rawget(_G, "LayerSwapPanelSwapButton")
   if type(button) == "table" and button.HookScript then
     self.swapHooked = self:HookScript(button, "OnClick", function()
-      if F.db.ask then
-        F:BoxLine("LayerSwap")
-      end
+      F:Asked()
+      F:BoxLine("LayerSwap")
     end)
     return
   end
@@ -517,26 +552,36 @@ function F:HookLayerSwap(tries)
   end
 end
 
+-- Any ask of ours (for leaving the host's group after the move).
+local lastAsk
+function F:Asked()
+  lastAsk = { at = GetTime(), layer = layer.id }
+end
+
 function F:Ask(via)
-  if Loaded("LayerSwap") then
-    -- LayerSwap asks its own hosts best: press its button for the player (still
-    -- inside this click, so its /who is answered); our hook adds the box line.
-    local button = rawget(_G, "LayerSwapPanelSwapButton")
-    if via ~= "LayerSwap" and type(button) == "table" and button.Click and button:IsEnabled() then
-      pcall(button.Click, button)
-      self:BoxLine(via) -- no-op when the hook already did it
-      return
-    end
-    self:BoxLine(via)
-    self:Print("LayerSwap is on: its Swap layer button asks LayerSwap hosts.")
+  if not self.db.layerswap and not self.db.autolayer then
+    self:Print("\"Work with LayerSwap users\" and \"Work with AutoLayer users\" are both off.")
     return
   end
+  if InInstance() then
+    self:Print("can't change layer in an instance.")
+    return
+  end
+  self:Asked()
   -- AutoLayer posts its own line where the realm allows it.
   if via ~= "AutoLayer" or Restricted() then
     self:BoxLine(via)
   end
-  if InInstance() then
-    self:Print("can't change layer in an instance.")
+  if not self.db.layerswap then
+    return
+  end
+  if Loaded("LayerSwap") then
+    -- LayerSwap asks its own hosts best: press its button for the player
+    -- (still inside this click, so its /who is answered).
+    local button = rawget(_G, "LayerSwapPanelSwapButton")
+    if via ~= "LayerSwap" and type(button) == "table" and button.Click and button:IsEnabled() then
+      pcall(button.Click, button)
+    end
     return
   end
   local now = GetTime()
@@ -697,8 +742,8 @@ end
 local joined -- { at, layer }: we joined someone's group while our ask was fresh
 
 function F:OnGroupJoined()
-  if ask and GetTime() - ask.at < ASK_TTL and not UnitIsGroupLeader("player") then
-    joined = { at = GetTime(), layer = ask.layer or layer.id }
+  if lastAsk and GetTime() - lastAsk.at < ASK_TTL and not UnitIsGroupLeader("player") then
+    joined = { at = GetTime(), layer = lastAsk.layer or layer.id }
     self:Debug("joined a group after our ask; leaving once the layer changes")
   end
 end
@@ -796,9 +841,15 @@ function F:OnResetPosition()
   end
 end
 
-function F:OnOptionChanged(key)
+function F:OnOptionChanged(key, value)
   if key == "button" then
     self:Paint()
+  elseif key == "autolayer" then
+    if value then
+      self:JoinLayer()
+    else
+      self:LeaveLayer()
+    end
   end
 end
 
@@ -810,7 +861,7 @@ function F:OnAddonMessage(_, prefix, text, kind, sender)
   if Secret(prefix) or prefix ~= PREFIX or not Str(text) or not Str(sender) then
     return
   end
-  if Loaded("LayerSwap") then
+  if Loaded("LayerSwap") or not self.db.layerswap then
     return -- LayerSwap answers and reads its own messages
   end
   if kind == "WHISPER" and text:find("^inv layer") then
@@ -829,7 +880,8 @@ function F:OnChatLine(event, msg, sender, _, _, _, _, _, _, channelName)
     return
   end
   if msg:find("<LS", 1, true) then
-    if self.db.host and not Loaded("LayerSwap") and AutoLayerHosting() and msg:lower():find("inv%s+layer") then
+    if self.db.host and self.db.layerswap and not Loaded("LayerSwap") and AutoLayerHosting()
+      and msg:lower():find("inv%s+layer") then
       local al = AutoLayerAddon()
       local known = al and type(al.getCurrentLayer) == "function" and select(2, pcall(al.getCurrentLayer, al))
       if type(known) == "number" and known > 0 then
@@ -839,7 +891,8 @@ function F:OnChatLine(event, msg, sender, _, _, _, _, _, _, channelName)
     end
     return
   end
-  if event == "CHAT_MSG_CHANNEL" and self.db.host and not Loaded("AutoLayer") and LayerSwapHosting() then
+  if event == "CHAT_MSG_CHANNEL" and self.db.host and self.db.autolayer and not Loaded("AutoLayer")
+    and LayerSwapHosting() then
     self:AnswerAutoLayer(msg, sender, channelName)
   end
 end
@@ -875,6 +928,9 @@ function F:OnEnable()
   self:HookAutoLayer()
   self:HookLayerSwap()
   self:Paint()
+  if self.db.autolayer then
+    self:JoinLayer() -- may need a click on some realms; BoxLine tries again from one
+  end
   if not Loaded("AutoLayer") and not Loaded("LayerSwap") then
     self:Print("needs AutoLayer or LayerSwap; neither is loaded.")
   end
@@ -888,15 +944,14 @@ function F:HookAutoLayer()
     return
   end
   self.hooked = self:Hook(al, "SendLayerRequest", function()
-    if F.db.ask and not Loaded("LayerSwap") then
-      F:Ask("AutoLayer")
-    end
+    F:Ask("AutoLayer")
   end)
 end
 
 function F:OnDisable()
   Unhush()
-  ask, joined = nil, nil
+  ask, joined, lastAsk = nil, nil, nil
+  self:LeaveLayer()
   if pad then
     pad:Hide()
   end
