@@ -631,8 +631,9 @@ function F:BoxLine(via, retried)
   if via == "button" and self.armedText then
     -- The secure button's macro sent it as the player's own line.
     self.char.lineAt = GetTime()
-    self:Step("chat line: sent by the button's macro: %s (restricted realm: %s)", self.armedText,
-      tostring(Restricted()))
+    self:Step("chat line: sent by %s: %s (restricted realm: %s)",
+      self.armedMacro and ("the character macro \"" .. self.armedMacro .. "\"") or "the button's own text",
+      self.armedText, tostring(Restricted()))
     if run then
       run.box = "the macro ran but no echo came back"
     end
@@ -690,13 +691,41 @@ end
 -- press goes to the AutoLayer pool, otherwise nothing. Set out of combat
 -- (ARLE.Secure queues it); re-decided in PreClick, so a press uses the pool
 -- of that moment.
+--
+-- The line goes through a stored character macro ("ARL Layer"), clicked by
+-- the button (type=macro, macro=<name>), not through macrotext: a line from
+-- addon-set macrotext never showed in the layer channel on a restricted realm
+-- (2026-11-16: no echo, no other channel traffic seen, no AutoLayer invite).
+-- Falls back to macrotext when no macro slot is free.
+local MACRO_BASE = "ARL Layer"
+local function OurMacro(body)
+  return type(body) == "string" and body:match("^/%d+ inv layer$") ~= nil
+end
+
 function F:ArmButton()
   local pool = self:Pool()
   local id = pool == "autolayer" and LayerChannelId() or nil
-  local text = id and ("/" .. id .. " inv layer") or ""
-  self.armedText = id and text or nil
+  local text = id and ("/" .. id .. " inv layer") or nil
+  self.armedText = text
   self.armedPool = pool
-  ARLE.Secure:SetAttributes("LayerSwap", { macrotext = text })
+  if InCombatLockdown() then
+    return
+  end
+  local name
+  if text then
+    local res, why = ARLE.Macro:Ensure(self.char, "layerMacro", MACRO_BASE, text, true, OurMacro)
+    name = res and self.char.layerMacro or nil
+    if not name and not self.toldMacro then
+      self.toldMacro = true
+      self:Print("couldn't make the \"" .. MACRO_BASE .. "\" macro (" .. tostring(why) .. "); using the button's "
+        .. "own text instead.")
+    end
+  end
+  self.armedMacro = name
+  ARLE.Secure:SetAttributes("LayerSwap", {
+    macro = name or false,
+    macrotext = (not name and text) or "",
+  })
 end
 
 -- LayerSwap's Swap layer button: its own asks reach LayerSwap hosts; the box
@@ -1577,6 +1606,13 @@ function F:HookAutoLayer()
 end
 
 function F:OnDisable()
+  -- Our "ARL Layer" macro goes with the feature (only if it's still ours).
+  local name = self.char.layerMacro
+  ARLE.Secure:Run(function()
+    if name and not F._active and ARLE.Macro:Delete(name, OurMacro) then
+      F.char.layerMacro = nil
+    end
+  end)
   Unhush()
   ask, joined, lastAsk = nil, nil, nil
   self:LeaveLayer()
