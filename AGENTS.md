@@ -51,6 +51,8 @@ The notes come from the standalone versions; the ARL ports keep these behaviors.
 
 ARL lives in its own **private** repo, https://github.com/andreg1/wow-forever-arl (root = `ARLExtensions/` + the `ARLE_*` folders, plus `README.md` with a feature table and an MIT `LICENSE` naming aredpanda and andreg1; last pushed in commit `17f8bf7`, 2026-11-16; this AGENTS.md is in the repo root too, re-upload it when it changes). Keep the README's feature table in sync when a feature or its command changes. Confirm with the user before every push.
 
+Work straight on `main` (no feature branches; pull first, others push there too). A release is a version bump (see "Versioning") committed to `main`, tagged `v<version>` on that commit, and published as a GitHub release with `dist/ARLExtensions-<version>.zip` attached (`gh release create v<version> <zip>`).
+
 ## GitHub (publishing without git)
 
 - There is no local clone: this AddOns folder is not a git repo, and `git` is not installed. The GitHub CLI is (`C:\Program Files\GitHub CLI\gh.exe`), logged in as `andreg1` with `repo` scope.
