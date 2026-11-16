@@ -49,14 +49,25 @@ The notes come from the standalone versions; the ARL ports keep these behaviors.
 
 ### Repo
 
-ARL lives in its own **private** repo, https://github.com/andreg1/wow-forever-arl (root = `ARLExtensions/` + the `ARLE_*` folders, plus `README.md` with a feature table and an MIT `LICENSE` naming aredpanda and andreg1; last pushed in commit `17f8bf7`, 2026-11-16; this AGENTS.md is in the repo root too, re-upload it when it changes). Keep the README's feature table in sync when a feature or its command changes. Confirm with the user before every push.
+ARL lives in its own **private** repo, https://github.com/andreg1/wow-forever-arl (root = `ARLExtensions/` + the `ARLE_*` folders, plus `README.md` with a feature table and an MIT `LICENSE` naming aredpanda and andreg1; last pushed in commit `820fc96`, 2026-11-16; this AGENTS.md is in the repo root too, re-upload it when it changes). Keep the README's feature table in sync when a feature or its command changes. Confirm with the user before every push.
 
 Work straight on `main` (no feature branches; pull first, others push there too). A release is a version bump (see "Versioning") committed to `main`, tagged `v<version>` on that commit, and published as a GitHub release with `dist/ARLExtensions-<version>.zip` attached (`gh release create v<version> <zip>`).
+
+**Fetch from the remote first, every time**: before starting any work on ARL, and again right before any push, check the remote. aredpanda works on the same repo, so the local folders can be behind.
+1. Read the remote head: `gh api repos/andreg1/wow-forever-arl/commits/main --jq .sha`.
+2. If it equals the last-pushed commit recorded above, the local copy is current.
+3. If not, list what changed with `gh api repos/andreg1/wow-forever-arl/compare/<recorded>...<head> --jq '.files[] | .status + " " + .filename'`, then bring each changed file into the local folders before editing:
+   - Download it with `gh api repos/andreg1/wow-forever-arl/contents/<path> -H "Accept: application/vnd.github.raw"`.
+   - Delete files the remote removed.
+   - The README goes to the scratchpad.
+   - Where a local file also has unpushed changes of ours, merge the two by hand and never overwrite either side silently. Tell the user what came in.
+4. Update the recorded commit.
+5. A push builds on the head it just fetched (as the parent). If the head moved again between that fetch and the push, fetch and merge again before pushing.
 
 ## GitHub (publishing without git)
 
 - There is no local clone: this AddOns folder is not a git repo, and `git` is not installed. The GitHub CLI is (`C:\Program Files\GitHub CLI\gh.exe`), logged in as `andreg1` with `repo` scope.
-- Publish in one commit through the Git Data API with `gh api`: read `git/ref/heads/main` and its commit's tree, `POST git/blobs` (base64) for each file, `POST git/trees` with `base_tree` (an entry with `sha: null` deletes a path), `POST git/commits` with the old head as parent, then `PATCH git/refs/heads/main`. Write the README to the scratchpad and upload it the same way. Unchanged files produce identical blobs, so uploading whole folders is safe.
+- Publish in one commit through the Git Data API with `gh api`, after the fetch described under "Repo" above: read `git/ref/heads/main` and its commit's tree, `POST git/blobs` (base64) for each file, `POST git/trees` with `base_tree` (an entry with `sha: null` deletes a path), `POST git/commits` with the old head as parent, then `PATCH git/refs/heads/main`. Write the README to the scratchpad and upload it the same way. Unchanged files produce identical blobs, so uploading whole folders is safe.
 - The **public** repo https://github.com/andreg1/wow-forever-addons holds the old standalone addons (last pushed `5b199c0`, 2026-11-16). They are no longer developed here and the user asked to leave that repo untouched: don't push to it unless asked.
 
 ## The core rule: never patch third-party addons
