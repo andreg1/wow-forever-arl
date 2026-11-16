@@ -450,12 +450,21 @@ end
 -- (search, whispers, replies, the chat line and what the server said about
 -- it, invites) is recorded whether or not "/arl debug layer" is on.
 local RUN_SUMMARY, RUN_WATCH = 25, 90
-local run, lastRun, lastInvitedAt
--- Player searches per zone: { at, heard } of the last one. The server turns
--- searches down when they come too often ("Unable to complete your request"),
--- and a zone where no LayerSwap user answered is skipped for a while.
-local SEARCH_GAP, SEARCH_EMPTY = 60, 300
-local searched = {}
+local run, lastRun
+-- Kept in char so a /reload doesn't forget them (GetTime() runs on across a
+-- reload; a value from before a restart is in the future and ignored):
+--   char.invitedAt          the last invite after a press (AutoLayer hosts
+--                           invite a player from the channel once per 5 min)
+--   char.searched[zone]     { at, heard, noAnswer } of the last player search
+-- The server turns searches down when they come too often ("Unable to
+-- complete your request"), and a zone where no LayerSwap user answered is
+-- skipped for a while.
+local SEARCH_GAP, SEARCH_EMPTY, AUTOLAYER_AGAIN = 60, 300, 300
+
+local function Since(t)
+  local d = type(t) == "number" and GetTime() - t or nil
+  return d and d >= 0 and d or nil
+end
 
 function F:Step(fmt, ...)
   if not run then
@@ -468,7 +477,7 @@ function F:Step(fmt, ...)
 end
 
 function F:StartRun(via)
-  run = { at = GetTime(), via = via, lines = {}, whoFound = nil, sent = 0, refused = 0, refusedWhy = nil,
+  run = { at = GetTime(), via = via, invitedBefore = Since(self.char.invitedAt), lines = {}, whoFound = nil, sent = 0, refused = 0, refusedWhy = nil,
     heard = 0, hosts = 0, same = 0, invites = {}, line = nil, notices = {} }
   lastRun = run
   local mine = run
@@ -503,12 +512,10 @@ function F:Summary(r)
   end
   parts[#parts + 1] = #r.invites > 0 and ("invited by " .. table.concat(r.invites, ", ")) or "no invite"
   -- AutoLayer hosts invite a player from the channel once per 5 minutes.
-  if #r.invites == 0 and lastInvitedAt and r.at - lastInvitedAt < 300 then
-    parts[#parts + 1] = string.format("AutoLayer hosts that invited you %d s ago won't again until 5 min have passed",
-      r.at - lastInvitedAt)
-  end
-  if #r.invites > 0 then
-    lastInvitedAt = r.at
+  local ago = r.invitedBefore
+  if #r.invites == 0 and ago and ago < AUTOLAYER_AGAIN then
+    parts[#parts + 1] = string.format("AutoLayer hosts invited you %d s before this press and won't again until "
+      .. "5 min have passed (wait %d s more)", ago, AUTOLAYER_AGAIN - ago)
   end
   for _, n in ipairs(r.notices) do
     if n:find("Unable to complete") then
@@ -686,25 +693,30 @@ function F:Ask(via)
     self:Print("couldn't tell which zone you're in.")
     return
   end
+  local searched = self.char.searched or {}
+  self.char.searched = searched
   local last = searched[zone]
-  if last and now - last.at < SEARCH_GAP then
+  local ago = last and Since(last.at)
+  if ago and ago < SEARCH_GAP then
     run.skipWho = string.format("player search skipped: the last one here was %d s ago (the server refuses "
-      .. "searches that come too often)", now - last.at)
+      .. "searches that come too often)", ago)
     self:Step(run.skipWho)
     return
   end
-  if last and not last.noAnswer and (last.heard or 0) == 0 and now - last.at < SEARCH_EMPTY then
-    run.skipWho = string.format("player search skipped: no LayerSwap user in this zone answered %d s ago", now - last.at)
+  if ago and not last.noAnswer and (last.heard or 0) == 0 and ago < SEARCH_EMPTY then
+    run.skipWho = string.format("player search skipped: no LayerSwap user in this zone answered %d s ago; "
+      .. "asks again after %d s", ago, SEARCH_EMPTY - ago)
     self:Step(run.skipWho)
     return
   end
   if not layer.id then
-    self:Print("your layer isn't read yet (target or mouse over a creature first), so hosts on your own "
-      .. "layer may invite you too.")
+    self:Print("your layer isn't read yet (look at a couple of creatures), so hosts on your own layer may "
+      .. "invite you too.")
   end
+  local rec = { at = now, heard = 0 }
+  searched[zone] = rec
   ask = { at = now, zone = zone, layer = layer.id, line = AskLine(), queue = {}, sent = 0, via = via,
-    heard = 0, hosts = 0 }
-  searched[zone] = ask -- its .at and .heard are what the next press looks at
+    heard = 0, hosts = 0, rec = rec }
   stats.asked = stats.asked + 1
   if C_FriendList.SetWhoToUi then
     pcall(C_FriendList.SetWhoToUi, true)
@@ -738,7 +750,7 @@ function F:Ask(via)
   self:After(WHO_WAIT, function(def)
     if ask == mine and mine.whoAt then
       mine.whoAt = nil
-      mine.noAnswer = true
+      mine.rec.noAnswer = true
       Unhush()
       def:Step("search: no answer within %d s", WHO_WAIT)
       def:Print("the player search got no answer; try again in a moment.")
@@ -846,6 +858,9 @@ function F:OnReply(text, sender)
   end
   if target and target == MyName() then
     p.heard = p.heard + 1
+    if p.rec then
+      p.rec.heard = p.heard
+    end
     stats.heard = stats.heard + 1
     if run then
       run.heard = run.heard + 1
@@ -1145,6 +1160,7 @@ function F:OnEnable()
     local who = Str(inviter) or "?"
     if run then
       run.invites[#run.invites + 1] = who
+      def.char.invitedAt = GetTime()
     end
     def:Step("invite from %s", who)
   end)
