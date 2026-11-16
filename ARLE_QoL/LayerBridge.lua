@@ -1214,6 +1214,20 @@ end
 -- A LayerSwap line someone typed (General, a whisper, guild): "inv layer <LS ...>".
 -- AutoLayer drops it (digits, no NovaWorldBuffs layer), so we answer it.
 function F:OnChatLine(event, msg, sender, _, _, _, _, _, _, channelName, _, _, guid)
+  -- How the layer channel's lines look to us during a swap (the first few):
+  -- whether the game hides their text, sender or GUID from addons here.
+  if run and event == "CHAT_MSG_CHANNEL" and (run.chanSeen or 0) < 4 then
+    local base = Str(channelName)
+    if not base or base:lower():find("^layer") then
+      run.chanSeen = (run.chanSeen or 0) + 1
+      local function look(v)
+        return Secret(v) and "hidden" or (Str(v) and "readable" or "empty")
+      end
+      self:Step("layer channel line: channel %s, text %s, sender %s (%s), guid %s (ours: %s)",
+        tostring(base or look(channelName)), look(msg), look(sender), tostring(Str(sender) or "?"), look(guid),
+        tostring(Str(guid) and guid == UnitGUID("player")))
+    end
+  end
   if not Str(msg) or not Str(sender) then
     if run and Str(guid) and guid == UnitGUID("player") then
       run.line = true -- our own line, its text hidden from addons
@@ -1294,7 +1308,18 @@ function F:OnEnable()
       if event:find("NOTICE") then
         text = tostring(Str(a1) or "?") .. " " .. tostring(Str(a4) or Str(a9) or "")
       end
-      if Str(text) and #run.notices < 12 then
+      -- Only what can concern a swap: not "Spell is not ready yet" and the like.
+      local low = Str(text) and text:lower() or ""
+      local relevant = event ~= "UI_ERROR_MESSAGE" and event ~= "CHAT_MSG_SYSTEM"
+      for _, w in ipairs({ "chat", "channel", "invit", "group", "party", "request", "player", "message",
+        "permitted", "silenc", "spam", "too fast", "layer" }) do
+        if low:find(w, 1, true) then
+          relevant = true
+          break
+        end
+      end
+      if relevant and Str(text) and text ~= run.lastNotice and #run.notices < 12 then
+        run.lastNotice = text
         run.notices[#run.notices + 1] = text
         def:Step("game says (%s): %s", event, text)
       end
