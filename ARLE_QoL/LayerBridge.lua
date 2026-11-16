@@ -236,6 +236,15 @@ function F:Observe(unit)
   end
 end
 
+-- Everything in view, read now (a press reads before it asks).
+function F:ScanUnits()
+  for i = 1, 40 do
+    self:Observe("nameplate" .. i)
+  end
+  self:Observe("target")
+  self:Observe("mouseover")
+end
+
 -------------------------------------------------------------------------------
 -- LayerSwap's ask tag: "<LS 1429 not 7088-2 not 6990-4 48.2,42.5>"
 -------------------------------------------------------------------------------
@@ -666,15 +675,32 @@ function F:Ask(via)
   end
   self:Asked()
   self:StartRun(via)
+  self:ScanUnits()
   self:Step("press (%s): zone %s, your layer %s, in a group: %s, AutoLayer %s, LayerSwap %s", via,
     tostring(ZoneMap()), layer.id and Key(layer.id) or "unknown", tostring(IsInGroup()),
     Loaded("AutoLayer") and "on" or "off", Loaded("LayerSwap") and "on" or "off")
+  -- As LayerSwap: no ask from inside a group (no host's invite can reach you).
+  -- AutoLayer's own button leaves the group first, so its press goes on.
+  if IsInGroup() and via ~= "AutoLayer" then
+    run.skipWho = "you're in a group: leave it, then press again"
+    self:Step(run.skipWho)
+    self:Print("you're in a group. Leave it to swap layers.")
+    return
+  end
   -- AutoLayer posts its own line where the realm allows it.
   if via ~= "AutoLayer" or Restricted() then
     self:BoxLine(via)
   end
   if not self.db.layerswap then
     run.skipWho = "LayerSwap users: switched off"
+    return
+  end
+  -- As LayerSwap: the ask names the layer you leave, so hosts on it stay out.
+  -- Without it they'd invite you for nothing; read it first.
+  if not layer.id and not Loaded("LayerSwap") then
+    run.skipWho = "LayerSwap users not asked: your layer isn't read yet"
+    self:Step(run.skipWho)
+    self:Print("reading your layer first: target or mouse over a creature, then press again.")
     return
   end
   if Loaded("LayerSwap") then
@@ -709,10 +735,6 @@ function F:Ask(via)
       .. "searches that come too often); asked %d known LayerSwap hosts directly", ago, n)
     self:Step(run.skipWho)
     return
-  end
-  if not layer.id then
-    self:Print("your layer isn't read yet (look at a couple of creatures), so hosts on your own layer may "
-      .. "invite you too.")
   end
   local rec = { at = now, heard = 0 }
   searched[zone] = rec
@@ -786,7 +808,11 @@ function F:OnWho()
   -- players standing in our zone, then the rest. A stranger asked within
   -- ASKED_FOR who didn't answer isn't asked again (whispering the same
   -- players over and over gets players reported for spam).
-  local me, hosts, known, here, rest, skipped, areas = MyName(), {}, {}, {}, {}, 0, {}
+  -- Guildmates go last (LayerSwap: "Your guild last"); a host that just
+  -- answered from our own layer is left out for AVOID_FOR (Who.avoidHost).
+  local me, hosts, known, here, rest, mates, skipped, areas = MyName(), {}, {}, {}, {}, {}, 0, {}
+  local guild = Str((GetGuildInfo("player")))
+  local avoided = 0
   for i = 1, math.min(n, 50) do
     local ok, info = pcall(C_FriendList.GetWhoInfo, i)
     local full = ok and type(info) == "table" and not Secret(info) and Str(info.fullName)
@@ -795,13 +821,19 @@ function F:OnWho()
       if area then
         areas[area] = (areas[area] or 0) + 1
       end
+      local theirs = Str(info.fullGuildName)
+      local mate = guild and theirs and (theirs == guild or theirs:sub(1, #guild + 1) == guild .. "-")
       local e = book[Short(full)]
-      if e and e.host then
+      if self:Avoided(full) then
+        avoided = avoided + 1
+      elseif e and e.host then
         hosts[#hosts + 1] = full
       elseif e then
         known[#known + 1] = full
       elseif asked[full] and time() - asked[full] < ASKED_FOR then
         skipped = skipped + 1
+      elseif mate then
+        mates[#mates + 1] = full
       elseif zoneName and area == zoneName then
         here[#here + 1] = full
       else
@@ -810,7 +842,10 @@ function F:OnWho()
     end
   end
   Unhush()
-  for _, list in ipairs({ hosts, known, here, rest }) do
+  if avoided > 0 then
+    self:Step("left out %d hosts that just answered from your own layer", avoided)
+  end
+  for _, list in ipairs({ hosts, known, here, rest, mates }) do
     for _, full in ipairs(list) do
       if #p.queue < ASK_MAX then
         p.queue[#p.queue + 1] = full
@@ -823,7 +858,8 @@ function F:OnWho()
   end
   table.sort(where)
   self:Step("search answered: %d players (known hosts %d, other LayerSwap users %d, in your zone %d, elsewhere %d, "
-    .. "asked lately %d), asking %d; where: %s", n, #hosts, #known, #here, #rest, skipped, #p.queue,
+    .. "guildmates (last) %d, asked lately %d), asking %d; where: %s", n, #hosts, #known, #here, #rest, #mates,
+    skipped, #p.queue,
     #where > 0 and table.concat(where, ", ", 1, math.min(#where, 5)) or "?")
   if run then
     run.whoFound = n
@@ -849,7 +885,7 @@ end
 function F:AskKnown(zone, via)
   local list = {}
   for key, e in pairs(self:Book()) do
-    if type(e) == "table" and e.host then
+    if type(e) == "table" and e.host and not self:Avoided(key) then
       list[#list + 1] = { key = key, at = e.at or 0, to = e.from or key }
     end
   end
@@ -867,6 +903,30 @@ function F:AskKnown(zone, via)
   local n = #ask.queue
   self:Send(ask)
   return n
+end
+
+-- Hosts standing on our own layer: left out of our asks for AVOID_FOR, and
+-- only while we're still on that layer (after a move they count again).
+local AVOID_FOR, avoid = 20, {}
+
+function F:Avoid(sender, onLayer)
+  local key = Short(sender)
+  if key and onLayer then
+    avoid[key] = { at = GetTime(), layer = onLayer }
+  end
+end
+
+function F:Avoided(name)
+  local key = Short(name)
+  local e = key and avoid[key]
+  if not e then
+    return false
+  end
+  if GetTime() - e.at > AVOID_FOR then
+    avoid[key] = nil
+    return false
+  end
+  return SameLayer(e.layer, layer.id)
 end
 
 function F:Book()
@@ -974,7 +1034,18 @@ end
 -- it. When no invite has come, each such host gets the ask once more without
 -- that layer, and then invites (LayerSwap does the same).
 function F:Anyway(p)
-  if ask ~= p or (run and #run.invites > 0) then
+  if ask ~= p or (run and #run.invites > 0) or IsInGroup() then
+    return
+  end
+  -- A host known to stand on another layer gets until ANYWAY_LATE to invite
+  -- before the unread ones are asked again (as LayerSwap).
+  local other = 0
+  for _, r in pairs(p.replies or {}) do
+    if r.host and r.layer and r.zone == tostring(p.zone) and not SameLayer(r.layer, layer.id) then
+      other = other + 1
+    end
+  end
+  if other > 0 and p.doneAt and GetTime() - p.doneAt < ANYWAY_LATE then
     return
   end
   local line = "inv layer <LS " .. tostring(p.zone) .. ">"
@@ -996,6 +1067,7 @@ function F:OnReply(text, sender)
   local name = Short(sender)
   if text == "same" then
     self:Remember(sender, true)
+    self:Avoid(sender, layer.id)
     stats.same = stats.same + 1
     if run then
       run.same = run.same + 1
@@ -1010,8 +1082,17 @@ function F:OnReply(text, sender)
   if target and target == MyName() then
     self:Remember(sender, host == "h")
     p.replies = p.replies or {}
-    p.replies[name or sender] = { from = sender, host = host == "h", zone = theirZone,
-      layer = theirs ~= "-" and theirs or nil }
+    local r = { from = sender, host = host == "h", zone = theirZone, layer = theirs ~= "-" and theirs or nil }
+    p.replies[name or sender] = r
+    if r.layer and SameLayer(r.layer, layer.id) and r.zone == tostring(p.zone) then
+      self:Avoid(sender, layer.id)
+    end
+    -- A late answer from a host that hasn't read its layer: ask it again now.
+    if r.host and not r.layer and p.doneAt and GetTime() - p.doneAt >= ANYWAY_WAIT then
+      self:After(0, function(def)
+        def:Anyway(p)
+      end)
+    end
     p.heard = p.heard + 1
     if p.rec then
       p.rec.heard = p.heard
@@ -1306,9 +1387,7 @@ function F:OnEnable()
   end)
   -- Creatures already on screen count too, without targeting them.
   self:Ticker(2, function(def)
-    for i = 1, 40 do
-      def:Observe("nameplate" .. i)
-    end
+    def:ScanUnits()
   end)
   for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA" }) do
     self:On(e, function(def)
