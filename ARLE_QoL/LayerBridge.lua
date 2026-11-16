@@ -80,8 +80,9 @@ local F = {
     { key = "layerswap", type = "boolean", label = "Work with LayerSwap users", default = true, cmd = "ls",
       desc = "Your asks reach LayerSwap hosts in your zone, out of sight (a player search, then hidden whispers)." },
     { key = "autolayer", type = "boolean", label = "Work with AutoLayer users", default = true, cmd = "al",
-      desc = "Joins the \"layer\" channel AutoLayer uses; the Swap layer button then also says \"inv layer\" "
-        .. "there (as a macro, so the game lets it through). Off leaves the channel if ARL joined it." },
+      desc = "When AutoLayer's turn comes, the Swap layer button says \"inv layer\" in the \"layer\" channel, if "
+        .. "you're in it (ARL never joins it for you). Not on realms that refuse addon chat lines, such as live "
+        .. "Forever: there a refused line can get you barred from the channel." },
     { key = "host", type = "boolean", label = "Host for the other addon's users", default = false,
       desc = "Off: ARL never invites anyone or answers anyone's ask. On, and only while AutoLayer or LayerSwap "
         .. "hosts too: answer LayerSwap users (AutoLayer hosting) or invite AutoLayer users (LayerSwap hosting)." },
@@ -558,7 +559,8 @@ function F:Summary(r)
   if #r.invites == 0 then
     local nextPool, wait = self:Pool()
     parts[#parts + 1] = nextPool == "autolayer" and "next press: AutoLayer hosts"
-      or string.format("next press: LayerSwap hosts (AutoLayer again in %d s)", math.floor(wait))
+      or (wait and string.format("next press: LayerSwap hosts (AutoLayer again in %d s)", math.floor(wait))
+        or "next press: LayerSwap hosts")
   end
   self:Print("Swap result: " .. table.concat(parts, "; ") .. ". Details: /arl layer last")
 end
@@ -583,17 +585,11 @@ local function LayerChannelId()
   return not Secret(id) and type(id) == "number" and id > 0 and id or nil
 end
 
-function F:JoinLayer()
-  if LayerChannelId() then
-    return true
-  end
-  local ok = pcall(JoinChannelByName, LAYER_CHANNEL)
-  if ok then
-    self.char.joinedLayer = true
-  end
-  self:Debug("join %s: %s", LAYER_CHANNEL, ok and "asked" or "refused")
-  return false
-end
+-- ARL never joins the layer channel itself. On restricted realms (live
+-- Forever) the game bars a character from a channel after a line it refused
+-- there, or even after a join (LayerSwap's notes, 6-7 Nov 2026; here too on
+-- 2026-11-16: after ARL's join and refused lines "/leave layer" did nothing).
+-- LeaveLayer stays, to undo a join an older ARL made (char.joinedLayer).
 
 function F:LeaveLayer()
   if self.char.joinedLayer and LayerChannelId() then
@@ -610,20 +606,11 @@ function F:BoxLine(via, retried)
   end
   local id = LayerChannelId()
   if not id then
-    -- From a click a join goes through; the channel number comes a moment later.
-    self:JoinLayer()
-    self:Step("chat line: not in the layer channel yet, joining%s", retried and " (second try)" or "")
+    -- ARL never joins it (see LeaveLayer's note): a join can get the character
+    -- barred from the channel on restricted realms.
+    self:Step("chat line: not in the layer channel (ARL doesn't join it by itself)")
     if run then
       run.box = "not in the layer channel"
-    end
-    if not retried then
-      self:After(1, function(def)
-        def:ArmButton()
-        def:BoxLine(via == "button" and "button, after joining" or via, true)
-      end)
-    elseif not self.toldJoin then
-      self.toldJoin = true
-      self:Print("couldn't join the \"layer\" channel AutoLayer uses; type /join layer and ask again.")
     end
     return
   end
@@ -660,7 +647,9 @@ local AL_COOLDOWN, AL_QUIET = 300, 60
 -- Seconds until the AutoLayer pool can be asked again (0 = now), or nil when
 -- "Work with AutoLayer users" is off.
 function F:AutoLayerWait()
-  if not self.db.autolayer then
+  -- On a restricted realm the line is refused, and a refused line can get the
+  -- character barred from the channel: no AutoLayer asks there.
+  if not self.db.autolayer or Restricted() then
     return nil
   end
   local wait = 0
@@ -683,6 +672,9 @@ function F:Pool()
   end
   if self.db.layerswap then
     return "layerswap", wait
+  end
+  if wait == nil then
+    return "none", nil -- AutoLayer not askable here and LayerSwap switched off
   end
   return "autolayer", wait -- LayerSwap users switched off: the line goes anyway
 end
@@ -793,6 +785,12 @@ function F:Ask(via)
       pool, tostring(self.armedText or "none"))
   end
   run.pool = pool
+  if pool == "none" then
+    run.skipWho = "nobody to ask: AutoLayer hosts can't be asked on this realm and LayerSwap users are switched off"
+    self:Step(run.skipWho)
+    self:Print("nobody to ask: turn on \"Work with LayerSwap users\".")
+    return
+  end
   if pool == "autolayer" then
     self:Step("pool: AutoLayer hosts (the inv layer line); LayerSwap hosts next while AutoLayer is on cooldown")
     -- AutoLayer posts its own line where the realm allows it.
@@ -802,7 +800,12 @@ function F:Ask(via)
     run.skipWho = "LayerSwap hosts: not this press (AutoLayer's turn)"
     return
   end
-  self:Step("pool: LayerSwap hosts (AutoLayer hosts again in %d s)", wait or 0)
+  if wait == nil then
+    self:Step("pool: LayerSwap hosts (AutoLayer hosts aren't asked: %s)",
+      self.db.autolayer and "this realm refuses addon chat lines" or "switched off")
+  else
+    self:Step("pool: LayerSwap hosts (AutoLayer hosts again in %d s)", wait)
+  end
   -- As LayerSwap: the ask names the layer you leave, so hosts on it stay out.
   -- Without it they'd invite you for nothing; read it first.
   if not layer.id and not Loaded("LayerSwap") then
@@ -1382,9 +1385,12 @@ function F:PadText()
   end
   local top = layer.id and self:LayerLabel(layer.id) or "|cff999999Layer unknown: look at a creature|r"
   local pool, wait = self:Pool()
+  local alOff = self:AutoLayerWait() == nil
   wait = math.floor(wait or 0)
   local nextLine
-  if pool == "autolayer" then
+  if alOff then
+    nextLine = self.db.layerswap and "Next: LayerSwap hosts" or "Nobody to ask: both pools are off"
+  elseif pool == "autolayer" then
     nextLine = "Next: AutoLayer hosts" .. ((wait or 0) > 0 and string.format(" (ready in %d:%02d)",
       math.floor(wait / 60), wait % 60) or "")
   else
@@ -1426,9 +1432,7 @@ function F:OnOptionChanged(key, value)
   if key == "button" then
     self:Paint()
   elseif key == "autolayer" then
-    if value then
-      self:JoinLayer()
-    else
+    if not value then
       self:LeaveLayer()
     end
     self:After(1, self.ArmButton)
@@ -1584,9 +1588,6 @@ function F:OnEnable()
   self:HookAutoLayer()
   self:HookLayerSwap()
   self:Paint()
-  if self.db.autolayer then
-    self:JoinLayer() -- may need a click on some realms; BoxLine tries again from one
-  end
   -- Again once the loading screen is gone.
   self:After(3, function(def)
     def:Paint()
