@@ -73,6 +73,7 @@ Reading third-party source to find extension points is fine. For EllesmereUIBags
 ## Testing and debugging
 
 There is no Lua interpreter or test runner; behavior is tested in-game:
+- From a clone, after **every change** run `make` (= `make package` + `make publish-local`): it builds `dist/ARLExtensions-<version>.zip` (gitignored, version from `## Version` in `ARLExtensions.toc`) and deploys the working tree to the AddOns folder set by `make setup` (`local.mk`, gitignored), replacing only `ARLExtensions` and the `ARLE_*` folders. If `local.mk` is missing, ask the dev to run `make setup` (it prompts); don't guess the path. A new top-level `ARLE_*` folder is picked up automatically.
 - `/reload` picks up Lua changes. A new addon folder or `.toc` change needs a full client restart.
 - Turn on Lua errors with `/console scriptErrors 1` (no BugSack/BugGrabber is installed).
 - The client writes every Lua error, with its stack and the addon taint is blamed on ("execution tainted by 'X'"), to `..\..\Logs\General.log` (`[E][Lua]` lines), even with scriptErrors off. Group them by message to find the source.

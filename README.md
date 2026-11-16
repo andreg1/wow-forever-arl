@@ -33,6 +33,17 @@ Officers and the Guild Master also get **Officer Tools**: who in the guild runs 
 
 Several features started as standalone addons (ForeverSleepingBag, FishingPoleAlert, SpecGearSwap, LFGRoleFilter, Questie_NewInForever, Questie_SubQuestFilter, Questie_RareObjectives, QuestieDB_Search, EllesmereUIQuestTracker_QuestItems, EllesmereUIBags_ItemLock, Auctionator_DarkmoonTickets, ForeverLevelingBiS_AutoSpec). While one of those is still turned on, its feature here stays paused, so the two don't run twice, and copies the old addon's saved data (locks, gear set links, macros, settings). Turn the old addon off in the AddOns list and `/reload` to switch over.
 
+## Development
+
+From a clone:
+
+- `make setup`: asks for your `...\_forever_\Interface\AddOns` folder (kept in `local.mk`, not committed).
+- `make package`: builds `dist/ARLExtensions-<version>.zip` to share; it's extracted into the AddOns folder. The version comes from `## Version` in `ARLExtensions.toc`.
+- `make publish-local`: copies the working tree into your AddOns folder, replacing only ARL's own folders. Then `/reload` in game (restart the client after a `.toc` change).
+- `make`: package and publish-local, run after every change.
+
+Works on Linux (sh + bsdtar) and Windows 10+ (PowerShell + built-in tar; get make with `winget install ezwinports.make`).
+
 ## License
 
 [MIT](LICENSE)
