@@ -752,8 +752,8 @@ F.commands = {
 }
 
 -- QuestieDB_Search's data (QuestieDBSearchDB, per character) replaces ours:
--- its faction filter ("player" or the character's own faction mean "mine";
--- ours is account-wide), the window's centre offset (same anchor as ours)
+-- its faction filter ("player" or the character's own faction mean "mine",
+-- which follows the character), the window's centre offset (same anchor as ours)
 -- and the last search text.
 function F:Import()
   local old = _G.QuestieDBSearchDB

@@ -12,7 +12,7 @@
 -- Ticket data: the built-in table comes from community guides. When you turn
 -- a quest in, the real counts are read from the quest window (required item
 -- count on QUEST_PROGRESS, the Prize Ticket reward count on QUEST_COMPLETE)
--- and kept account-wide (db.learned), overriding the built-in numbers.
+-- and kept account-wide (shared.learned), overriding the built-in numbers.
 -- Reputation: tiers 1-4 stop being offered at a Darkmoon Faire reputation value
 -- (approximate); those rows are greyed and sorted after the rest.
 local ADDON = ...
@@ -68,7 +68,6 @@ local F = {
   commandHelp = "Darkmoon Faire turn-ins ranked by gold per Prize Ticket",
   mainHelp = "opens or closes the window",
   description = "Darkmoon Faire turn-ins ranked by gold per Prize Ticket, from Auctionator's prices.",
-  defaults = { learned = {} },
   options = {
     { key = "hideCapped", type = "boolean", label = "Hide tiers past my reputation", default = false,
       cmd = "hidecapped" },
@@ -86,9 +85,22 @@ local frame, rows = nil, {}
 -- Data
 -------------------------------------------------------------------------------
 
+-- Learned counts are facts about the quests, the same for every character:
+-- they live in F.shared (account wide), while settings are per character.
+-- A copy left in this character's settings (from when settings were account
+-- wide) is merged in once.
 local function Learned()
-  F.db.learned = type(F.db.learned) == "table" and F.db.learned or {}
-  return F.db.learned
+  local shared = F.shared
+  shared.learned = type(shared.learned) == "table" and shared.learned or {}
+  if type(F.db.learned) == "table" then
+    for id, l in pairs(F.db.learned) do
+      if shared.learned[id] == nil then
+        shared.learned[id] = l
+      end
+    end
+    F.db.learned = nil
+  end
+  return shared.learned
 end
 
 local function TurnIn(t)
@@ -554,7 +566,8 @@ function F:Import()
         learned[id] = { qty = qty, tickets = tickets }
       end
     end
-    self.db.learned = learned
+    self.db.learned = nil
+    self.shared.learned = learned
   end
   for _, key in ipairs({ "hideCapped", "includeBank", "tooltip" }) do
     if type(old[key]) == "boolean" then

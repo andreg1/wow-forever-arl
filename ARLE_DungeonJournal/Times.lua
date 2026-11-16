@@ -75,9 +75,8 @@ function tab:ClearRecords()
   H.Render()
 end
 
--- The run in progress belongs to this character (mod.char, not the
--- account-wide mod.db): another character entering the same dungeon must
--- not carry it on.
+-- The run in progress belongs to this character (mod.char): another
+-- character entering the same dungeon must not carry it on.
 local function CharData()
   return mod.char or {}
 end

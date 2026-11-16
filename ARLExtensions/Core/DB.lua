@@ -1,13 +1,73 @@
--- Saved variables: ARLExtensionsDB (account wide: settings per feature, the
--- theme) and ARLExtensionsCharDB (this character: feature data such as item
--- locks, gear set links, remembered weapons).
+-- Saved variables:
+--   ARLExtensionsCharDB (this character)
+--     .modules[id]   each feature's settings and its on/off switch (def.db)
+--     .features[id]  each feature's data: item locks, gear set links,
+--                    remembered weapons (def.char)
+--   ARLExtensionsDB (account wide)
+--     theme, accent, loginMessage (how the window looks)
+--     .modules[id]   data a feature shares between characters (def.shared),
+--                    e.g. Darkmoon ticket counts learned from quest windows.
+--                    Before 0.2 this also held every feature's settings;
+--                    each character starts from a copy of those.
 local _, ns = ...
 local ARLE = ns.ARLE
 
 local pending -- features registered before the saved variables loaded
 
-function ARLE:EnsureDB(id, defaults)
+local function DeepCopy(value)
+  if type(value) ~= "table" then
+    return value
+  end
+  local out = {}
+  for k, v in pairs(value) do
+    out[k] = DeepCopy(v)
+  end
+  return out
+end
+
+local function CharSV()
+  local sv = _G.ARLExtensionsCharDB
+  if type(sv) ~= "table" then
+    sv = {}
+    _G.ARLExtensionsCharDB = sv
+  end
+  return sv
+end
+
+-- This character's settings for every feature. The first time a character
+-- logs in with per-character settings it gets a copy of the account-wide
+-- ones, so nothing it had resets.
+function ARLE:CharModules()
+  local sv = CharSV()
+  if type(sv.modules) ~= "table" then
+    local account = self.db and self.db.modules
+    sv.modules = type(account) == "table" and DeepCopy(account) or {}
+  end
+  return sv.modules
+end
+
+-- The account-wide table of feature id (shared between characters).
+function ARLE:SharedDB(id)
   local modules = self.db.modules
+  local t = modules[id]
+  if type(t) ~= "table" then
+    t = {}
+    modules[id] = t
+  end
+  return t
+end
+
+-- A feature's settings on this character, or nil when it has none yet.
+function ARLE:ModuleDB(id)
+  if not self.db then
+    return nil
+  end
+  local db = self:CharModules()[id]
+  return type(db) == "table" and db or nil
+end
+
+function ARLE:EnsureDB(id, defaults)
+  local modules = self:CharModules()
   local db = modules[id]
   if type(db) ~= "table" then
     db = {}
@@ -37,11 +97,7 @@ end
 
 -- This character's table for one feature.
 function ARLE:CharDB(id)
-  local sv = _G.ARLExtensionsCharDB
-  if type(sv) ~= "table" then
-    sv = {}
-    _G.ARLExtensionsCharDB = sv
-  end
+  local sv = CharSV()
   sv.features = type(sv.features) == "table" and sv.features or {}
   local t = sv.features[id]
   if type(t) ~= "table" then
@@ -75,6 +131,7 @@ function ARLE:InitDB()
   end
   sv.themeV3 = true
   self.db = sv
+  self:CharModules() -- seeds this character's settings once
   if pending then
     local queued = pending
     pending = nil

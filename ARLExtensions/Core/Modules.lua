@@ -28,7 +28,8 @@
 --   self:OutOfCombat(fn)               now, or once combat ends
 --   self:Alert(spec)                   the shared alert (UI/Alert.lua)
 --   self:Print(msg)
---   self.db (account-wide settings), self.char (this character's data)
+--   self.db (this character's settings and on/off switch), self.char (this
+--   character's data), self.shared (data shared by all characters)
 local ADDON_NAME, ns = ...
 local ARLE = ns.ARLE
 local API, Blank = ARLE.API, ARLE.Blank
@@ -442,8 +443,9 @@ function ARLE:CallDisable(def)
 end
 
 function ARLE:Bind(def)
-  def.db = self:EnsureDB(def.id, def.defaults)
-  def.char = self:CharDB(def.id)
+  def.db = self:EnsureDB(def.id, def.defaults) -- this character's settings
+  def.char = self:CharDB(def.id)                -- this character's data
+  def.shared = self:SharedDB(def.id)            -- data shared by all characters
   if def.OnBind then
     Safe(def.OnBind, def)
   end
@@ -573,7 +575,7 @@ end
 function ARLE:GetInfo(id)
   local cat = self.catalog[id]
   local def = self.modules[id]
-  local db = self.db and self.db.modules[id]
+  local db = self:ModuleDB(id)
   local extends = self:ExtendsOf(id)
   local group = self:GroupOf(id)
   local info = {
@@ -801,11 +803,12 @@ function ARLE:Startup()
   self:InitDB()
   self:Scan()
   self.ready = true
+  local modules = self:CharModules()
   for id, cat in pairs(self.catalog) do
-    local saved = self.db.modules[id]
+    local saved = modules[id]
     if cat.off and (type(saved) ~= "table" or saved.enabled == nil) then
-      self.db.modules[id] = type(saved) == "table" and saved or {}
-      self.db.modules[id].enabled = false
+      modules[id] = type(saved) == "table" and saved or {}
+      modules[id].enabled = false
     end
     self:EnsureDB(id)
   end
