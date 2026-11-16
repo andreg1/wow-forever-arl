@@ -1,0 +1,416 @@
+-- Sleeping Bag: reminds you to use the Cozy Sleeping Bag.
+-- Based on ForeverSleepingBag by andreg1 (MIT),
+-- https://github.com/andreg1/wow-forever-addons
+--
+-- WoW Forever's Cozy Sleeping Bag (item 211527): using it (Unroll Bag, 429961,
+-- one hour cooldown) lays a bag down; resting in it (area aura 429960) grants
+-- Well-Rested (429959, two hours, up to three stacks).
+--
+-- Reminds you, below max level, while the bag is in your bags and off
+-- cooldown, when Well-Rested is missing, under three stacks, or has less than
+-- refreshMinutes left: a small movable alert whose bag icon uses the bag (the
+-- host's secure item button, ARLE.Secure "UseItem"), plus one chat line per
+-- reminder. Hidden in combat, while dead, flying or on a flight path.
+local ADDON = ...
+local ARLE = _G.ARLExtensions
+if not ARLE then
+  return
+end
+local Skin, Kit, Secure = ARLE.Skin, ARLE.UI.Kit, ARLE.Secure
+
+local ITEM = 211527
+local BUFF = 429959
+local AREA = 429960
+local MAX_STACKS = 3
+local MAX_LEVEL = 60
+local FALLBACK_ICON = 133662
+local SNOOZE_MINUTES = 10
+
+local F = {
+  id = "SleepingBag",
+  addon = ADDON,
+  title = "Sleeping Bag",
+  group = "QualityOfLife",
+  command = "bag",
+  commandHelp = "Cozy Sleeping Bag reminders",
+  description = "Reminds you to use the Cozy Sleeping Bag when Well-Rested is missing, low or ending.",
+  options = {
+    { key = "chat", type = "boolean", label = "Chat message", default = true },
+    { key = "refreshMinutes", type = "range", label = "Remind with minutes left",
+      min = 1, max = 119, step = 5, default = 20, cmd = "refresh" },
+    { type = "info", text = function(def) return def:StatusLine() end },
+    { type = "button", label = "Show a test alert", desc = "for 20 seconds, so you can move it", nocmd = true,
+      run = function(def) def:Test() end },
+    ARLE.Options.Preset.ResetPosition(),
+  },
+}
+
+local alert
+local currentKey   -- the reminder being shown
+local dismissedKey -- dismissed until the need goes away
+local lastChatKey  -- chat once per reminder
+local snoozeUntil
+local testUntil
+
+-------------------------------------------------------------------------------
+-- Status
+-------------------------------------------------------------------------------
+
+local function PlayerAura(spellID)
+  if C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
+    local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, spellID)
+    return ok and aura or nil
+  end
+  if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
+    local index = 1
+    while true do
+      local aura = C_UnitAuras.GetAuraDataByIndex("player", index, "HELPFUL")
+      if not aura then
+        return nil
+      end
+      if aura.spellId == spellID then
+        return aura
+      end
+      index = index + 1
+    end
+  end
+end
+
+local function CooldownRemaining(now)
+  local getCooldown = (C_Container and C_Container.GetItemCooldown) or _G.GetItemCooldown
+  if not getCooldown then
+    return 0
+  end
+  local ok, start, duration, enable = pcall(getCooldown, ITEM)
+  if not ok then
+    return 0
+  end
+  if enable == 0 or enable == false then
+    return math.huge
+  end
+  if type(start) ~= "number" or type(duration) ~= "number" or start <= 0 or duration <= 1.5 then
+    return 0
+  end
+  return math.max(0, start + duration - now)
+end
+
+local function BagIcon()
+  return ARLE.Lib.Items.GetIcon and ARLE.Lib.Items.GetIcon(ITEM) or FALLBACK_ICON
+end
+
+local function Status(now)
+  local aura = PlayerAura(BUFF)
+  local stacks = 0
+  if aura then
+    stacks = type(aura.applications) == "number" and aura.applications or 0
+    if stacks < 1 then
+      stacks = 1
+    end
+  end
+  local owned = ARLE.Lib.Items.Count(ITEM) > 0
+  local lying = PlayerAura(AREA) ~= nil
+  local cooldown = owned and CooldownRemaining(now) or 0
+  local expirationTime = aura and aura.expirationTime
+  local remaining = stacks > 0 and type(expirationTime) == "number" and expirationTime > 0
+    and expirationTime - now or nil
+  return {
+    owned = owned,
+    stacks = stacks,
+    remaining = remaining,
+    lying = lying,
+    cooldown = cooldown,
+    ready = owned and not lying and cooldown <= 0,
+  }
+end
+
+local function FormatMinutes(seconds)
+  local minutes = math.max(1, math.ceil(seconds / 60))
+  if minutes >= 60 then
+    return string.format("%dh %dm", math.floor(minutes / 60), minutes % 60)
+  end
+  return string.format("%dm", minutes)
+end
+
+local function StatusText(s)
+  if s.stacks == 0 then
+    return "Well-Rested: not active"
+  end
+  local text = string.format("Well-Rested: %d/%d stacks", s.stacks, MAX_STACKS)
+  if s.remaining and s.remaining > 0 then
+    text = text .. " (" .. FormatMinutes(s.remaining) .. " left)"
+  end
+  return text
+end
+
+function F:StatusLine()
+  local s = Status(GetTime())
+  return StatusText(s) .. "  ·  bag " .. (s.owned and "in your bags" or "not in your bags")
+    .. (s.owned and ("  ·  " .. (s.lying and "lying in it" or (s.cooldown <= 0 and "ready"
+      or (s.cooldown == math.huge and "cooldown pending" or ("ready in " .. FormatMinutes(s.cooldown))))))
+      or "")
+end
+
+-------------------------------------------------------------------------------
+-- Alert frame (themed); the bag icon is the host's secure item button
+-------------------------------------------------------------------------------
+
+local function PlaceAlert()
+  alert:ClearAllPoints()
+  local pos = F.char.position
+  alert:SetPoint("CENTER", UIParent, "CENTER", pos and pos[1] or 0, pos and pos[2] or 200)
+end
+
+-- The alert holds a secure button, so it can only be hidden out of combat
+-- (it's hidden as combat starts, before the lockdown).
+local function HideAlert()
+  if alert and alert:IsShown() then
+    if InCombatLockdown() then
+      Secure:Run(HideAlert)
+    else
+      alert:Hide()
+    end
+  end
+end
+
+local function AttachUseButton()
+  local use = Secure:Button("UseItem")
+  if not use or InCombatLockdown() or not alert then
+    return
+  end
+  use:SetParent(alert)
+  use:ClearAllPoints()
+  use:SetPoint("CENTER", alert.icon, "CENTER")
+  use:SetSize(42, 42)
+  use:SetAttribute("type", "item")
+  use:SetAttribute("item", "item:" .. ITEM)
+  use:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetItemByID(ITEM)
+    GameTooltip:AddLine("Click to use", 0.5, 0.84, 1)
+    GameTooltip:Show()
+  end)
+  use:SetScript("OnLeave", GameTooltip_Hide)
+  use:Show()
+end
+
+local function BuildAlert()
+  local f = Skin:CreateTooltipWindow(nil, UIParent)
+  f:SetSize(360, 74)
+  f:SetFrameStrata("MEDIUM")
+  f:SetClampedToScreen(true)
+  f:SetMovable(true)
+  f:EnableMouse(true)
+  f:RegisterForDrag("LeftButton")
+  f:SetScript("OnDragStart", f.StartMoving)
+  f:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    local x, y = self:GetCenter()
+    local cx, cy = UIParent:GetCenter()
+    if x and cx then
+      F.char.position = { x - cx, y - cy }
+    end
+    PlaceAlert()
+  end)
+
+  f.icon = f:CreateTexture(nil, "ARTWORK")
+  f.icon:SetSize(42, 42)
+  f.icon:SetPoint("LEFT", 12, 0)
+  f.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+
+  f.text = Kit.Text(f, "GameFontHighlight")
+  f.text:SetPoint("TOPLEFT", f.icon, "TOPRIGHT", 10, 2)
+  f.text:SetPoint("RIGHT", -10, 0)
+  f.text:SetWordWrap(true)
+  f.text:SetHeight(30)
+
+  f.status = Kit.Text(f, "GameFontDisableSmall")
+  f.status:SetPoint("BOTTOMLEFT", f.icon, "BOTTOMRIGHT", 10, 0)
+
+  local dismiss = Kit.SmallButton(f, "Dismiss", 60)
+  dismiss:SetPoint("BOTTOMRIGHT", -8, 8)
+  dismiss:SetScript("OnClick", function()
+    dismissedKey = currentKey
+    HideAlert()
+  end)
+  local snooze = Kit.SmallButton(f, "Snooze " .. SNOOZE_MINUTES .. "m", 76)
+  snooze:SetPoint("RIGHT", dismiss, "LEFT", -4, 0)
+  snooze:SetScript("OnClick", function()
+    snoozeUntil = GetTime() + SNOOZE_MINUTES * 60
+    HideAlert()
+  end)
+  f:Hide()
+  alert = f
+  PlaceAlert()
+end
+
+local function ShowAlert(message, s)
+  if InCombatLockdown() then
+    return
+  end
+  if not alert then
+    BuildAlert()
+  end
+  AttachUseButton()
+  alert.icon:SetTexture(BagIcon())
+  alert.text:SetText(message)
+  alert.status:SetText(StatusText(s))
+  alert:Show()
+end
+
+function F:OnResetPosition()
+  if alert then
+    PlaceAlert()
+  end
+end
+
+-------------------------------------------------------------------------------
+-- Evaluation
+-------------------------------------------------------------------------------
+
+local function Blocked()
+  local level = UnitLevel("player")
+  return (type(level) == "number" and level >= MAX_LEVEL)
+    or UnitAffectingCombat("player")
+    or (InCombatLockdown and InCombatLockdown())
+    or UnitIsDeadOrGhost("player")
+    or (IsFlying and IsFlying())
+    or (UnitOnTaxi and UnitOnTaxi("player"))
+end
+
+function F:Evaluate()
+  local now = GetTime()
+  if testUntil then
+    if now < testUntil and not InCombatLockdown() then
+      return
+    end
+    testUntil = nil
+  end
+  local s = Status(now)
+  local key, message
+  if s.ready then
+    if s.stacks == 0 then
+      key = "missing"
+      message = "Your Cozy Sleeping Bag is ready, but Well-Rested is not active."
+    elseif s.remaining and s.remaining <= (self.db.refreshMinutes or 20) * 60 then
+      key = "refresh"
+      message = string.format("Well-Rested ends in about %d min. Use your Cozy Sleeping Bag to refresh it.",
+        math.max(1, math.ceil(s.remaining / 60)))
+    elseif s.stacks < MAX_STACKS then
+      key = "stacks:" .. s.stacks
+      message = string.format("Your Cozy Sleeping Bag is ready: Well-Rested is at %d/%d stacks.", s.stacks, MAX_STACKS)
+    end
+  end
+  if not key then
+    -- Nothing to do (bag used, on cooldown, buff full): start fresh next time.
+    currentKey, dismissedKey, lastChatKey = nil, nil, nil
+    HideAlert()
+    return
+  end
+  currentKey = key
+  if Blocked() or dismissedKey == key or (snoozeUntil and now < snoozeUntil) then
+    HideAlert()
+    return
+  end
+  snoozeUntil = nil
+  if self.db.chat and lastChatKey ~= key then
+    lastChatKey = key
+    self:Print(message)
+  end
+  ShowAlert(message, s)
+end
+
+function F:Test()
+  if InCombatLockdown() then
+    return
+  end
+  testUntil = GetTime() + 20
+  ShowAlert("Test: drag this alert to move it. It closes in 20 seconds.", Status(GetTime()))
+end
+
+-------------------------------------------------------------------------------
+-- Lifecycle
+-------------------------------------------------------------------------------
+
+local function Schedule(self)
+  self:Debounce("eval", 0.3, self.Evaluate)
+end
+
+function F:OnEnable()
+  for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "PLAYER_LEVEL_UP", "PLAYER_REGEN_ENABLED", "PLAYER_ALIVE",
+    "PLAYER_UNGHOST", "BAG_UPDATE_DELAYED", "BAG_UPDATE_COOLDOWN", "PLAYER_MOUNT_DISPLAY_CHANGED" }) do
+    self:On(e, Schedule)
+  end
+  self:On("PLAYER_REGEN_DISABLED", HideAlert)
+  self:On("PLAYER_DEAD", HideAlert)
+  self:OnUnit("UNIT_AURA", "player", Schedule)
+  -- Catches the refresh window, cooldown ends, flight and taxi changes.
+  self:Ticker(5, self.Evaluate)
+  Schedule(self)
+end
+
+-- The UseItem button is shared: once off, hand it back clean (hidden, under
+-- UIParent, no item, no tooltip scripts) so another feature doesn't inherit
+-- our bag. Secure attributes and parents only change out of combat; it's
+-- skipped if this was turned on again, or another feature took the button.
+local function DetachUseButton()
+  local use = Secure:Button("UseItem")
+  if not use or F._active or not alert or use:GetParent() ~= alert then
+    return
+  end
+  use:Hide()
+  use:ClearAllPoints()
+  use:SetParent(UIParent)
+  use:SetAttribute("type", nil)
+  use:SetAttribute("item", nil)
+  use:SetScript("OnEnter", nil)
+  use:SetScript("OnLeave", nil)
+end
+
+function F:OnDisable()
+  currentKey, dismissedKey, lastChatKey, snoozeUntil, testUntil = nil, nil, nil, nil, nil
+  HideAlert()
+  -- (Secure:Run, not OutOfCombat: OutOfCombat drops work once the feature is off.)
+  Secure:Run(DetachUseButton)
+end
+
+-- ForeverSleepingBagDB (per character): chat, refreshMinutes, x/y (the
+-- alert's centre offset from UIParent's centre, the same shape as
+-- char.position here). Its "enabled" (reminders on/off) is left out: turning
+-- this feature on is the player's choice of which one runs.
+function F:Import()
+  local old = _G.ForeverSleepingBagDB
+  if type(old) ~= "table" then
+    return
+  end
+  if type(old.chat) == "boolean" then
+    self.db.chat = old.chat
+  end
+  if type(old.refreshMinutes) == "number" then
+    self.db.refreshMinutes = math.max(1, math.min(119, math.floor(old.refreshMinutes)))
+  end
+  if type(old.x) == "number" and type(old.y) == "number" then
+    self.char.position = { old.x, old.y }
+  end
+end
+
+function F:OnOptionChanged()
+  dismissedKey, lastChatKey = nil, nil
+  self:Evaluate()
+end
+
+function F:GetStatus()
+  return "Active · " .. StatusText(Status(GetTime()))
+end
+
+F.commands = {
+  { name = "test", help = "shows the alert for 20 seconds so you can move it", run = function(self) self:Test() end },
+  { name = "status", help = "your stacks, time left and the bag's cooldown", always = true,
+    run = function(self) self:Print(self:StatusLine()) end },
+  { name = "reset", help = "puts the alert back in its default spot", run = function(self)
+    self.char.position = nil
+    self:OnResetPosition()
+    self:Print("alert position reset.")
+  end },
+}
+
+ARLE:RegisterModule(F)

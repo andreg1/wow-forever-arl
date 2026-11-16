@@ -1,0 +1,33 @@
+## Interface: 16001, 120105, 120107
+## Title: Associação Rei Leão's Extensions
+## Notes: One place to enable, disable and configure small extensions for the addons you already use. /arl
+## Author: aredpanda, andreg1
+## Version: 0.1.0
+## SavedVariables: ARLExtensionsDB
+## SavedVariablesPerCharacter: ARLExtensionsCharDB
+## OptionalDeps: EllesmereUI, ElvUI
+## IconTexture: Interface\Icons\INV_Misc_Gear_01
+## AddonCompartmentFunc: ARLExtensions_OnAddonCompartmentClick
+
+Core\Init.lua
+Core\DB.lua
+Core\Guild.lua
+Core\Comm.lua
+Lib\Util.lua
+Lib\Items.lua
+Lib\Quests.lua
+Core\Options.lua
+Core\Modules.lua
+Core\Commands.lua
+Secure\Secure.lua
+Secure\Macro.lua
+Bridge\Questie.lua
+Bridge\Others.lua
+UI\Skin.lua
+UI\Kit.lua
+UI\Window.lua
+UI\Alert.lua
+UI\Panel.lua
+Builtin\Settings.lua
+Builtin\OfficerTools.lua
+Builtin\EUIOptions.lua

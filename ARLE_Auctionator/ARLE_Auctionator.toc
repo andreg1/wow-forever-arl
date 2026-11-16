@@ -1,0 +1,15 @@
+## Interface: 16001, 120105, 120107
+## Title: ARL Extensions: Auctionator
+## Notes: Darkmoon Tickets: Darkmoon Faire turn-ins ranked by gold per Prize Ticket, from Auctionator's prices.
+## Author: aredpanda, andreg1
+## Version: 0.1.0
+## Group: ARLExtensions
+## Dependencies: ARLExtensions
+## OptionalDeps: Auctionator
+## LoadOnDemand: 1
+## X-ARLE-Pack: Auctionator
+## X-ARLE-Group: Auctionator
+## X-ARLE-Features: DarkmoonTickets
+## X-ARLE-Feature-DarkmoonTickets: title=Darkmoon Tickets; extends=Auctionator; cmd=dmf; default=off; replaces=Auctionator_DarkmoonTickets
+
+DarkmoonTickets.lua

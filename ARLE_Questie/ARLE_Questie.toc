@@ -1,0 +1,21 @@
+## Interface: 16001, 120105, 120107
+## Title: ARL Extensions: Questie
+## Notes: New in Forever stars, Sub-Quest Filter, Rare Objectives alerts and Quest Search, for Questie and QuestieDB.
+## Author: aredpanda, andreg1
+## Version: 0.1.0
+## Group: ARLExtensions
+## Dependencies: ARLExtensions
+## OptionalDeps: Questie, QuestieDB
+## LoadOnDemand: 1
+## X-ARLE-Pack: Questie
+## X-ARLE-Group: Questie
+## X-ARLE-Features: NewInForever, SubQuestFilter, RareObjectives, QuestSearch
+## X-ARLE-Feature-NewInForever: title=New in Forever; extends=Questie; cmd=new; default=off; replaces=Questie_NewInForever
+## X-ARLE-Feature-SubQuestFilter: title=Sub-Quest Filter; extends=Questie; cmd=subq; default=off; replaces=Questie_SubQuestFilter
+## X-ARLE-Feature-RareObjectives: title=Rare Objectives; extends=QuestieDB; cmd=rare; default=off; replaces=Questie_RareObjectives
+## X-ARLE-Feature-QuestSearch: title=Quest Search; extends=QuestieDB; cmd=qs; default=off; replaces=QuestieDB_Search
+
+NewInForever.lua
+SubQuestFilter.lua
+RareObjectives.lua
+QuestSearch.lua

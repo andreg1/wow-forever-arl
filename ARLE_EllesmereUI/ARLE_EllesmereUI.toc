@@ -1,0 +1,17 @@
+## Interface: 16001, 120105, 120107
+## Title: ARL Extensions: EllesmereUI
+## Notes: Extras for EllesmereUI: the quest tracker (item buttons, missing items, zone focus) and Item Lock for the bags.
+## Author: aredpanda, andreg1
+## Version: 0.1.0
+## Group: ARLExtensions
+## Dependencies: ARLExtensions
+## OptionalDeps: EllesmereUI, EllesmereUIQuestTracker, EllesmereUIBags, QuestieDB, Questie
+## LoadOnDemand: 1
+## X-ARLE-Pack: EllesmereUI
+## X-ARLE-Group: EllesmereUI
+## X-ARLE-Features: EUIQuestItems, ItemLock
+## X-ARLE-Feature-EUIQuestItems: title=Quest Tracker; extends=EllesmereUIQuestTracker; cmd=qt; replaces=EllesmereUIQuestTracker_QuestItems
+## X-ARLE-Feature-ItemLock: title=Item Lock; extends=EllesmereUIBags; cmd=lock; default=off; replaces=EllesmereUIBags_ItemLock
+
+QuestTracker.lua
+ItemLock.lua

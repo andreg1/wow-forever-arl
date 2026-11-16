@@ -1,0 +1,7 @@
+<Bindings>
+  <!-- ARL Extensions: secure buttons made by Secure/Secure.lua at login. -->
+  <Binding name="CLICK ARLE_SecureFishingSwap:LeftButton" header="ARLEXTENSIONS" category="ADDONS">
+  </Binding>
+  <Binding name="CLICK ARLE_SecureRareScan:LeftButton" category="ADDONS">
+  </Binding>
+</Bindings>

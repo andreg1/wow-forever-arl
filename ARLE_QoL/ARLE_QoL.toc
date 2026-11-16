@@ -1,0 +1,20 @@
+## Interface: 16001, 120105, 120107
+## Title: ARL Extensions: Quality of Life
+## Notes: Sleeping Bag reminders, Fishing Pole Alert, Spec Gear Swap and LFG Role Filter.
+## Author: aredpanda, andreg1
+## Version: 0.1.0
+## Group: ARLExtensions
+## Dependencies: ARLExtensions
+## LoadOnDemand: 1
+## X-ARLE-Pack: QoL
+## X-ARLE-Group: QualityOfLife
+## X-ARLE-Features: SleepingBag, FishingPoleAlert, SpecGearSwap, LFGRoleFilter
+## X-ARLE-Feature-SleepingBag: title=Sleeping Bag; cmd=bag; default=off; replaces=ForeverSleepingBag
+## X-ARLE-Feature-FishingPoleAlert: title=Fishing Pole Alert; cmd=fish; default=off; replaces=FishingPoleAlert
+## X-ARLE-Feature-SpecGearSwap: title=Spec Gear Swap; cmd=gear; default=off; replaces=SpecGearSwap
+## X-ARLE-Feature-LFGRoleFilter: title=LFG Role Filter; cmd=lfg; default=off; replaces=LFGRoleFilter
+
+SleepingBag.lua
+FishingPoleAlert.lua
+SpecGearSwap.lua
+LFGRoleFilter.lua
