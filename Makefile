@@ -4,7 +4,10 @@
 #   make setup ADDONS_DIR=<path>   the same without the question
 #   make package         dist/ARLExtensions-<version>.zip, ready to send to friends
 #   make publish-local   copy ARLExtensions and every ARLE_* pack into your AddOns folder
-#   make                 package + publish-local (run after every change)
+#   make                 package + publish-local (rebuild while working on a change)
+#   make patch|minor|major   bump ## Version in every toc, then package + publish-local
+#
+# Versioning rules are in AGENTS.md ("Versioning").
 #
 # Windows runs the recipes in PowerShell and zips with its built-in tar.exe
 # (Windows 10+); get make with `winget install ezwinports.make`. Linux runs
@@ -13,6 +16,7 @@
 -include local.mk
 
 PACKS := ARLExtensions $(sort $(wildcard ARLE_*))
+TOCS := $(wildcard ARLExtensions/*.toc ARLE_*/*.toc)
 # "## Version: 0.1.0" in the host toc, read by make itself (no shell needed).
 VERSION := $(patsubst VERSION=%,%,$(filter VERSION=%,$(subst ## Version: ,VERSION=,$(file < ARLExtensions/ARLExtensions.toc))))
 ZIP := dist/ARLExtensions-$(VERSION).zip
@@ -22,7 +26,7 @@ TAR_ARGS := -a -cf $(ZIP) -s ,^LICENSE$$,ARLExtensions/LICENSE, $(PACKS) LICENSE
 
 .DEFAULT_GOAL := all
 .ONESHELL:
-.PHONY: all help setup package publish-local
+.PHONY: all help setup package publish-local patch minor major
 
 all: package publish-local
 
@@ -39,6 +43,7 @@ help:
 	echo 'make package         build $(ZIP) from this working tree'
 	echo 'make publish-local   deploy this working tree to your AddOns folder'
 	echo 'make                 both of the above'
+	echo 'make patch|minor|major   new version ($(VERSION) now), then both of the above'
 
 ifeq ($(OS),Windows_NT)
 
@@ -67,6 +72,22 @@ package:
 	& (Join-Path $$env:SystemRoot 'System32\tar.exe') $(TAR_ARGS)
 	if ($$LASTEXITCODE) { exit $$LASTEXITCODE }
 	Write-Host 'Packaged $(ZIP)'
+
+# The submake re-reads the toc, so the zip gets the new version.
+patch minor major:
+	@$$ErrorActionPreference = 'Stop'
+	if ('$(VERSION)' -notmatch '^\d+\.\d+\.\d+$$') { Write-Host 'Bad version in ARLExtensions.toc: $(VERSION)'; exit 1 }
+	$$a, $$b, $$c = '$(VERSION)'.Split('.') | ForEach-Object { [int]$$_ }
+	switch ('$@') { 'major' { $$a++; $$b = 0; $$c = 0 } 'minor' { $$b++; $$c = 0 } 'patch' { $$c++ } }
+	$$new = '{0}.{1}.{2}' -f $$a, $$b, $$c
+	foreach ($$t in '$(TOCS)'.Split(' ')) {
+	  $$path = Join-Path (Get-Location).ProviderPath $$t
+	  $$text = [IO.File]::ReadAllText($$path)
+	  [IO.File]::WriteAllText($$path, ($$text -replace '(?m)^## Version: [0-9.]+', ('## Version: ' + $$new)))
+	}
+	Write-Host ('Version $(VERSION) -> ' + $$new)
+	& '$(MAKE)' --no-print-directory all
+	if ($$LASTEXITCODE) { exit $$LASTEXITCODE }
 
 publish-local:
 	@$$ErrorActionPreference = 'Stop'
@@ -107,6 +128,18 @@ package:
 	rm -f '$(ZIP)'
 	bsdtar $(TAR_ARGS)
 	echo 'Packaged $(ZIP)'
+
+# The submake re-reads the toc, so the zip gets the new version.
+patch minor major:
+	@v='$(VERSION)'
+	printf '%s\n' "$$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "Bad version in ARLExtensions.toc: $$v" >&2; exit 1; }
+	IFS=. ; set -- $$v ; unset IFS
+	a=$$1 b=$$2 c=$$3
+	case '$@' in major) a=$$((a + 1)) b=0 c=0 ;; minor) b=$$((b + 1)) c=0 ;; patch) c=$$((c + 1)) ;; esac
+	new=$$a.$$b.$$c
+	sed -i "s/^## Version: [0-9.]*/## Version: $$new/" $(TOCS)
+	echo "Version $$v -> $$new"
+	$(MAKE) --no-print-directory all
 
 publish-local:
 	@dir='$(ADDONS_DIR)'

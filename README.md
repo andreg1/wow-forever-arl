@@ -40,7 +40,8 @@ From a clone:
 - `make setup`: asks for your `...\_forever_\Interface\AddOns` folder (kept in `local.mk`, not committed).
 - `make package`: builds `dist/ARLExtensions-<version>.zip` to share; it's extracted into the AddOns folder. The version comes from `## Version` in `ARLExtensions.toc`.
 - `make publish-local`: copies the working tree into your AddOns folder, replacing only ARL's own folders. Then `/reload` in game (restart the client after a `.toc` change).
-- `make`: package and publish-local, run after every change.
+- `make`: package and publish-local, to rebuild while working on a change.
+- `make patch` / `make minor` / `make major`: sets a new version in every `.toc`, then packages and publishes. Finish every change with one of these: patch for settings changes and fixes, minor for a new or overhauled feature, major for a rework of the extension manager or an explicitly bigger release.
 
 Works on Linux (sh + bsdtar) and Windows 10+ (PowerShell + built-in tar; get make with `winget install ezwinports.make`).
 

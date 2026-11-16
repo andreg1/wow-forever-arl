@@ -73,7 +73,7 @@ Reading third-party source to find extension points is fine. For EllesmereUIBags
 ## Testing and debugging
 
 There is no Lua interpreter or test runner; behavior is tested in-game:
-- From a clone, after **every change** run `make` (= `make package` + `make publish-local`): it builds `dist/ARLExtensions-<version>.zip` (gitignored, version from `## Version` in `ARLExtensions.toc`) and deploys the working tree to the AddOns folder set by `make setup` (`local.mk`, gitignored), replacing only `ARLExtensions` and the `ARLE_*` folders. If `local.mk` is missing, ask the dev to run `make setup` (it prompts); don't guess the path. A new top-level `ARLE_*` folder is picked up automatically.
+- From a clone, `make` (= `make package` + `make publish-local`) rebuilds while working; finish every change with `make patch|minor|major` (see "Versioning"). `make` builds `dist/ARLExtensions-<version>.zip` (gitignored, version from `## Version` in `ARLExtensions.toc`) and deploys the working tree to the AddOns folder set by `make setup` (`local.mk`, gitignored), replacing only `ARLExtensions` and the `ARLE_*` folders. If `local.mk` is missing, ask the dev to run `make setup` (it prompts); don't guess the path. A new top-level `ARLE_*` folder is picked up automatically.
 - `/reload` picks up Lua changes. A new addon folder or `.toc` change needs a full client restart.
 - Turn on Lua errors with `/console scriptErrors 1` (no BugSack/BugGrabber is installed).
 - The client writes every Lua error, with its stack and the addon taint is blamed on ("execution tainted by 'X'"), to `..\..\Logs\General.log` (`[E][Lua]` lines), even with scriptErrors off. Group them by message to find the source.
@@ -81,6 +81,16 @@ There is no Lua interpreter or test runner; behavior is tested in-game:
 - Syntax check without the game: Cheat Engine's `C:\Program Files\Cheat Engine 7.5\lua53-64.dll` compiles a file through `luaL_loadbufferx` from PowerShell `Add-Type` (nothing runs). It's Lua 5.3, so also grep for 5.3-only syntax (`goto`, `//`, bitwise operators).
 - State checks in game: `/arl` (panel, each feature's status line), `/arl help`, `/arl <cmd>` (status), `/arl <cmd> set` (settings).
 - SavedVariables are written to `..\..\WTF\Account\<account>\SavedVariables\` (account-wide: `ARLExtensionsDB`) and `...\<account>\<realm>\<character>\SavedVariables\` (per character: `ARLExtensionsCharDB`), only on logout or `/reload`. Client logs are in `..\..\Logs\`.
+
+## Versioning
+
+Every change to the addon (anything in `ARLExtensions/` or an `ARLE_*` folder) ships as a new version. Make it with the commands, never by editing `## Version` by hand: `make patch`, `make minor` or `make major` sets the same version in every `.toc`, then packages and publishes locally. Bump once per change, when it's done, not on every rebuild while testing (use plain `make` for that). Changes outside the addon folders (Makefile, README, AGENTS.md) don't get a version.
+
+- **patch** (0.1.0 -> 0.1.1): a change to settings or options, a fix or a small tweak to an existing feature.
+- **minor** (0.1.1 -> 0.2.0): a new feature (module) is added, or an existing one is overhauled.
+- **major** (0.2.0 -> 1.0.0): the extension manager (the host `ARLExtensions/` core: module lifecycle, DB, panel, comm) is reworked, or we explicitly decide to package a bigger release. Don't pick major on your own: propose it and let the user confirm.
+
+When one change mixes levels, use the highest. Commit the bumped `.toc` files with the change they belong to.
 
 ## Multi-client TOCs
 
