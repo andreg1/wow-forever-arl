@@ -55,6 +55,10 @@ local F = {
     .. "and when you run low.",
   options = {
     { type = "header", label = "Reminders" },
+    { key = "combatOnly", type = "boolean", label = "Only when a fight starts without an XP buff",
+      tooltip = "No reminders out of combat. When you pull with XP food in your bags but no XP buff (or a weaker "
+        .. "one), the alert bar warns you, at most once a minute. You can't eat in combat: eat after the fight.",
+      default = false, cmd = "combat" },
     { key = "chat", type = "boolean", label = "Chat message", default = true },
     { key = "screen", type = "boolean", label = "On-screen alert", default = true },
     { key = "noFood", type = "boolean", label = "Remind when I have no XP food", default = false, cmd = "nofood" },
@@ -76,6 +80,7 @@ local F = {
     { type = "button", label = "Show a test alert", desc = "for 20 seconds, so you can move it", nocmd = true,
       run = function(def) def:Test() end },
     ARLE.Options.Preset.ResetPosition(),
+    ARLE.Options.Preset.Alert({ header = "When a fight starts without an XP buff" }),
   },
 }
 
@@ -835,6 +840,10 @@ local function ShowAlert(message, bags)
   alert.supply:SetText(SupplyText(bags) .. (lowLine and ("\n|cffff8040" .. lowLine .. "|r") or ""))
   alert.snooze:SetText("Snooze " .. (F.db.snoozeMinutes or 1) .. "m")
   alert:Show()
+  local x, y = alert:GetCenter()
+  F:Debug("alert: visible %s, centre %s,%s, size %dx%d, scale %.2f, alpha %.2f", tostring(alert:IsVisible()),
+    tostring(x and math.floor(x)), tostring(y and math.floor(y)), alert:GetWidth(), alert:GetHeight(),
+    alert:GetEffectiveScale(), alert:GetEffectiveAlpha())
 end
 
 function F:OnResetPosition()
@@ -854,6 +863,58 @@ end
 local function ResetState()
   currentKey, dismissedKey, lastFire, snoozeUntil = nil, nil, nil, nil
   lowNotified, lowLine = false, nil
+end
+
+-- "Only when a fight starts without an XP buff": on PLAYER_REGEN_DISABLED
+-- (just before the lockdown), the shared alert bar (ARLE.UI.Alert, a plain
+-- frame, fine in combat; XP Food's own alert holds a secure button and can't
+-- show in a fight, and food can't be eaten there anyway). At most once a
+-- minute, so chain pulls don't repeat it.
+local COMBAT_ALERT_GAP = 60
+local lastCombatAlert
+
+function F:CombatCheck()
+  local level = UnitLevel("player")
+  if type(level) == "number" and level >= MAX_LEVEL then
+    return
+  end
+  local now = GetTime()
+  if lastCombatAlert and now - lastCombatAlert < COMBAT_ALERT_GAP then
+    self:Debug("fight: warned %ds ago", now - lastCombatAlert)
+    return
+  end
+  ResetCaches(now)
+  local bags, buff = ScanBags(), ScanBuff()
+  lastBags, lastBuff = bags, buff
+  local best = SelectedFood(bags)
+  if not best then
+    self:Debug("fight: no XP food in your bags")
+    return
+  end
+  if buff.unknown and buff.percent < best.percent then
+    self:Debug("fight: a buff isn't readable, maybe the food's: no warning")
+    return
+  end
+  if buff.percent >= best.percent then
+    self:Debug("fight: XP buff %d%% is up", buff.percent)
+    return
+  end
+  lastCombatAlert = now
+  local text = buff.percent > 0 and string.format("Your XP buff is only %d%%", buff.percent)
+    or "Fighting without your XP buff"
+  self:Debug("fight: warning (%s)", text)
+  self:Alert({
+    text = text,
+    sub = string.format("Eat %s (%d%%) after this fight", tostring(best.name), best.percent),
+    icon = Items.GetIcon(best.itemID) or FOOD_ICON,
+    warning = "NO XP BUFF",
+    color = { 1, 0.6, 0.2 },
+    pulse = true,
+    duration = 6,
+  })
+  if self.db.chat then
+    self:Print(text .. ". Eat " .. tostring(best.name) .. " after this fight.")
+  end
 end
 
 function F:CheckExpiry(buff, now)
@@ -888,6 +949,12 @@ function F:Evaluate()
   local level = UnitLevel("player")
   if type(level) == "number" and level >= MAX_LEVEL then
     self:Debug("off: level %d", level)
+    ResetState()
+    HideAlert()
+    return
+  end
+  if self.db.combatOnly then
+    -- Only CombatCheck reminds (as a fight starts).
     ResetState()
     HideAlert()
     return
@@ -945,6 +1012,17 @@ function F:Evaluate()
     return -- bags still loading
   end
 
+  -- The buff is about to end and you have food to eat again: the alert too,
+  -- not just CheckExpiry's chat line (which already said it, so no second line).
+  local quiet = false
+  local lead = (self.db.expiryMinutes or 0) * 60
+  if not key and best and lead > 0 and buff.percent > 0 and buff.expires > now and buff.expires - now <= lead then
+    key = "ending:" .. tostring(buff.spellID) .. ":" .. buff.expires
+    message = string.format("Your %d%% XP buff ends in %d min. Eat again to keep it going.", buff.percent,
+      math.ceil((buff.expires - now) / 60))
+    quiet = true
+  end
+
   if not key then
     self:Debug("nothing to remind")
     currentKey, dismissedKey, lastFire = nil, nil, nil
@@ -967,13 +1045,16 @@ function F:Evaluate()
   if not lastFire or (repeatSec > 0 and now - lastFire >= repeatSec) then
     lastFire = now
     self:Debug("%s: reminding", key)
-    if self.db.chat then
+    if self.db.chat and not quiet then
       self:Print(message)
     end
   end
   if self.db.screen and not UnitIsDeadOrGhost("player") and not Flying() then
+    self:Debug("%s: alert on screen", key)
     ShowAlert(message, bags)
   else
+    self:Debug("%s: no alert (%s)", key, not self.db.screen and "on-screen alert is off"
+      or (UnitIsDeadOrGhost("player") and "dead") or "flying or on a flight path")
     HideAlert()
   end
 end
@@ -1033,7 +1114,12 @@ function F:OnEnable()
       Schedule(def)
     end)
   end
-  self:On("PLAYER_REGEN_DISABLED", HideAlert)
+  self:On("PLAYER_REGEN_DISABLED", function(def)
+    HideAlert()
+    if def.db.combatOnly then
+      def:CombatCheck()
+    end
+  end)
   self:On("PLAYER_DEAD", HideAlert)
   self:OnUnit("UNIT_AURA", "player", function(def)
     wipe(auraCache)
