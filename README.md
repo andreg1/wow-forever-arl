@@ -22,7 +22,7 @@ Copy every folder of this repo (`ARLExtensions` and the `ARLE_*` packs) into `Wo
 | Quality of Life | Quick Loot: loots everything at once (Shift opens the window normally); leaves rolls, bind-on-pickup confirms and items that don't fit | `/arl loot` | Nothing |
 | Quality of Life | Loot Sparkles: keeps the sparkle on lootable quest items, even after a graphics preset turns it off | `/arl sparkle` | Nothing |
 | Quality of Life | Buff Back: one key buffs back whoever buffed you, whoever asks in chat, and your group; you choose which buffs each class gets | `/arl buff` | Nothing |
-| Quality of Life | Layer Bridge: AutoLayer and LayerSwap users change layer with each other; a Swap layer button asks LayerSwap hosts out of sight and readies "inv layer" in chat for AutoLayer hosts, and an AutoLayer host also answers LayerSwap users | `/arl layer` | AutoLayer or LayerSwap |
+| Quality of Life | Layer Bridge: AutoLayer and LayerSwap users change layer with each other; a Swap layer button asks LayerSwap hosts out of sight and readies "inv layer" in chat for AutoLayer hosts, and with hosting on you invite both addons' users | `/arl layer` | Nothing (works alongside AutoLayer / LayerSwap) |
 | Questie | New in Forever: star on quests that are new in WoW Forever | `/arl new` | Questie |
 | Questie | Sub-Quest Filter: hides sub-quests until you can pick them up | `/arl subq` | Questie |
 | Questie | Rare Objectives: alerts and a scan key for rare quest mobs you still need | `/arl rare` | QuestieDB |

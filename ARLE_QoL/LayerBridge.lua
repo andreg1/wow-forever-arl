@@ -67,10 +67,10 @@ local F = {
   title = "Layer Bridge",
   group = "QualityOfLife",
   command = "layer",
-  commandHelp = "AutoLayer and LayerSwap users reach each other",
-  description = "Lets AutoLayer and LayerSwap users change layer with each other. Hosting with AutoLayer, you "
-    .. "also answer LayerSwap users' asks; asking with AutoLayer, your hop button also asks LayerSwap hosts in "
-    .. "your zone. Hosting with LayerSwap, you also invite AutoLayer users' asks. Needs AutoLayer or LayerSwap.",
+  commandHelp = "change layer with LayerSwap and AutoLayer users",
+  description = "Change layer with LayerSwap and AutoLayer users, with or without either addon installed. "
+    .. "The Swap layer button asks LayerSwap hosts in your zone out of sight and readies \"inv layer\" for "
+    .. "AutoLayer hosts (press Enter). With hosting on, you also invite their users' asks.",
   options = {
     { type = "info", text = function(def) return def:GetStatus() end },
     { key = "layerswap", type = "boolean", label = "Work with LayerSwap users", default = true, cmd = "ls",
@@ -347,7 +347,7 @@ function F:AnswerLayerSwap(text, sender, how)
     return
   end
   heard(true)
-  local al = AutoLayerAddon()
+  local al = AutoLayerHosting() and AutoLayerAddon()
   if al and type(al.ProcessMessage) == "function" then
     -- As a whisper "inv layer": AutoLayer applies its own rules and invites.
     local ok, err = pcall(al.ProcessMessage, al, "CHAT_MSG_WHISPER", "inv layer", sender)
@@ -359,37 +359,17 @@ function F:AnswerLayerSwap(text, sender, how)
     end
     self:Debug("AutoLayer refused the hand-off: %s", tostring(err))
   end
-  if not self.warnedHandOff then
-    self.warnedHandOff = true
-    self:Print("couldn't hand the invite to AutoLayer (it may have changed); inviting directly.")
-  end
-  pcall(C_PartyInfo.InviteUnit, sender)
-  stats.invited = stats.invited + 1
-  Log("invite", name, "directly", how)
+  self:Invite(sender, name, "LayerSwap " .. how)
 end
 
 -------------------------------------------------------------------------------
--- 3. Hosting with LayerSwap, for AutoLayer askers
+-- 3. Our own invites (no AutoLayer hosting), for both addons' askers
 -------------------------------------------------------------------------------
 
 local invitedAt, recentInvites, lastInvite = {}, {}, 0
 
-function F:AnswerAutoLayer(msg, sender, channelName)
-  local name = Short(sender)
-  if not name or name == MyName() then
-    return
-  end
-  local base = Str(channelName) and channelName:lower() or ""
-  if not base:find("^layer") then
-    return
-  end
-  local body = msg:gsub("^<%w+>%s*", "")
-  if not body:lower():find("^inv%s+layer%s*$") then
-    if body:lower():find("^inv%s+layer") then
-      self:Debug("%s asks for numbered layers (%s): can't match those, skipped", name, body)
-    end
-    return
-  end
+-- 60 s per asker, 6 invites per 10 min, 1 s apart; leader or solo, room left.
+function F:Invite(sender, name, why)
   local now = GetTime()
   if invitedAt[name] and now - invitedAt[name] < ASKER_COOLDOWN then
     return
@@ -411,8 +391,27 @@ function F:AnswerAutoLayer(msg, sender, channelName)
   recentInvites[#recentInvites + 1] = now
   pcall(C_PartyInfo.InviteUnit, sender)
   stats.invited = stats.invited + 1
-  Log("invite", name, "AutoLayer ask in", channelName)
-  self:Debug("%s: invited (AutoLayer ask in %s)", name, channelName)
+  Log("invite", name, why)
+  self:Debug("%s: invited (%s)", name, why)
+end
+
+function F:AnswerAutoLayer(msg, sender, channelName)
+  local name = Short(sender)
+  if not name or name == MyName() then
+    return
+  end
+  local base = Str(channelName) and channelName:lower() or ""
+  if not base:find("^layer") then
+    return
+  end
+  local body = msg:gsub("^<%w+>%s*", "")
+  if not body:lower():find("^inv%s+layer%s*$") then
+    if body:lower():find("^inv%s+layer") then
+      self:Debug("%s asks for numbered layers (%s): can't match those, skipped", name, body)
+    end
+    return
+  end
+  self:Invite(sender, name, "AutoLayer ask in " .. tostring(channelName))
 end
 
 -------------------------------------------------------------------------------
@@ -865,7 +864,7 @@ function F:OnAddonMessage(_, prefix, text, kind, sender)
     return -- LayerSwap answers and reads its own messages
   end
   if kind == "WHISPER" and text:find("^inv layer") then
-    if self.db.host and AutoLayerHosting() then
+    if self.db.host then
       self:AnswerLayerSwap(text, sender, "hidden ask")
     end
     return
@@ -880,8 +879,7 @@ function F:OnChatLine(event, msg, sender, _, _, _, _, _, _, channelName)
     return
   end
   if msg:find("<LS", 1, true) then
-    if self.db.host and self.db.layerswap and not Loaded("LayerSwap") and AutoLayerHosting()
-      and msg:lower():find("inv%s+layer") then
+    if self.db.host and self.db.layerswap and not Loaded("LayerSwap") and msg:lower():find("inv%s+layer") then
       local al = AutoLayerAddon()
       local known = al and type(al.getCurrentLayer) == "function" and select(2, pcall(al.getCurrentLayer, al))
       if type(known) == "number" and known > 0 then
@@ -891,8 +889,8 @@ function F:OnChatLine(event, msg, sender, _, _, _, _, _, _, channelName)
     end
     return
   end
-  if event == "CHAT_MSG_CHANNEL" and self.db.host and self.db.autolayer and not Loaded("AutoLayer")
-    and LayerSwapHosting() then
+  -- AutoLayer hosting answers these itself.
+  if event == "CHAT_MSG_CHANNEL" and self.db.host and self.db.autolayer and not AutoLayerHosting() then
     self:AnswerAutoLayer(msg, sender, channelName)
   end
 end
@@ -931,9 +929,10 @@ function F:OnEnable()
   if self.db.autolayer then
     self:JoinLayer() -- may need a click on some realms; BoxLine tries again from one
   end
-  if not Loaded("AutoLayer") and not Loaded("LayerSwap") then
-    self:Print("needs AutoLayer or LayerSwap; neither is loaded.")
-  end
+  -- Again once the loading screen is gone.
+  self:After(3, function(def)
+    def:Paint()
+  end)
 end
 
 -- AutoLayer's hop button and "/autolayer req" both end in SendLayerRequest:
@@ -966,7 +965,7 @@ function F:GetStatus()
     found[#found + 1] = "LayerSwap" .. (LayerSwapHosting() and " (hosting)" or "")
   end
   if #found == 0 then
-    return "Waiting for AutoLayer or LayerSwap"
+    found[1] = "On its own"
   end
   return string.format("%s · layer %s · answered %d, invites %d, asks %d (%d heard, %d hosts)",
     table.concat(found, " + "), layer.id and Key(layer.id) or "unknown (look at a creature)",
@@ -974,6 +973,20 @@ function F:GetStatus()
 end
 
 F.commands = {
+  { name = "button", help = "shows the Swap layer button (or says why it's hidden)", run = function(self)
+    local why = not self.db.button and "\"Show the Swap layer button\" is off"
+      or InInstance() and "you're in an instance" or nil
+    self:Paint()
+    if why then
+      self:Print("the button is hidden: " .. why .. ".")
+    elseif pad and pad:IsShown() then
+      local x, y = pad:GetCenter()
+      self:Print(string.format("the button is shown at %d, %d (Reset position brings it back to the middle).",
+        x or -1, y or -1))
+    else
+      self:Print("the button couldn't be shown; /arl errors may say why.")
+    end
+  end },
   { name = "ask", help = "asks LayerSwap hosts in your zone (a /who search, then hidden whispers)",
     run = function(self) self:Ask("command") end },
   { name = "log", help = "the last bridged asks and invites", always = true, run = function(self)
