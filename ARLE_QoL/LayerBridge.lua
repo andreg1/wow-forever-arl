@@ -134,8 +134,22 @@ local function Short(name)
   return Str(name) and name:match("^([^%-]+)") or nil
 end
 
+-- Our name as other players' messages carry it: on Forever "First Surname"
+-- (UnitName gives the two parts apart; measured 2026-11-16: LayerSwap hosts
+-- answered "heard Haru Pala" while UnitName's first part was "Haru").
 local function MyName()
-  return Str((UnitName("player")))
+  local first, surname = UnitName("player")
+  first = Str(first)
+  if not first then
+    return nil
+  end
+  surname = Str(surname)
+  if surname then
+    local c = Constants and Constants.CharacterNameSeparatorConsts
+    local sep = c and Str(c.CHARACTERNAME_SURNAME_SEPARATOR) or " "
+    return first .. sep .. surname
+  end
+  return first
 end
 
 local function ZoneMap()
