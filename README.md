@@ -12,12 +12,15 @@ Copy every folder of this repo (`ARLExtensions` and the `ARLE_*` packs) into `Wo
 
 | Pack | Feature | Command | Needs |
 |---|---|---|---|
-| Quality of Life | Sleeping Bag: reminder to use the Cozy Sleeping Bag for Well-Rested | `/arl bag` | Nothing |
+| Quality of Life | Sleeping Bag: reminder to use the Cozy Sleeping Bag for Well-Rested, with a stack timeline while you lie in it | `/arl bag` | Nothing |
+| Quality of Life | XP Food: reminds you to eat your experience food when its buff is missing, weaker or ending, and when you run low; click the icon to eat | `/arl food` | Nothing |
 | Quality of Life | Fishing Pole Alert: warns when you fight with a fishing pole, with a key to put your weapons back on | `/arl fish` | Nothing |
 | Quality of Life | Spec Gear Swap: equips a spec's gear set on a spec switch, keeps the set saved, restores emptied action bars | `/arl gear` | Nothing |
 | Quality of Life | LFG Role Filter: filters the Group Browser by role, with Whisper / Invite and optional auto-invite | `/arl lfg` | Nothing |
 | Quality of Life | Leveling BiS Spec: sets Forever Leveling BiS's Talent spec to the spec you play, and follows dual spec switches | `/arl spec` | Forever Leveling BiS |
 | Quality of Life | Auto Uprank: swaps lower spell ranks on your action bars for a new rank when you (or your pet) learn it | `/arl uprank` | Nothing |
+| Quality of Life | Quick Loot: loots everything at once (Shift opens the window normally); leaves rolls, bind-on-pickup confirms and items that don't fit | `/arl loot` | Nothing |
+| Quality of Life | Loot Sparkles: keeps the sparkle on lootable quest items, even after a graphics preset turns it off | `/arl sparkle` | Nothing |
 | Questie | New in Forever: star on quests that are new in WoW Forever | `/arl new` | Questie |
 | Questie | Sub-Quest Filter: hides sub-quests until you can pick them up | `/arl subq` | Questie |
 | Questie | Rare Objectives: alerts and a scan key for rare quest mobs you still need | `/arl rare` | QuestieDB |
@@ -31,7 +34,7 @@ Officers and the Guild Master also get **Officer Tools**: who in the guild runs 
 
 ## Coming from the standalone addons
 
-Several features started as standalone addons (ForeverSleepingBag, FishingPoleAlert, SpecGearSwap, LFGRoleFilter, Questie_NewInForever, Questie_SubQuestFilter, Questie_RareObjectives, QuestieDB_Search, EllesmereUIQuestTracker_QuestItems, EllesmereUIBags_ItemLock, Auctionator_DarkmoonTickets, ForeverLevelingBiS_AutoSpec). While one of those is still turned on, its feature here stays paused, so the two don't run twice, and copies the old addon's saved data (locks, gear set links, macros, settings). Turn the old addon off in the AddOns list and `/reload` to switch over.
+Several features started as standalone addons (ForeverSleepingBag, FishingPoleAlert, SpecGearSwap, LFGRoleFilter, Questie_NewInForever, Questie_SubQuestFilter, Questie_RareObjectives, QuestieDB_Search, EllesmereUIQuestTracker_QuestItems, EllesmereUIBags_ItemLock, Auctionator_DarkmoonTickets, ForeverLevelingBiS_AutoSpec), and XP Food and Loot Sparkles take over from Forever SnackTrack and Forever Loot Sparkles. While one of those is still turned on, its feature here stays paused, so the two don't run twice, and copies the old addon's saved data (locks, gear set links, macros, settings). Turn the old addon off in the AddOns list and `/reload` to switch over.
 
 ## Development
 

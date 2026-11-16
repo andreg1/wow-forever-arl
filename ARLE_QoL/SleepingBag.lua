@@ -11,6 +11,11 @@
 -- refreshMinutes left: a small movable alert whose bag icon uses the bag (the
 -- host's secure item button, ARLE.Secure "UseItem"), plus one chat line per
 -- reminder. Hidden in combat, while dead, flying or on a flight path.
+--
+-- Timeline (option): while lying in the bag (area aura 429960), a bar 0-3
+-- with "next stack in / 3/3 in" (or "refresh in" at 3 stacks). The timing
+-- model, one stack per minute of rest counted from the last stack or
+-- expiration change, is the one Forever SnackTrack shows; the code is ours.
 local ADDON = ...
 local ARLE = _G.ARLExtensions
 if not ARLE then
@@ -36,6 +41,7 @@ local F = {
   description = "Reminds you to use the Cozy Sleeping Bag when Well-Rested is missing, low or ending.",
   options = {
     { key = "chat", type = "boolean", label = "Chat message", default = true },
+    { key = "timeline", type = "boolean", label = "Stack timeline while lying in the bag", default = true },
     { key = "refreshMinutes", type = "range", label = "Remind with minutes left",
       min = 1, max = 119, step = 5, default = 20, cmd = "refresh" },
     { type = "info", text = function(def) return def:StatusLine() end },
@@ -142,8 +148,45 @@ local function StatusText(s)
   return text
 end
 
+-------------------------------------------------------------------------------
+-- Timeline while lying in the bag
+-------------------------------------------------------------------------------
+
+local STACK_SECONDS = 60
+local timeline, timelineTicker
+local tl = {} -- stacks, expires, startedAt: when the current stack began
+
+local function Clock(seconds)
+  seconds = math.max(0, math.ceil(seconds))
+  return string.format("%d:%02d", math.floor(seconds / 60), seconds % 60)
+end
+
+-- Text and bar value (0..3) for status s, or nil when not lying in the bag.
+local function TimelineInfo(s, now)
+  if not s.lying then
+    return nil
+  end
+  -- A new stack or a refreshed buff starts the next minute.
+  local expiresAt = s.remaining and (now + s.remaining) or 0
+  if tl.stacks ~= s.stacks or math.abs((tl.expiresAt or 0) - expiresAt) > 1 then
+    tl.stacks, tl.expiresAt, tl.startedAt = s.stacks, expiresAt, now
+  end
+  local elapsed = math.min(STACK_SECONDS, now - (tl.startedAt or now))
+  local nextIn = STACK_SECONDS - elapsed
+  if s.stacks >= MAX_STACKS then
+    return string.format("Well-Rested %d/%d  ·  refresh in %s", MAX_STACKS, MAX_STACKS, Clock(nextIn)), MAX_STACKS
+  end
+  local full = nextIn + (MAX_STACKS - s.stacks - 1) * STACK_SECONDS
+  return string.format("Well-Rested %d/%d  ·  next stack %s  ·  %d/%d in %s", s.stacks, MAX_STACKS, Clock(nextIn),
+    MAX_STACKS, MAX_STACKS, Clock(full)), s.stacks + elapsed / STACK_SECONDS
+end
+
 function F:StatusLine()
   local s = Status(GetTime())
+  local lying = TimelineInfo(s, GetTime())
+  if lying then
+    return lying
+  end
   return StatusText(s) .. "  ·  bag " .. (s.owned and "in your bags" or "not in your bags")
     .. (s.owned and ("  ·  " .. (s.lying and "lying in it" or (s.cooldown <= 0 and "ready"
       or (s.cooldown == math.huge and "cooldown pending" or ("ready in " .. FormatMinutes(s.cooldown))))))
@@ -257,9 +300,100 @@ local function ShowAlert(message, s)
   alert:Show()
 end
 
+local function PlaceTimeline()
+  timeline:ClearAllPoints()
+  local pos = F.char.position
+  timeline:SetPoint("CENTER", UIParent, "CENTER", pos and pos[1] or 0, pos and pos[2] or 200)
+end
+
+local function BuildTimeline()
+  local f = Skin:CreateTooltipWindow(nil, UIParent)
+  f:SetSize(360, 46)
+  f:SetFrameStrata("MEDIUM")
+  f:SetClampedToScreen(true)
+  f:SetMovable(true)
+  f:EnableMouse(true)
+  f:RegisterForDrag("LeftButton")
+  f:SetScript("OnDragStart", f.StartMoving)
+  f:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    local x, y = self:GetCenter()
+    local cx, cy = UIParent:GetCenter()
+    if x and cx then
+      F.char.position = { x - cx, y - cy }
+    end
+    PlaceTimeline()
+    if alert then
+      PlaceAlert()
+    end
+  end)
+  f.text = Kit.Text(f, "GameFontHighlightSmall")
+  f.text:SetPoint("TOPLEFT", 10, -7)
+  f.text:SetPoint("RIGHT", -10, 0)
+  f.bar = CreateFrame("StatusBar", nil, f)
+  f.bar:SetPoint("BOTTOMLEFT", 10, 8)
+  f.bar:SetPoint("BOTTOMRIGHT", -10, 8)
+  f.bar:SetHeight(12)
+  f.bar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+  f.bar:SetStatusBarColor(0.12, 0.75, 0.62)
+  f.bar:SetMinMaxValues(0, MAX_STACKS)
+  local bg = f.bar:CreateTexture(nil, "BACKGROUND")
+  bg:SetAllPoints()
+  bg:SetColorTexture(0, 0, 0, 0.5)
+  for i = 1, MAX_STACKS - 1 do
+    local mark = f.bar:CreateTexture(nil, "OVERLAY")
+    mark:SetColorTexture(1, 0.82, 0, 0.9)
+    mark:SetSize(2, 12)
+    mark:SetPoint("LEFT", f.bar, "LEFT", 0, 0)
+    f.bar["mark" .. i] = mark
+  end
+  f.bar:SetScript("OnSizeChanged", function(bar, width)
+    for i = 1, MAX_STACKS - 1 do
+      bar["mark" .. i]:SetPoint("LEFT", bar, "LEFT", width * i / MAX_STACKS - 1, 0)
+    end
+  end)
+  f:Hide()
+  timeline = f
+  PlaceTimeline()
+end
+
+local function HideTimeline()
+  if timeline then
+    timeline:Hide()
+  end
+  if timelineTicker then
+    timelineTicker:Cancel()
+    timelineTicker = nil
+  end
+end
+
+-- Shown while lying in the bag (where the reminder never is).
+local function UpdateTimeline()
+  local now = GetTime()
+  local s = Status(now)
+  local text, value = TimelineInfo(s, now)
+  if not text or not F.db.timeline or UnitAffectingCombat("player") or UnitIsDeadOrGhost("player")
+    or (IsFlying and IsFlying()) then
+    HideTimeline()
+    return
+  end
+  if not timeline then
+    BuildTimeline()
+  end
+  timeline.text:SetText(text)
+  timeline.bar:SetValue(value)
+  timeline:Show()
+  if not timelineTicker then
+    timelineTicker = F:Ticker(0.25, UpdateTimeline)
+  end
+end
+
 function F:OnResetPosition()
   if alert then
     PlaceAlert()
+  end
+  if timeline then
+    PlaceTimeline()
   end
 end
 
@@ -278,6 +412,7 @@ local function Blocked()
 end
 
 function F:Evaluate()
+  UpdateTimeline()
   local now = GetTime()
   if testUntil then
     if now < testUntil and not InCombatLockdown() then
@@ -340,8 +475,14 @@ function F:OnEnable()
     "PLAYER_UNGHOST", "BAG_UPDATE_DELAYED", "BAG_UPDATE_COOLDOWN", "PLAYER_MOUNT_DISPLAY_CHANGED" }) do
     self:On(e, Schedule)
   end
-  self:On("PLAYER_REGEN_DISABLED", HideAlert)
-  self:On("PLAYER_DEAD", HideAlert)
+  self:On("PLAYER_REGEN_DISABLED", function()
+    HideAlert()
+    HideTimeline()
+  end)
+  self:On("PLAYER_DEAD", function()
+    HideAlert()
+    HideTimeline()
+  end)
   self:OnUnit("UNIT_AURA", "player", Schedule)
   -- Catches the refresh window, cooldown ends, flight and taxi changes.
   self:Ticker(5, self.Evaluate)
@@ -369,6 +510,8 @@ end
 function F:OnDisable()
   currentKey, dismissedKey, lastChatKey, snoozeUntil, testUntil = nil, nil, nil, nil, nil
   HideAlert()
+  HideTimeline()
+  tl = {}
   -- (Secure:Run, not OutOfCombat: OutOfCombat drops work once the feature is off.)
   Secure:Run(DetachUseButton)
 end
