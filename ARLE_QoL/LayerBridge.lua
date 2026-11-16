@@ -57,6 +57,8 @@ local INVITE_GAP = 1
 local BURST, BURST_WAIT, ASK_MAX = 8, 1, 49 -- a search lists 50 players at most
 local ANYWAY_WAIT, ANYWAY_LATE = 3, 10 -- s after the last whisper: re-ask hosts that can't read their layer
 local BOOK_TTL, ASKED_FOR = 7 * 86400, 6 * 3600 -- known LayerSwap users; strangers not asked again for 6 h
+local WHO_CLASSES = { 1, 2, 3, 4, 5, 7, 8, 9, 11 } -- the classes this client has (searched one per press)
+local KNOWN_MAX = 20 -- known hosts asked directly when no search can run
 local WHO_WAIT = 15 -- the server can take a while (or refuse: "Unable to complete your request")
 local ASK_GAP = 10 -- s between two asks of ours
 local LEAVE_AFTER = 4
@@ -700,14 +702,11 @@ function F:Ask(via)
   local last = searched[zone]
   local ago = last and Since(last.at)
   if ago and ago < SEARCH_GAP then
+    -- No search (the server would refuse it), but the LayerSwap hosts we
+    -- already know can still be asked directly.
+    local n = self:AskKnown(zone, via)
     run.skipWho = string.format("player search skipped: the last one here was %d s ago (the server refuses "
-      .. "searches that come too often)", ago)
-    self:Step(run.skipWho)
-    return
-  end
-  if ago and not last.noAnswer and (last.heard or 0) == 0 and ago < SEARCH_EMPTY then
-    run.skipWho = string.format("player search skipped: no LayerSwap user in this zone answered %d s ago; "
-      .. "asks again after %d s", ago, SEARCH_EMPTY - ago)
+      .. "searches that come too often); asked %d known LayerSwap hosts directly", ago, n)
     self:Step(run.skipWho)
     return
   end
@@ -730,9 +729,15 @@ function F:Ask(via)
   end
   local text = tagZone .. '"' .. zoneName .. '"'
   local origin = (Enum and Enum.SocialWhoOrigin and Enum.SocialWhoOrigin.Social) or 1
+  -- Each search lists 50 players at most: like LayerSwap, every press asks
+  -- the zone's map for one class in turn (the first for all of them), so
+  -- presses reach different players.
+  local round = ((self.char.whoRound or -1) + 1) % (#WHO_CLASSES + 1)
+  self.char.whoRound = round
+  local cls = round > 0 and WHO_CLASSES[round] or nil
   local ok, err = pcall(C_FriendList.SendWho, text, origin,
-    { classIDs = {}, raceIDs = {}, uiMapIDs = { zone } })
-  local how = "map filter"
+    { classIDs = cls and { cls } or {}, raceIDs = {}, uiMapIDs = { zone } })
+  local how = "map filter" .. (cls and (", class " .. cls) or ", all classes")
   if not ok then
     self:Step("search with map filter refused: %s", tostring(err))
     ok, err = pcall(C_FriendList.SendWho, text, origin)
@@ -839,6 +844,31 @@ end
 --   asked[full name] = time()  strangers whispered by our asks
 -------------------------------------------------------------------------------
 
+-- Asks the LayerSwap hosts we know (newest first) without a search. Only one
+-- in our zone can move us; the others just answer "heard". Returns how many.
+function F:AskKnown(zone, via)
+  local list = {}
+  for key, e in pairs(self:Book()) do
+    if type(e) == "table" and e.host then
+      list[#list + 1] = { key = key, at = e.at or 0, to = e.from or key }
+    end
+  end
+  if #list == 0 then
+    return 0
+  end
+  table.sort(list, function(a, b)
+    return a.at > b.at
+  end)
+  ask = { at = GetTime(), zone = zone, layer = layer.id, line = AskLine(), queue = {}, sent = 0, via = via,
+    heard = 0, hosts = 0 }
+  for i = 1, math.min(#list, KNOWN_MAX) do
+    ask.queue[i] = list[i].to
+  end
+  local n = #ask.queue
+  self:Send(ask)
+  return n
+end
+
 function F:Book()
   local book = self.shared.book
   if type(book) ~= "table" then
@@ -865,6 +895,7 @@ function F:Remember(sender, host)
   local book = self:Book()
   local e = book[key] or {}
   e.at = time()
+  e.from = sender -- the name as the game gives it, for whispering back
   if host ~= nil then
     e.host = host or nil
   end
