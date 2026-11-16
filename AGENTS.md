@@ -111,6 +111,8 @@ Work straight on `main` (no feature branches; pull first, others push there too)
 
 Pushes with no version bump (docs, Makefile) get no release.
 
+**Discord:** `.github/workflows/discord-release.yml` posts every published release to the guild's Discord channel (the zip attached, title and notes cut to 2,000 characters) through the channel webhook in the repo secret `DISCORD_WEBHOOK`. Never put that URL in code, commits or chat. Re-post an older release with Actions > "Post release to Discord" > Run workflow (tag), or `gh workflow run discord-release.yml -R andreg1/wow-forever-arl -f tag=v<version>`. The release notes are what guildmates read there: keep them in player words.
+
 **Pull from the remote first, every time**, because aredpanda pushes to `main` too:
 - Run `git pull --rebase` in the clone before starting any work on ARL, and again right before every `git push`.
 - Tell the user what came in (`git log --oneline HEAD@{1}..HEAD`). If it changed AGENTS.md, copy it to AddOns. If it changed addon code, deploy it with `make`.
