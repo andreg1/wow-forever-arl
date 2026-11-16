@@ -59,6 +59,7 @@ local ANYWAY_WAIT, ANYWAY_LATE = 3, 10 -- s after the last whisper: re-ask hosts
 local BOOK_TTL, ASKED_FOR = 7 * 86400, 6 * 3600 -- known LayerSwap users; strangers not asked again for 6 h
 local WHO_CLASSES = { 1, 2, 3, 4, 5, 7, 8, 9, 11 } -- the classes this client has (searched one per press)
 local KNOWN_MAX = 20 -- known hosts asked directly when no search can run
+local OFFLINE_FOR = 3600 -- a known host the game says is offline isn't asked directly for 1 h
 local WHO_WAIT = 15 -- the server can take a while (or refuse: "Unable to complete your request")
 local ASK_GAP = 10 -- s between two asks of ours
 local LEAVE_AFTER = 4
@@ -301,9 +302,39 @@ local function AskLine()
   return "inv layer " .. table.concat(parts, " ") .. ">"
 end
 
+-- [short name] = GetTime() of our last hidden whisper to them, to tell the
+-- game's "No player named 'X' is currently playing" for our own asks apart.
+local whisperedAt = {}
+local WHISPER_ECHO = 10
+
 local function Note(text, to)
   local ok, res = pcall(C_ChatInfo.SendAddonMessage, PREFIX, text, "WHISPER", to)
-  return ok and not Secret(res) and res or nil
+  res = ok and not Secret(res) and res or nil
+  local key = Short(to)
+  if res == 0 and key then
+    whisperedAt[key] = GetTime()
+  end
+  return res
+end
+
+-- The name in the game's "player not found" line, or nil.
+local notFoundPattern
+local function NotFoundName(msg)
+  if not Str(msg) then
+    return nil
+  end
+  if notFoundPattern == nil then
+    local fmt = Str(rawget(_G, "ERR_CHAT_PLAYER_NOT_FOUND_S")) or "No player named '%s' is currently playing."
+    notFoundPattern = "^" .. fmt:gsub("([%(%)%.%+%-%*%?%[%]%^%$])", "%%%1"):gsub("%%s", "(.+)") .. "$"
+  end
+  return msg:match(notFoundPattern)
+end
+
+-- True when that name was whispered by one of our asks a moment ago.
+local function OurWhisper(name)
+  local key = Short(name)
+  local at = key and whisperedAt[key]
+  return at and GetTime() - at <= WHISPER_ECHO or false
 end
 
 -------------------------------------------------------------------------------
@@ -1015,7 +1046,11 @@ end
 function F:AskKnown(zone, via)
   local list = {}
   for key, e in pairs(self:Book()) do
-    if type(e) == "table" and e.host and not self:Avoided(key) then
+    local away = type(e) == "table" and type(e.offline) == "number" and time() - e.offline < OFFLINE_FOR
+    if away then
+      self:Debug("known host %s skipped: offline at the last ask", key)
+    end
+    if type(e) == "table" and e.host and not away and not self:Avoided(key) then
       list[#list + 1] = { key = key, at = e.at or 0, to = e.from or key }
     end
   end
@@ -1033,6 +1068,32 @@ function F:AskKnown(zone, via)
   local n = #ask.queue
   self:Send(ask)
   return n
+end
+
+-- Hides the game's "No player named 'X' is currently playing" when X is
+-- someone our hidden ask just whispered (the player never typed to them).
+-- A chat message filter is the game's public way to do it; nothing is hooked.
+local function NotFoundFilter(_, _, msg)
+  local ok, hide = pcall(function()
+    local name = NotFoundName(msg)
+    return name and OurWhisper(name) or false
+  end)
+  return ok and hide or false
+end
+
+local filterOn = false
+function F:ChatFilter(on)
+  local util = rawget(_G, "ChatFrameUtil")
+  local add = rawget(_G, "ChatFrame_AddMessageEventFilter")
+    or (type(util) == "table" and util.AddMessageEventFilter)
+  local remove = rawget(_G, "ChatFrame_RemoveMessageEventFilter")
+    or (type(util) == "table" and util.RemoveMessageEventFilter)
+  if on and not filterOn and type(add) == "function" then
+    filterOn = pcall(add, "CHAT_MSG_SYSTEM", NotFoundFilter) and true or false
+  elseif not on and filterOn and type(remove) == "function" then
+    pcall(remove, "CHAT_MSG_SYSTEM", NotFoundFilter)
+    filterOn = false
+  end
 end
 
 -- Hosts standing on our own layer: left out of our asks for AVOID_FOR, and
@@ -1085,6 +1146,7 @@ function F:Remember(sender, host)
   local book = self:Book()
   local e = book[key] or {}
   e.at = time()
+  e.offline = nil -- they just sent us something: online
   e.from = sender -- the name as the game gives it, for whispering back
   if host ~= nil then
     e.host = host or nil
@@ -1600,6 +1662,21 @@ function F:OnEnable()
     def:Debounce("arm", 0.5, def.ArmButton)
   end)
   self:On("GROUP_JOINED", self.OnGroupJoined)
+  -- A known host our ask whispered is offline: leave them out of direct asks
+  -- for OFFLINE_FOR (they count again once they send us anything).
+  self:On("CHAT_MSG_SYSTEM", function(def, _, msg)
+    local name = NotFoundName(msg)
+    if not name or not OurWhisper(name) then
+      return
+    end
+    local key = Short(name)
+    local e = def:Book()[key]
+    if type(e) == "table" then
+      e.offline = time()
+      def:Step("%s is offline: not asked directly for %d min", key, OFFLINE_FOR / 60)
+    end
+  end)
+  self:ChatFilter(true)
   -- What the game says while a swap is in progress (refusals, invites).
   for _, e in ipairs({ "CHAT_MSG_SYSTEM", "UI_ERROR_MESSAGE", "CHAT_MSG_CHANNEL_NOTICE",
     "CHAT_MSG_CHANNEL_NOTICE_USER" }) do
@@ -1670,6 +1747,7 @@ function F:OnDisable()
     end
   end)
   Unhush()
+  self:ChatFilter(false)
   ask, joined, lastAsk = nil, nil, nil
   self:LeaveLayer()
   if pad then
