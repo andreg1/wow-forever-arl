@@ -6,11 +6,11 @@ Keep it as the only instructions file here: a `CLAUDE.md` or `CLAUDE.local.md` i
 
 ## What this directory is
 
-This is the live `Interface\AddOns` folder of a World of Warcraft **Forever** client (`_forever_`, `## Interface: 16001`, max level 60, modern `C_*` APIs). It is not a git repo and has no build system. Each top-level folder is one addon that the client loads directly.
+This is the live `Interface\AddOns` folder of a World of Warcraft **Forever** client (`_forever_`, `## Interface: 16001`, max level 60, modern `C_*` APIs). It is not a git repo; ARL's repo is a separate clone (below). Each top-level folder is one addon that the client loads directly.
 
 Almost every folder is a **third-party addon that auto-updates** (EllesmereUI*, Questie*, GearQuestForever*, ItemTree*, Auctionator, Leatrix_Plus, RareScanner, ForeverSnackTrack, etc.). An update replaces the whole folder, so any edit made inside one is lost.
 
-The user's own code is **ARL Extensions** (`ARLExtensions/` + the `ARLE_*` packs, `## Author: aredpanda, andreg1`), the only folders to change. It replaced the user's earlier standalone addons, which were moved out of this folder on 2026-11-16 to `..\AddOns_standalone_backup\` (not loaded; kept so one can be copied back to let ARL import its saved data, see "Switching over" below).
+The user's own code is **ARL Extensions** (`ARLExtensions/` + the `ARLE_*` packs, `## Author: aredpanda, andreg1`), the only folders to change. **Edit ARL only in the git clone** (on this machine `C:\Users\andre\source\wow-forever-arl`) and deploy it here with `make` (see "Versioning" and "Testing and debugging"). `make publish-local` replaces `ARLExtensions` and every `ARLE_*` folder in AddOns, so an edit made in AddOns is lost on the next deploy. This AddOns folder keeps a copy of this AGENTS.md, because Claude Code sessions start here and `make` doesn't deploy it: copy it over from the clone whenever it changes. It replaced the user's earlier standalone addons, which were moved out of this folder on 2026-11-16 to `..\AddOns_standalone_backup\` (not loaded; kept so one can be copied back to let ARL import its saved data, see "Switching over" below).
 
 ## ARL Extensions
 
@@ -49,25 +49,24 @@ The notes come from the standalone versions; the ARL ports keep these behaviors.
 
 ### Repo
 
-ARL lives in its own **private** repo, https://github.com/andreg1/wow-forever-arl (root = `ARLExtensions/` + the `ARLE_*` folders, plus `README.md` with a feature table and an MIT `LICENSE` naming aredpanda and andreg1; last pushed in commit `820fc96`, 2026-11-16; this AGENTS.md is in the repo root too, re-upload it when it changes). Keep the README's feature table in sync when a feature or its command changes. Confirm with the user before every push.
+ARL lives in its own **private** repo, https://github.com/andreg1/wow-forever-arl (root = `ARLExtensions/` + the `ARLE_*` folders, plus `README.md` with a feature table and an MIT `LICENSE` naming aredpanda and andreg1; this AGENTS.md, the `Makefile` and `tools/make.ps1` are in the repo root too). Keep the README's feature table in sync when a feature or its command changes. Confirm with the user before every push.
 
 Work straight on `main` (no feature branches; pull first, others push there too). A release is a version bump (see "Versioning") committed to `main`, tagged `v<version>` on that commit, and published as a GitHub release with `dist/ARLExtensions-<version>.zip` attached (`gh release create v<version> <zip>`).
 
-**Fetch from the remote first, every time**: before starting any work on ARL, and again right before any push, check the remote. aredpanda works on the same repo, so the local folders can be behind.
-1. Read the remote head: `gh api repos/andreg1/wow-forever-arl/commits/main --jq .sha`.
-2. If it equals the last-pushed commit recorded above, the local copy is current.
-3. If not, list what changed with `gh api repos/andreg1/wow-forever-arl/compare/<recorded>...<head> --jq '.files[] | .status + " " + .filename'`, then bring each changed file into the local folders before editing:
-   - Download it with `gh api repos/andreg1/wow-forever-arl/contents/<path> -H "Accept: application/vnd.github.raw"`.
-   - Delete files the remote removed.
-   - The README goes to the scratchpad.
-   - Where a local file also has unpushed changes of ours, merge the two by hand and never overwrite either side silently. Tell the user what came in.
-4. Update the recorded commit.
-5. A push builds on the head it just fetched (as the parent). If the head moved again between that fetch and the push, fetch and merge again before pushing.
+**Pull from the remote first, every time**, because aredpanda pushes to `main` too:
+- Run `git pull --rebase` in the clone before starting any work on ARL, and again right before every `git push`.
+- Tell the user what came in (`git log --oneline HEAD@{1}..HEAD`). If it changed AGENTS.md, copy it to AddOns. If it changed addon code, deploy it with `make`.
+- If a rebase conflicts, resolve it by hand and keep both sides' intent; never drop either side silently.
+- Never force-push.
 
-## GitHub (publishing without git)
+## GitHub and tools (this Windows machine)
 
-- There is no local clone: this AddOns folder is not a git repo, and `git` is not installed. The GitHub CLI is (`C:\Program Files\GitHub CLI\gh.exe`), logged in as `andreg1` with `repo` scope.
-- Publish in one commit through the Git Data API with `gh api`, after the fetch described under "Repo" above: read `git/ref/heads/main` and its commit's tree, `POST git/blobs` (base64) for each file, `POST git/trees` with `base_tree` (an entry with `sha: null` deletes a path), `POST git/commits` with the old head as parent, then `PATCH git/refs/heads/main`. Write the README to the scratchpad and upload it the same way. Unchanged files produce identical blobs, so uploading whole folders is safe.
+- **Tools:** Git for Windows (`git`), GNU make (`winget install ezwinports.make`) and the GitHub CLI (`C:\Program Files\GitHub CLI\gh.exe`, logged in as `andreg1` with `repo` scope; `gh auth setup-git` makes git use that login).
+  - A shell opened before they were installed lacks them on PATH: reload it from the Machine + User `Path`.
+- **Clone settings** (in its own config):
+  - It commits as `andreg1` with GitHub's noreply address. Never put a personal email in commits.
+  - `core.autocrlf=false`, so files stay LF like the repo.
+- **Makefile on Windows:** GNU make on Windows runs a `.ONESHELL` recipe as a `.bat` through cmd.exe whatever `SHELL` says, and Windows' `tar.exe` has no `-s`. So each Windows recipe is one cmd line calling `tools/make.ps1`, which holds the logic. Keep the two in step when a recipe changes.
 - The **public** repo https://github.com/andreg1/wow-forever-addons holds the old standalone addons (last pushed `5b199c0`, 2026-11-16). They are no longer developed here and the user asked to leave that repo untouched: don't push to it unless asked.
 
 ## The core rule: never patch third-party addons
