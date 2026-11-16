@@ -64,6 +64,19 @@ function ARLE:ReportText()
       end
     end
   end
+  -- Features that keep their own record (def:ReportDetails() -> lines).
+  for id, def in pairs(self.modules or {}) do
+    if def._active and type(def.ReportDetails) == "function" then
+      local ok, extra = pcall(def.ReportDetails, def)
+      if ok and type(extra) == "table" and #extra > 0 then
+        add("")
+        add("== " .. tostring(def.title or id))
+        for _, l in ipairs(extra) do
+          add("  " .. tostring(l))
+        end
+      end
+    end
+  end
   add("")
   add("== Errors (kept on this character; /arl errors clear empties them)")
   local saved = SavedErrors()

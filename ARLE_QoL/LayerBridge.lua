@@ -446,6 +446,59 @@ local function Unhush()
   end
 end
 
+-- The swap attempt in progress, step by step, for "/arl layer last" and the
+-- summary printed RUN_SUMMARY seconds after a press: each step of a press
+-- (search, whispers, replies, the chat line and what the server said about
+-- it, invites) is recorded whether or not "/arl debug layer" is on.
+local RUN_SUMMARY, RUN_WATCH = 25, 90
+local run, lastRun
+
+function F:Step(fmt, ...)
+  if not run then
+    return
+  end
+  local ok, text = pcall(string.format, fmt, ...)
+  text = ok and text or tostring(fmt)
+  run.lines[#run.lines + 1] = string.format("+%.1fs %s", GetTime() - run.at, text)
+  self:Debug("swap: %s", text)
+end
+
+function F:StartRun(via)
+  run = { at = GetTime(), via = via, lines = {}, whoFound = nil, sent = 0, refused = 0, refusedWhy = nil,
+    heard = 0, hosts = 0, same = 0, invites = {}, line = nil, notices = {} }
+  lastRun = run
+  local mine = run
+  self:After(RUN_SUMMARY, function(def)
+    def:Summary(mine)
+  end)
+  self:After(RUN_WATCH, function()
+    if run == mine then
+      run = nil
+    end
+  end)
+end
+
+function F:Summary(r)
+  local parts = {}
+  if r.whoFound == nil then
+    parts[#parts + 1] = r.skipWho and r.skipWho or "player search: no answer"
+  else
+    parts[#parts + 1] = string.format("found %d players, asked %d%s", r.whoFound, r.sent,
+      r.refused > 0 and string.format(" (%d refused: %s)", r.refused, tostring(r.refusedWhy)) or "")
+    parts[#parts + 1] = string.format("%d LayerSwap users answered (%d hosting, %d on your layer)", r.heard,
+      r.hosts, r.same)
+  end
+  if r.box == nil then
+    parts[#parts + 1] = "chat line: not used"
+  elseif r.line then
+    parts[#parts + 1] = "chat line: sent"
+  else
+    parts[#parts + 1] = "chat line: never left (" .. (r.box or "?") .. ")"
+  end
+  parts[#parts + 1] = #r.invites > 0 and ("invited by " .. table.concat(r.invites, ", ")) or "no invite"
+  self:Print("Swap result: " .. table.concat(parts, "; ") .. ". Details: /arl layer last")
+end
+
 -- Live realms refuse chat lines an addon posts, so the line for AutoLayer
 -- hosts goes into the chat box and the player's own Enter sends it.
 local function Restricted()
@@ -501,6 +554,10 @@ function F:BoxLine(via, retried)
   if not id then
     -- From a click a join goes through; the channel number comes a moment later.
     self:JoinLayer()
+    self:Step("chat line: not in the layer channel yet, joining%s", retried and " (second try)" or "")
+    if run then
+      run.box = "not in the layer channel"
+    end
     if not retried then
       self:After(1, function(def)
         def:BoxLine(via, true)
@@ -512,18 +569,30 @@ function F:BoxLine(via, retried)
     return
   end
   if ActiveBox() then
-    self:Debug("box: the chat box is in use (%s), no line", via)
+    self:Step("chat line: the chat box was already open, line not put in")
+    if run then
+      run.box = "chat box was in use"
+    end
     return
   end
   local open = (ChatFrameUtil and ChatFrameUtil.OpenChat) or ChatFrame_OpenChat
   if type(open) ~= "function" then
+    self:Step("chat line: this client has no way to open the chat box")
     return
   end
   boxAt = GetTime()
   -- One frame later: a slash command (/arl layer ask) empties the box right after it runs.
   self:After(0, function(def)
     if not ActiveBox() then
-      pcall(open, "/" .. id .. " inv layer", DEFAULT_CHAT_FRAME)
+      local ok, err = pcall(open, "/" .. id .. " inv layer", DEFAULT_CHAT_FRAME)
+      local box = ActiveBox()
+      local okT, text = pcall(function() return box and box:GetText() end)
+      def:Step("chat line: opened %s (channel %d, restricted realm: %s), box holds \"%s\"",
+        ok and "ok" or ("failed: " .. tostring(err)), id, tostring(Restricted()),
+        okT and not Secret(text) and tostring(text) or "?")
+      if run then
+        run.box = "Enter not pressed, or the game refused it"
+      end
       def:Print("press Enter to send \"inv layer\" to the layer channel, so AutoLayer hosts hear you too.")
       Log("box", via)
     end
@@ -566,12 +635,22 @@ function F:Ask(via)
     self:Print("can't change layer in an instance.")
     return
   end
+  local now = GetTime()
+  if ask and now - ask.at < ASK_GAP then
+    self:Print(string.format("wait %d s before asking again.", ASK_GAP - (now - ask.at)))
+    return
+  end
   self:Asked()
+  self:StartRun(via)
+  self:Step("press (%s): zone %s, your layer %s, in a group: %s, AutoLayer %s, LayerSwap %s", via,
+    tostring(ZoneMap()), layer.id and Key(layer.id) or "unknown", tostring(IsInGroup()),
+    Loaded("AutoLayer") and "on" or "off", Loaded("LayerSwap") and "on" or "off")
   -- AutoLayer posts its own line where the realm allows it.
   if via ~= "AutoLayer" or Restricted() then
     self:BoxLine(via)
   end
   if not self.db.layerswap then
+    run.skipWho = "LayerSwap users: switched off"
     return
   end
   if Loaded("LayerSwap") then
@@ -580,12 +659,11 @@ function F:Ask(via)
     local button = rawget(_G, "LayerSwapPanelSwapButton")
     if via ~= "LayerSwap" and type(button) == "table" and button.Click and button:IsEnabled() then
       pcall(button.Click, button)
+      self:Step("pressed LayerSwap's own Swap layer button (its panel shows how that went)")
+    else
+      self:Step("LayerSwap's Swap layer button wasn't found or was greyed out")
     end
-    return
-  end
-  local now = GetTime()
-  if ask and now - ask.at < ASK_GAP then
-    self:Debug("ask: the last one went out %d s ago", now - ask.at)
+    run.skipWho = "asked through LayerSwap"
     return
   end
   local zone = ZoneMap()
@@ -612,25 +690,30 @@ function F:Ask(via)
   end
   local text = tagZone .. '"' .. zoneName .. '"'
   local origin = (Enum and Enum.SocialWhoOrigin and Enum.SocialWhoOrigin.Social) or 1
-  local ok = pcall(C_FriendList.SendWho, text, origin,
+  local ok, err = pcall(C_FriendList.SendWho, text, origin,
     { classIDs = {}, raceIDs = {}, uiMapIDs = { zone } })
+  local how = "map filter"
   if not ok then
-    ok = pcall(C_FriendList.SendWho, text, origin)
+    self:Step("search with map filter refused: %s", tostring(err))
+    ok, err = pcall(C_FriendList.SendWho, text, origin)
+    how = "zone name"
   end
   if not ok then
     Unhush()
     ask = nil
+    self:Step("search refused: %s", tostring(err))
     self:Print("the game refused the player search; try /arl layer ask.")
     return
   end
   ask.whoAt = now
-  self:Debug("ask (%s): searching %s, line %s", via, zoneName, ask.line)
+  self:Step("search sent (%s): %s; ask line %s", how, text, ask.line)
   Log("ask", via, zoneName, layer.id and ("leaving " .. Key(layer.id)) or "layer unknown")
   local mine = ask
   self:After(WHO_WAIT, function(def)
     if ask == mine and mine.whoAt then
       mine.whoAt = nil
       Unhush()
+      def:Step("search: no answer within %d s", WHO_WAIT)
       def:Print("the player search got no answer; try again in a moment.")
     end
   end)
@@ -667,7 +750,10 @@ function F:OnWho()
       end
     end
   end
-  self:Debug("ask: %d players found, whispering %d", n, #p.queue)
+  self:Step("search answered: %d players (%d guildmates, %d others), asking %d", n, #mates, #others, #p.queue)
+  if run then
+    run.whoFound = n
+  end
   if #p.queue == 0 then
     self:Print("nobody else found in your zone to ask.")
     return
@@ -689,6 +775,12 @@ function F:Send(p)
     n = n + 1
     if res == 0 then
       p.sent = p.sent + 1
+      if run then
+        run.sent = run.sent + 1
+      end
+    elseif run then
+      run.refused = run.refused + 1
+      run.refusedWhy = run.refusedWhy or ("result " .. tostring(res))
     end
   end
   if #p.queue > 0 then
@@ -696,7 +788,8 @@ function F:Send(p)
       def:Send(p)
     end)
   else
-    self:Debug("ask: whispered %d players", p.sent)
+    self:Step("asks sent: %d whispered%s", p.sent,
+      run and run.refused > 0 and (", " .. run.refused .. " refused (" .. tostring(run.refusedWhy) .. ")") or "")
     Log("asked", p.sent .. " players")
   end
 end
@@ -710,13 +803,25 @@ function F:OnReply(text, sender)
   local name = Short(sender)
   if text == "same" then
     stats.same = stats.same + 1
-    self:Debug("%s is on our layer already", tostring(name))
+    if run then
+      run.same = run.same + 1
+    end
+    self:Step("%s: \"same\" (a host already on your layer)", tostring(name))
     return
   end
-  local target, _, _, host = text:match("^heard (.-)|([^|]*)|([^|]*)|([^|]*)$")
+  local target, theirs, _, host = text:match("^heard (.-)|([^|]*)|([^|]*)|([^|]*)$")
+  if target and target ~= MyName() then
+    self:Step("%s answered someone else (%s), not us (%s)", tostring(name), tostring(target), tostring(MyName()))
+  end
   if target and target == MyName() then
     p.heard = p.heard + 1
     stats.heard = stats.heard + 1
+    if run then
+      run.heard = run.heard + 1
+      run.hosts = run.hosts + (host == "h" and 1 or 0)
+    end
+    self:Step("%s heard us: layer %s, %s", tostring(name), tostring(theirs),
+      host == "h" and "hosting" or "not hosting")
     if host == "h" then
       p.hosts = p.hosts + 1
       stats.hosts = stats.hosts + 1
@@ -743,7 +848,7 @@ local joined -- { at, layer }: we joined someone's group while our ask was fresh
 function F:OnGroupJoined()
   if lastAsk and GetTime() - lastAsk.at < ASK_TTL and not UnitIsGroupLeader("player") then
     joined = { at = GetTime(), layer = lastAsk.layer or layer.id }
-    self:Debug("joined a group after our ask; leaving once the layer changes")
+    self:Step("joined a group; waiting for the layer to change (now %s)", layer.id and Key(layer.id) or "unknown")
   end
 end
 
@@ -763,6 +868,8 @@ function F:OnLayerChanged(was)
   end
   joined = nil
   ask = nil
+  self:Step("layer changed %s -> %s, leaving the group in %d s", tostring(Key(was)), tostring(Key(layer.id)),
+    LEAVE_AFTER)
   self:Print("layer changed; leaving the group.")
   Log("moved", Key(was), "->", Key(layer.id))
   self:After(LEAVE_AFTER, function()
@@ -878,6 +985,11 @@ function F:OnChatLine(event, msg, sender, _, _, _, _, _, _, channelName)
   if not Str(msg) or not Str(sender) then
     return
   end
+  if run and Short(sender) == MyName() and msg:lower():find("inv%s+layer") then
+    run.line = true
+    self:Step("your line went out: \"%s\" in %s", msg, tostring(Str(channelName) or event))
+    return
+  end
   if msg:find("<LS", 1, true) then
     if self.db.host and self.db.layerswap and not Loaded("LayerSwap") and msg:lower():find("inv%s+layer") then
       local al = AutoLayerAddon()
@@ -923,6 +1035,30 @@ function F:OnEnable()
   end
   self:On("WHO_LIST_UPDATE", self.OnWho)
   self:On("GROUP_JOINED", self.OnGroupJoined)
+  -- What the game says while a swap is in progress (refusals, invites).
+  for _, e in ipairs({ "CHAT_MSG_SYSTEM", "UI_ERROR_MESSAGE", "CHAT_MSG_CHANNEL_NOTICE",
+    "CHAT_MSG_CHANNEL_NOTICE_USER" }) do
+    self:On(e, function(def, event, a1, a2, _, a4, _, _, _, _, a9)
+      if not run then
+        return
+      end
+      local text = event == "UI_ERROR_MESSAGE" and a2 or a1
+      if event:find("NOTICE") then
+        text = tostring(Str(a1) or "?") .. " " .. tostring(Str(a4) or Str(a9) or "")
+      end
+      if Str(text) and #run.notices < 12 then
+        run.notices[#run.notices + 1] = text
+        def:Step("game says (%s): %s", event, text)
+      end
+    end)
+  end
+  self:On("PARTY_INVITE_REQUEST", function(def, _, inviter)
+    local who = Str(inviter) or "?"
+    if run then
+      run.invites[#run.invites + 1] = who
+    end
+    def:Step("invite from %s", who)
+  end)
   self:HookAutoLayer()
   self:HookLayerSwap()
   self:Paint()
@@ -956,6 +1092,27 @@ function F:OnDisable()
   end
 end
 
+-- For /arl report: settings, channel, the last swap step by step, recent log.
+function F:ReportDetails()
+  local out = {
+    string.format("switches: layerswap %s, autolayer %s, host %s, leave %s, button %s", tostring(self.db.layerswap),
+      tostring(self.db.autolayer), tostring(self.db.host), tostring(self.db.leave), tostring(self.db.button)),
+    string.format("layer %s (zone %s), layer channel %s, restricted realm %s, pad %s", tostring(layer.id),
+      tostring(ZoneMap()), tostring(LayerChannelId() or "not joined"), tostring(Restricted()),
+      pad and (pad:IsShown() and "shown" or "hidden") or "not built"),
+  }
+  if lastRun then
+    out[#out + 1] = "last swap:"
+    for _, l in ipairs(lastRun.lines) do
+      out[#out + 1] = "  " .. l
+    end
+  end
+  for i = math.min(#log, 10), 1, -1 do
+    out[#out + 1] = "log: " .. log[i]
+  end
+  return out
+end
+
 function F:GetStatus()
   local found = {}
   if Loaded("AutoLayer") then
@@ -973,6 +1130,16 @@ function F:GetStatus()
 end
 
 F.commands = {
+  { name = "last", help = "every step of the last Swap layer press", always = true, run = function(self)
+    if not lastRun then
+      self:Print("no swap pressed yet this session.")
+      return
+    end
+    self:Print("last swap, step by step:")
+    for _, l in ipairs(lastRun.lines) do
+      print("   " .. l)
+    end
+  end },
   { name = "button", help = "shows the Swap layer button (or says why it's hidden)", run = function(self)
     local why = not self.db.button and "\"Show the Swap layer button\" is off"
       or InInstance() and "you're in an instance" or nil
