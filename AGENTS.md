@@ -64,6 +64,17 @@ ARL lives in its own **private** repo, https://github.com/andreg1/wow-forever-ar
 
 Work straight on `main` (no feature branches; pull first, others push there too). A release is a version bump (see "Versioning") committed to `main`, tagged `v<version>` on that commit, and published as a GitHub release with `dist/ARLExtensions-<version>.zip` attached (`gh release create v<version> <zip>`).
 
+**Every push that carries a version bump gets its release right away**: patch, minor or major, in the same step as the push, without asking again (andreg1's standing instruction).
+1. Push, then tag the bump commit with `git tag v<version> <full sha>` and `git push origin v<version>`. `gh release create --target` refused a short sha.
+2. Run `gh release create v<version> dist/ARLExtensions-<version>.zip --verify-tag --title "ARL Extensions <version>" --notes-file <notes>`.
+3. Write the notes in the 0.2.0 release's shape:
+   - **Install:** extract into AddOns, and say whether `/reload` is enough or a restart is needed (a `.toc` change or a new secure button means a restart).
+   - **New / Changed / Fixed:** in player words.
+   - End with "New features start turned off" when there are new features.
+   - Cover every version since the last release.
+
+Pushes with no version bump (docs, Makefile) get no release.
+
 **Pull from the remote first, every time**, because aredpanda pushes to `main` too:
 - Run `git pull --rebase` in the clone before starting any work on ARL, and again right before every `git push`.
 - Tell the user what came in (`git log --oneline HEAD@{1}..HEAD`). If it changed AGENTS.md, copy it to AddOns. If it changed addon code, deploy it with `make`.
