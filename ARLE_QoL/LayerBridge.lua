@@ -490,7 +490,7 @@ function F:Step(fmt, ...)
 end
 
 function F:StartRun(via)
-  run = { at = GetTime(), via = via, invitedBefore = Since(self.char.invitedAt), lines = {}, whoFound = nil, sent = 0, refused = 0, refusedWhy = nil,
+  run = { at = GetTime(), via = via, invitedBefore = Since(self.char.alInvitedAt), lines = {}, whoFound = nil, sent = 0, refused = 0, refusedWhy = nil,
     heard = 0, hosts = 0, same = 0, invites = {}, line = nil, notices = {} }
   lastRun = run
   local mine = run
@@ -505,8 +505,11 @@ function F:StartRun(via)
 end
 
 function F:Summary(r)
-  local parts = {}
-  if r.whoFound == nil then
+  local parts = { r.pool == "autolayer" and "asked AutoLayer hosts"
+    or (r.pool == "layerswap" and "asked LayerSwap hosts" or "not asked") }
+  if r.pool == "autolayer" then
+    -- nothing to say about a search: none was made
+  elseif r.whoFound == nil then
     parts[#parts + 1] = r.skipWho and r.skipWho or "player search: no answer"
   else
     parts[#parts + 1] = string.format("found %d players, asked %d%s", r.whoFound, r.sent,
@@ -514,7 +517,9 @@ function F:Summary(r)
     parts[#parts + 1] = string.format("%d LayerSwap users answered (%d hosting, %d on your layer)", r.heard,
       r.hosts, r.same)
   end
-  if r.box == nil then
+  if r.pool == "layerswap" then
+    -- no line this press
+  elseif r.box == nil then
     parts[#parts + 1] = "chat line: not used"
   elseif r.line then
     parts[#parts + 1] = "chat line: sent"
@@ -535,6 +540,11 @@ function F:Summary(r)
       parts[#parts + 1] = "the server turned the player search down (too many searches?): wait a minute"
       break
     end
+  end
+  if #r.invites == 0 then
+    local nextPool, wait = self:Pool()
+    parts[#parts + 1] = nextPool == "autolayer" and "next press: AutoLayer hosts"
+      or string.format("next press: LayerSwap hosts (AutoLayer again in %d s)", math.floor(wait))
   end
   self:Print("Swap result: " .. table.concat(parts, "; ") .. ". Details: /arl layer last")
 end
@@ -606,6 +616,7 @@ function F:BoxLine(via, retried)
   boxAt = GetTime()
   if via == "button" and self.armedText then
     -- The secure button's macro sent it as the player's own line.
+    self.char.lineAt = GetTime()
     self:Step("chat line: sent by the button's macro: %s (restricted realm: %s)", self.armedText,
       tostring(Restricted()))
     if run then
@@ -623,12 +634,54 @@ function F:BoxLine(via, retried)
     .. "for you)", id))
 end
 
--- The Swap layer button's macro: "/<layer channel> inv layer", or nothing
--- while the channel isn't joined. Set out of combat (ARLE.Secure queues it).
+-- One pool per press: AutoLayer hosts first (the line in the layer channel),
+-- LayerSwap hosts while AutoLayer is on cooldown:
+--   AL_COOLDOWN after an invite that followed our line (AutoLayer hosts don't
+--     invite the same player from the channel again within 5 min), or
+--   AL_QUIET after a line that brought no invite (nobody there to answer).
+-- Kept in char so a /reload doesn't forget them.
+local AL_COOLDOWN, AL_QUIET = 300, 60
+
+-- Seconds until the AutoLayer pool can be asked again (0 = now), or nil when
+-- "Work with AutoLayer users" is off.
+function F:AutoLayerWait()
+  if not self.db.autolayer then
+    return nil
+  end
+  local wait = 0
+  local inv = Since(self.char.alInvitedAt)
+  if inv and inv < AL_COOLDOWN then
+    wait = AL_COOLDOWN - inv
+  end
+  local line = Since(self.char.lineAt)
+  if line and line < AL_QUIET and not (inv and inv < line) then
+    wait = math.max(wait, AL_QUIET - line)
+  end
+  return wait
+end
+
+-- "autolayer" or "layerswap", and the AutoLayer wait.
+function F:Pool()
+  local wait = self:AutoLayerWait()
+  if wait == 0 then
+    return "autolayer", 0
+  end
+  if self.db.layerswap then
+    return "layerswap", wait
+  end
+  return "autolayer", wait -- LayerSwap users switched off: the line goes anyway
+end
+
+-- The Swap layer button's macro: "/<layer channel> inv layer" when the next
+-- press goes to the AutoLayer pool, otherwise nothing. Set out of combat
+-- (ARLE.Secure queues it); re-decided in PreClick, so a press uses the pool
+-- of that moment.
 function F:ArmButton()
-  local id = self.db.autolayer and LayerChannelId() or nil
+  local pool = self:Pool()
+  local id = pool == "autolayer" and LayerChannelId() or nil
   local text = id and ("/" .. id .. " inv layer") or ""
   self.armedText = id and text or nil
+  self.armedPool = pool
   ARLE.Secure:SetAttributes("LayerSwap", { macrotext = text })
 end
 
@@ -687,14 +740,23 @@ function F:Ask(via)
     self:Print("you're in a group. Leave it to swap layers.")
     return
   end
-  -- AutoLayer posts its own line where the realm allows it.
-  if via ~= "AutoLayer" or Restricted() then
-    self:BoxLine(via)
+  -- One pool per press (see F:Pool). The button's macro already carried the
+  -- decision made in its PreClick.
+  local pool, wait = self:Pool()
+  if via == "button" and self.armedPool then
+    pool = self.armedPool
   end
-  if not self.db.layerswap then
-    run.skipWho = "LayerSwap users: switched off"
+  run.pool = pool
+  if pool == "autolayer" then
+    self:Step("pool: AutoLayer hosts (the inv layer line); LayerSwap hosts next while AutoLayer is on cooldown")
+    -- AutoLayer posts its own line where the realm allows it.
+    if via ~= "AutoLayer" or Restricted() then
+      self:BoxLine(via)
+    end
+    run.skipWho = "LayerSwap hosts: not this press (AutoLayer's turn)"
     return
   end
+  self:Step("pool: LayerSwap hosts (AutoLayer hosts again in %d s)", wait or 0)
   -- As LayerSwap: the ask names the layer you leave, so hosts on it stay out.
   -- Without it they'd invite you for nothing; read it first.
   if not layer.id and not Loaded("LayerSwap") then
@@ -1175,7 +1237,7 @@ end
 
 local function BuildPad()
   local f = Skin:CreateTooltipWindow(nil, UIParent)
-  f:SetSize(190, 46)
+  f:SetSize(220, 60)
   f:SetFrameStrata("MEDIUM")
   f:SetClampedToScreen(true)
   f:SetMovable(true)
@@ -1260,6 +1322,24 @@ function F:LayerLabel(id)
   return "Layer id " .. tostring(Key(id))
 end
 
+-- The pad's two lines: the layer, and where the next press goes.
+function F:PadText()
+  if not pad then
+    return
+  end
+  local top = layer.id and self:LayerLabel(layer.id) or "|cff999999Layer unknown: look at a creature|r"
+  local pool, wait = self:Pool()
+  wait = math.floor(wait or 0)
+  local nextLine
+  if pool == "autolayer" then
+    nextLine = "Next: AutoLayer hosts" .. ((wait or 0) > 0 and string.format(" (ready in %d:%02d)",
+      math.floor(wait / 60), wait % 60) or "")
+  else
+    nextLine = string.format("Next: LayerSwap hosts · AutoLayer in %d:%02d", math.floor(wait / 60), wait % 60)
+  end
+  pad.text:SetText(top .. "\n|cffaaaaaa" .. nextLine .. "|r")
+end
+
 function F:Paint()
   -- The pad holds a secure button: shown and hidden out of combat only.
   if not self._active or not self.db.button or InInstance() then
@@ -1275,7 +1355,7 @@ function F:Paint()
   if not pad then
     BuildPad()
   end
-  pad.text:SetText(layer.id and self:LayerLabel(layer.id) or "|cff999999Layer unknown: look at a creature|r")
+  self:PadText()
   ARLE.Secure:Run(function()
     if F._active and F.db.button and not InInstance() then
       pad:Show()
@@ -1388,6 +1468,7 @@ function F:OnEnable()
   -- Creatures already on screen count too, without targeting them.
   self:Ticker(2, function(def)
     def:ScanUnits()
+    def:PadText()
   end)
   for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA" }) do
     self:On(e, function(def)
@@ -1440,6 +1521,10 @@ function F:OnEnable()
     if run then
       run.invites[#run.invites + 1] = who
       def.char.invitedAt = GetTime()
+      if run.pool == "autolayer" then
+        def.char.alInvitedAt = GetTime() -- AutoLayer's 5-minute cooldown starts
+      end
+      def:PadText()
     end
     def:Step("invite from %s", who)
   end)
