@@ -77,12 +77,21 @@ local F = {
       desc = "With AutoLayer hosting: answer LayerSwap users. With LayerSwap hosting: invite AutoLayer users." },
     { key = "ask", type = "boolean", label = "Ask the other addon's hosts too", default = true,
       desc = "AutoLayer's hop button also asks LayerSwap hosts in your zone, out of sight." },
+    { key = "box", type = "boolean", label = "Put \"inv layer\" in the chat box for AutoLayer hosts", default = true,
+      desc = "When you ask, the line for the layer channel waits in the chat box: press Enter to send it, so "
+        .. "AutoLayer hosts hear you too (the game doesn't let addons send it themselves). Needs /join layer." },
     { key = "leave", type = "boolean", label = "Leave the group after the move", default = true,
       desc = "After an ask of ours, leave the host's group once the layer has changed." },
+    { key = "button", type = "boolean", label = "Show the Swap layer button", default = true,
+      desc = "A small movable button: one click asks for another layer (and shows the layer you're on)." },
+    ARLE.Options.Preset.ResetPosition(),
     { type = "button", label = "Ask LayerSwap hosts now", nocmd = true,
       run = function(def) def:Ask("button") end },
   },
 }
+
+local Skin = ARLE.Skin
+local Kit = ARLE.UI.Kit
 
 -------------------------------------------------------------------------------
 -- Small helpers
@@ -217,6 +226,7 @@ function F:Observe(unit)
     local was = layer.id
     layer.id, layer.zone = id, ZoneMap()
     self:Debug("layer %s (was %s)", Key(id), tostring(Key(was)))
+    self:Paint()
     self:OnLayerChanged(was)
   end
 end
@@ -435,10 +445,94 @@ local function Unhush()
   end
 end
 
+-- Live realms refuse chat lines an addon posts, so the line for AutoLayer
+-- hosts goes into the chat box and the player's own Enter sends it.
+local function Restricted()
+  local f = C_ChatInfo and C_ChatInfo.AreOutgoingAddonChatMessagesRestricted
+  if type(f) ~= "function" then
+    return false
+  end
+  local ok, r = pcall(f)
+  return ok and r == true
+end
+
+local function ActiveBox()
+  local f = (ChatFrameUtil and ChatFrameUtil.GetActiveWindow) or ChatEdit_GetActiveWindow
+  local ok, box = pcall(f or function() end)
+  return ok and type(box) == "table" and box or nil
+end
+
+local boxAt = 0
+function F:BoxLine(via)
+  if not self.db.box or GetTime() - boxAt < ASK_GAP then
+    return
+  end
+  local id = GetChannelName("layer")
+  if Secret(id) or type(id) ~= "number" or id == 0 then
+    if not self.toldJoin then
+      self.toldJoin = true
+      self:Print("to reach AutoLayer hosts too, join their channel: /join layer")
+    end
+    return
+  end
+  if ActiveBox() then
+    self:Debug("box: the chat box is in use (%s), no line", via)
+    return
+  end
+  local open = (ChatFrameUtil and ChatFrameUtil.OpenChat) or ChatFrame_OpenChat
+  if type(open) ~= "function" then
+    return
+  end
+  boxAt = GetTime()
+  -- One frame later: a slash command (/arl layer ask) empties the box right after it runs.
+  self:After(0, function(def)
+    if not ActiveBox() then
+      pcall(open, "/" .. id .. " inv layer", DEFAULT_CHAT_FRAME)
+      def:Print("press Enter to send \"inv layer\" to the layer channel, so AutoLayer hosts hear you too.")
+      Log("box", via)
+    end
+  end)
+end
+
+-- LayerSwap's Swap layer button: its own asks reach LayerSwap hosts; the box
+-- line reaches AutoLayer hosts. The panel may be made late, so look a few times.
+function F:HookLayerSwap(tries)
+  if self.swapHooked or not Loaded("LayerSwap") then
+    return
+  end
+  local button = rawget(_G, "LayerSwapPanelSwapButton")
+  if type(button) == "table" and button.HookScript then
+    self.swapHooked = self:HookScript(button, "OnClick", function()
+      if F.db.ask then
+        F:BoxLine("LayerSwap")
+      end
+    end)
+    return
+  end
+  if (tries or 0) < 10 then
+    self:After(3, function(def)
+      def:HookLayerSwap((tries or 0) + 1)
+    end)
+  end
+end
+
 function F:Ask(via)
   if Loaded("LayerSwap") then
-    self:Print("LayerSwap is on: its Swap layer button already asks LayerSwap hosts.")
+    -- LayerSwap asks its own hosts best: press its button for the player (still
+    -- inside this click, so its /who is answered); our hook adds the box line.
+    local button = rawget(_G, "LayerSwapPanelSwapButton")
+    if via ~= "LayerSwap" and type(button) == "table" and button.Click and button:IsEnabled() then
+      pcall(button.Click, button)
+      self:BoxLine(via) -- no-op when the hook already did it
+      return
+    end
+    self:BoxLine(via)
+    self:Print("LayerSwap is on: its Swap layer button asks LayerSwap hosts.")
     return
+  end
+  -- AutoLayer posts its own line where the realm allows it.
+  if via ~= "AutoLayer" or Restricted() then
+    self:BoxLine(via)
   end
   if InInstance() then
     self:Print("can't change layer in an instance.")
@@ -634,6 +728,80 @@ function F:OnLayerChanged(was)
 end
 
 -------------------------------------------------------------------------------
+-- The Swap layer button (a plain button: a click is what /who needs)
+-------------------------------------------------------------------------------
+
+local pad
+
+local function PlacePad()
+  pad:ClearAllPoints()
+  local pos = F.char.position
+  pad:SetPoint("CENTER", UIParent, "CENTER", pos and pos[1] or 0, pos and pos[2] or -220)
+end
+
+local function BuildPad()
+  local f = Skin:CreateTooltipWindow(nil, UIParent)
+  f:SetSize(150, 46)
+  f:SetFrameStrata("MEDIUM")
+  f:SetClampedToScreen(true)
+  f:SetMovable(true)
+  f:EnableMouse(true)
+  f:RegisterForDrag("LeftButton")
+  F:Script(f, "OnDragStart", f.StartMoving)
+  F:Script(f, "OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    local x, y = self:GetCenter()
+    local cx, cy = UIParent:GetCenter()
+    if x and cx then
+      F.char.position = { x - cx, y - cy }
+    end
+    PlacePad()
+  end)
+  f.swap = Kit.Button(f, "Swap layer", 134)
+  f.swap:SetPoint("TOP", 0, -6)
+  F:Script(f.swap, "OnClick", function()
+    F:Ask("button")
+  end)
+  F:Script(f.swap, "OnEnter", function(self)
+    Kit.SimpleTooltip(self, "Swap layer", "Asks LayerSwap hosts in your zone out of sight, and puts \"inv layer\" "
+      .. "in the chat box for AutoLayer hosts (press Enter). Accept the invite that comes; the group is left "
+      .. "once you've moved. Drag the box to move it.")
+  end)
+  F:Script(f.swap, "OnLeave", GameTooltip_Hide)
+  f.text = Kit.Text(f, "GameFontHighlightSmall")
+  f.text:SetPoint("BOTTOM", 0, 5)
+  f:Hide()
+  pad = f
+  PlacePad()
+end
+
+function F:Paint()
+  if not self._active or not self.db.button or InInstance() then
+    if pad then
+      pad:Hide()
+    end
+    return
+  end
+  if not pad then
+    BuildPad()
+  end
+  pad.text:SetText(layer.id and ("Layer " .. Key(layer.id)) or "|cff999999Layer unknown: look at a creature|r")
+  pad:Show()
+end
+
+function F:OnResetPosition()
+  if pad then
+    PlacePad()
+  end
+end
+
+function F:OnOptionChanged(key)
+  if key == "button" then
+    self:Paint()
+  end
+end
+
+-------------------------------------------------------------------------------
 -- Events
 -------------------------------------------------------------------------------
 
@@ -694,6 +862,7 @@ function F:OnEnable()
       if layer.zone ~= ZoneMap() then
         ResetLayer()
       end
+      def:Paint()
     end)
   end
   self:On("CHAT_MSG_ADDON", self.OnAddonMessage)
@@ -703,6 +872,8 @@ function F:OnEnable()
   self:On("WHO_LIST_UPDATE", self.OnWho)
   self:On("GROUP_JOINED", self.OnGroupJoined)
   self:HookAutoLayer()
+  self:HookLayerSwap()
+  self:Paint()
   if not Loaded("AutoLayer") and not Loaded("LayerSwap") then
     self:Print("needs AutoLayer or LayerSwap; neither is loaded.")
   end
@@ -725,6 +896,9 @@ end
 function F:OnDisable()
   Unhush()
   ask, joined = nil, nil
+  if pad then
+    pad:Hide()
+  end
 end
 
 function F:GetStatus()
