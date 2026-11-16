@@ -2,7 +2,7 @@
 ## Title: ARL Extensions: Quality of Life
 ## Notes: Sleeping Bag reminders, XP Food, Fishing Pole Alert, Spec Gear Swap, LFG Role Filter, Leveling BiS Spec, Auto Uprank, Quick Loot, Loot Sparkles and Buff Back.
 ## Author: aredpanda, andreg1
-## Version: 0.4.0
+## Version: 0.4.1
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
 ## OptionalDeps: ForeverLevelingBiS

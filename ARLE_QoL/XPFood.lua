@@ -980,7 +980,9 @@ function F:Test()
   ShowAlert("Test: drag this alert to move it. It closes in 20 seconds.", lastBags)
 end
 
-function F:Debug()
+-- /arl food debug. (Not "Debug": that's the framework's trace helper, and a
+-- feature's own method of the same name would replace it.)
+function F:DebugDump()
   local out = {}
   ScanBags(out)
   ScanBuff(out)
@@ -1123,7 +1125,7 @@ F.commands = {
   { name = "status", help = "your XP food, buff, Gourmand rank and supply", always = true,
     run = function(self) self:Print(self:StatusLine()) end },
   { name = "debug", help = "what each food and buff tooltip reads as", always = true,
-    run = function(self) self:Debug() end },
+    run = function(self) self:DebugDump() end },
   { name = "test", help = "shows the alert for 20 seconds so you can move it", run = function(self) self:Test() end },
   { name = "reset", help = "puts the alert back in its default spot", run = function(self)
     self.char.position = nil

@@ -353,6 +353,13 @@ local function Mixin(def)
   for k, fn in pairs(Feature) do
     if def[k] == nil then
       def[k] = fn
+    elseif def[k] ~= fn then
+      -- A feature's own method with a helper's name replaces the helper for
+      -- that feature, and every call the framework or the feature makes to it
+      -- (XP Food's Debug once dumped its whole state on every check). Said
+      -- loudly so it is renamed.
+      ARLE:Print("|cffff6060" .. tostring(def.id) .. " defines its own " .. k .. "|r, which replaces ARL's "
+        .. k .. " helper for it. Rename the feature's method.")
     end
   end
 end
