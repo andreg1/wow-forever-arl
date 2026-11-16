@@ -54,6 +54,9 @@ local BUTTONS = {
   FishingSwap = { kind = "macro", label = "Fishing Pole Alert: put my weapons back on" },
   RareScan = { kind = "macro", label = "Rare Objectives: scan for rare quest mobs" },
   BuffBack = { kind = "macro", label = "Buff Back: buff the next person in the queue" },
+  -- Layer Bridge's Swap layer button: a clickable macro, so its "inv layer"
+  -- line counts as the player's own (an addon can't post it on live realms).
+  LayerSwap = { kind = "macro", click = true, label = "Layer Bridge: swap layer" },
   UseItem = { kind = "item" }, -- Sleeping Bag's bag icon
   UseFood = { kind = "item" }, -- XP Food's food icon (both alerts can be up at once)
 }
@@ -97,7 +100,7 @@ local function Make(key, spec)
     return
   end
   b:SetAttribute("type", spec.kind)
-  if spec.kind == "macro" then
+  if spec.kind == "macro" and not spec.click then
     b:SetAttribute("useOnKeyDown", true)
     b:RegisterForClicks("AnyDown")
     b:SetSize(1, 1)

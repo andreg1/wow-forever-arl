@@ -55,7 +55,7 @@ local ASKER_COOLDOWN = 60 -- s before the same asker is answered again
 local HOST_WINDOW, HOST_MAX = 600, 6 -- our own invites (lane 3): at most 6 per 10 min
 local INVITE_GAP = 1
 local BURST, BURST_WAIT, ASK_MAX = 8, 1, 40
-local WHO_WAIT = 5
+local WHO_WAIT = 15 -- the server can take a while (or refuse: "Unable to complete your request")
 local ASK_GAP = 10 -- s between two asks of ours
 local LEAVE_AFTER = 4
 local ASK_TTL = 180 -- s an ask of ours stays "ours" for the leave-after-move
@@ -69,16 +69,15 @@ local F = {
   command = "layer",
   commandHelp = "change layer with LayerSwap and AutoLayer users",
   description = "Change layer with LayerSwap and AutoLayer users, with or without either addon installed. "
-    .. "The Swap layer button asks LayerSwap hosts in your zone out of sight and readies \"inv layer\" for "
-    .. "AutoLayer hosts (press Enter). With hosting on, you also invite their users' asks.",
+    .. "The Swap layer button asks LayerSwap hosts in your zone out of sight and says \"inv layer\" in the "
+    .. "layer channel for AutoLayer hosts. With hosting on, you also invite their users' asks.",
   options = {
     { type = "info", text = function(def) return def:GetStatus() end },
     { key = "layerswap", type = "boolean", label = "Work with LayerSwap users", default = true, cmd = "ls",
       desc = "Your asks reach LayerSwap hosts in your zone, out of sight (a player search, then hidden whispers)." },
     { key = "autolayer", type = "boolean", label = "Work with AutoLayer users", default = true, cmd = "al",
-      desc = "Joins the \"layer\" channel AutoLayer uses, and when you ask, puts \"inv layer\" for it in the chat "
-        .. "box: press Enter to send it (the game doesn't let addons send it themselves). Off leaves the channel "
-        .. "if ARL joined it." },
+      desc = "Joins the \"layer\" channel AutoLayer uses; the Swap layer button then also says \"inv layer\" "
+        .. "there (as a macro, so the game lets it through). Off leaves the channel if ARL joined it." },
     { key = "host", type = "boolean", label = "Host for the other addon's users", default = false,
       desc = "Off: ARL never invites anyone or answers anyone's ask. On, and only while AutoLayer or LayerSwap "
         .. "hosts too: answer LayerSwap users (AutoLayer hosting) or invite AutoLayer users (LayerSwap hosting)." },
@@ -496,6 +495,12 @@ function F:Summary(r)
     parts[#parts + 1] = "chat line: never left (" .. (r.box or "?") .. ")"
   end
   parts[#parts + 1] = #r.invites > 0 and ("invited by " .. table.concat(r.invites, ", ")) or "no invite"
+  for _, n in ipairs(r.notices) do
+    if n:find("Unable to complete") then
+      parts[#parts + 1] = "the server turned the player search down (too many searches?): wait a minute"
+      break
+    end
+  end
   self:Print("Swap result: " .. table.concat(parts, "; ") .. ". Details: /arl layer last")
 end
 
@@ -508,12 +513,6 @@ local function Restricted()
   end
   local ok, r = pcall(f)
   return ok and r == true
-end
-
-local function ActiveBox()
-  local f = (ChatFrameUtil and ChatFrameUtil.GetActiveWindow) or ChatEdit_GetActiveWindow
-  local ok, box = pcall(f or function() end)
-  return ok and type(box) == "table" and box or nil
 end
 
 -- AutoLayer's channel. ARL joins it while "Work with AutoLayer users" is on
@@ -560,7 +559,8 @@ function F:BoxLine(via, retried)
     end
     if not retried then
       self:After(1, function(def)
-        def:BoxLine(via, true)
+        def:ArmButton()
+        def:BoxLine(via == "button" and "button, after joining" or via, true)
       end)
     elseif not self.toldJoin then
       self.toldJoin = true
@@ -568,35 +568,33 @@ function F:BoxLine(via, retried)
     end
     return
   end
-  if ActiveBox() then
-    self:Step("chat line: the chat box was already open, line not put in")
-    if run then
-      run.box = "chat box was in use"
-    end
-    return
-  end
-  local open = (ChatFrameUtil and ChatFrameUtil.OpenChat) or ChatFrame_OpenChat
-  if type(open) ~= "function" then
-    self:Step("chat line: this client has no way to open the chat box")
-    return
-  end
   boxAt = GetTime()
-  -- One frame later: a slash command (/arl layer ask) empties the box right after it runs.
-  self:After(0, function(def)
-    if not ActiveBox() then
-      local ok, err = pcall(open, "/" .. id .. " inv layer", DEFAULT_CHAT_FRAME)
-      local box = ActiveBox()
-      local okT, text = pcall(function() return box and box:GetText() end)
-      def:Step("chat line: opened %s (channel %d, restricted realm: %s), box holds \"%s\"",
-        ok and "ok" or ("failed: " .. tostring(err)), id, tostring(Restricted()),
-        okT and not Secret(text) and tostring(text) or "?")
-      if run then
-        run.box = "Enter not pressed, or the game refused it"
-      end
-      def:Print("press Enter to send \"inv layer\" to the layer channel, so AutoLayer hosts hear you too.")
-      Log("box", via)
+  if via == "button" and self.armedText then
+    -- The secure button's macro sent it as the player's own line.
+    self:Step("chat line: sent by the button's macro: %s (restricted realm: %s)", self.armedText,
+      tostring(Restricted()))
+    if run then
+      run.box = "the macro ran but no echo came back"
     end
-  end)
+    return
+  end
+  -- A line an addon types into the chat box isn't sent as a channel line
+  -- (measured: Enter answered "Type '/help'..."), so only say what to type.
+  self:Step("chat line: not sendable from here (%s); told to type /%d inv layer", via, id)
+  if run then
+    run.box = "to be typed by hand"
+  end
+  self:Print(string.format("to reach AutoLayer hosts too, type: /%d inv layer  (the Swap layer button sends it "
+    .. "for you)", id))
+end
+
+-- The Swap layer button's macro: "/<layer channel> inv layer", or nothing
+-- while the channel isn't joined. Set out of combat (ARLE.Secure queues it).
+function F:ArmButton()
+  local id = self.db.autolayer and LayerChannelId() or nil
+  local text = id and ("/" .. id .. " inv layer") or ""
+  self.armedText = id and text or nil
+  ARLE.Secure:SetAttributes("LayerSwap", { macrotext = text })
 end
 
 -- LayerSwap's Swap layer button: its own asks reach LayerSwap hosts; the box
@@ -722,6 +720,10 @@ end
 function F:OnWho()
   local p = ask
   if not p or not p.whoAt then
+    if run then
+      local okN, n = pcall(C_FriendList.GetNumWhoResults)
+      self:Step("a player search answer came with nothing of ours waiting (%s players)", tostring(okN and n))
+    end
     return
   end
   p.whoAt = nil
@@ -911,13 +913,15 @@ local function BuildPad()
   end)
   f.swap = Kit.Button(f, "Swap layer", 134)
   f.swap:SetPoint("TOP", 0, -6)
+  local TIP = "Asks LayerSwap hosts in your zone out of sight, and says \"inv layer\" in the layer channel for "
+    .. "AutoLayer hosts. Accept the invite that comes; the group is left once you've moved. Drag the box to move it."
+  -- Fallback when the host's secure button is missing (game not restarted
+  -- since the update): the out-of-sight ask still works, the line doesn't.
   F:Script(f.swap, "OnClick", function()
-    F:Ask("button")
+    F:Ask("plain button")
   end)
   F:Script(f.swap, "OnEnter", function(self)
-    Kit.SimpleTooltip(self, "Swap layer", "Asks LayerSwap hosts in your zone out of sight, and puts \"inv layer\" "
-      .. "in the chat box for AutoLayer hosts (press Enter). Accept the invite that comes; the group is left "
-      .. "once you've moved. Drag the box to move it.")
+    Kit.SimpleTooltip(self, "Swap layer", TIP)
   end)
   F:Script(f.swap, "OnLeave", GameTooltip_Hide)
   f.text = Kit.Text(f, "GameFontHighlightSmall")
@@ -925,12 +929,48 @@ local function BuildPad()
   f:Hide()
   pad = f
   PlacePad()
+  -- The host's secure macro button laid over the visible one (out of combat):
+  -- its macro says "inv layer" as the player; PostClick runs the rest.
+  local sec = ARLE.Secure:Button("LayerSwap")
+  if sec then
+    ARLE.Secure:Run(function()
+      sec:SetParent(f)
+      sec:ClearAllPoints()
+      sec:SetAllPoints(f.swap)
+      sec:SetFrameLevel(f.swap:GetFrameLevel() + 5)
+      sec:Show()
+    end)
+    F:HookScript(sec, "PreClick", function()
+      if not InCombatLockdown() then
+        F:ArmButton()
+      end
+    end)
+    F:HookScript(sec, "PostClick", function()
+      F:Ask("button")
+    end)
+    F:HookScript(sec, "OnEnter", function(self)
+      f.swap:LockHighlight()
+      Kit.SimpleTooltip(self, "Swap layer", TIP)
+    end)
+    F:HookScript(sec, "OnLeave", function()
+      f.swap:UnlockHighlight()
+      GameTooltip:Hide()
+    end)
+    F:ArmButton()
+  else
+    F:Step("the secure Swap layer button is missing: restart the game")
+  end
 end
 
 function F:Paint()
+  -- The pad holds a secure button: shown and hidden out of combat only.
   if not self._active or not self.db.button or InInstance() then
     if pad then
-      pad:Hide()
+      ARLE.Secure:Run(function()
+        if not (F._active and F.db.button and not InInstance()) then
+          pad:Hide()
+        end
+      end)
     end
     return
   end
@@ -938,7 +978,11 @@ function F:Paint()
     BuildPad()
   end
   pad.text:SetText(layer.id and ("Layer " .. Key(layer.id)) or "|cff999999Layer unknown: look at a creature|r")
-  pad:Show()
+  ARLE.Secure:Run(function()
+    if F._active and F.db.button and not InInstance() then
+      pad:Show()
+    end
+  end)
 end
 
 function F:OnResetPosition()
@@ -956,6 +1000,7 @@ function F:OnOptionChanged(key, value)
     else
       self:LeaveLayer()
     end
+    self:After(1, self.ArmButton)
   end
 end
 
@@ -1034,6 +1079,10 @@ function F:OnEnable()
     self:On(e, self.OnChatLine)
   end
   self:On("WHO_LIST_UPDATE", self.OnWho)
+  -- Joining or leaving channels renumbers them: re-arm the button's macro.
+  self:On("CHANNEL_UI_UPDATE", function(def)
+    def:Debounce("arm", 0.5, def.ArmButton)
+  end)
   self:On("GROUP_JOINED", self.OnGroupJoined)
   -- What the game says while a swap is in progress (refusals, invites).
   for _, e in ipairs({ "CHAT_MSG_SYSTEM", "UI_ERROR_MESSAGE", "CHAT_MSG_CHANNEL_NOTICE",
@@ -1088,7 +1137,11 @@ function F:OnDisable()
   ask, joined, lastAsk = nil, nil, nil
   self:LeaveLayer()
   if pad then
-    pad:Hide()
+    ARLE.Secure:Run(function()
+      if not F._active then
+        pad:Hide()
+      end
+    end)
   end
 end
 
