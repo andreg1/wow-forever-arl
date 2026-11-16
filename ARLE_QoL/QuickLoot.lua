@@ -41,7 +41,8 @@ local F = {
 
 local SPACING = 0.05
 local lootGen = 0
-local stopped -- this window hit "inventory full"
+local stopped = false  -- this window hit "inventory full"
+local toldFull = false -- this window's bags-full line was said
 
 -- EllesmereUI's own Quick Loot is on.
 local function EllesmereQuickLootOn()
@@ -166,8 +167,10 @@ function F:OnLootReady(_, autoLoot)
     self:Debug("skipped: %s", Paused() and "EllesmereUI's Quick Loot is on" or "Shift held")
     return
   end
+  -- LOOT_READY can come more than once for one window: each run replaces the
+  -- last one's timers, but "stopped" and the bags-full line belong to the
+  -- window and are only reset when it closes.
   lootGen = lootGen + 1
-  stopped = false
   local gen = lootGen
   local count = GetNumLootItems() or 0
   self:Debug("loot ready: %d slot(s), client auto-loot %s", count, tostring(autoLoot))
@@ -205,13 +208,25 @@ function F:OnLootReady(_, autoLoot)
       end
     end)
   end
-  if left > 0 and self.db.chat then
-    self:Print(string.format("bags full: %d item%s left in the loot window.", left, left == 1 and "" or "s"))
+  if left > 0 then
+    self:TellFull(string.format("bags full: %d item%s left in the loot window.", left, left == 1 and "" or "s"))
+  end
+end
+
+-- One bags-full line per loot window, whichever way it's found out.
+function F:TellFull(text)
+  if toldFull then
+    return
+  end
+  toldFull = true
+  if self.db.chat then
+    self:Print(text)
   end
 end
 
 function F:OnLootClosed()
   lootGen = lootGen + 1
+  stopped, toldFull = false, false
 end
 
 local FULL = {}
@@ -219,9 +234,7 @@ local FULL = {}
 function F:OnUIError(_, _, message)
   if FULL[message] and not stopped then
     stopped = true
-    if self.db.chat then
-      self:Print("bags full: the rest stays in the loot window.")
-    end
+    self:TellFull("bags full: the rest stays in the loot window.")
   end
 end
 
@@ -239,6 +252,7 @@ end
 
 function F:OnDisable()
   lootGen = lootGen + 1
+  stopped, toldFull = false, false
 end
 
 function F:GetStatus()
