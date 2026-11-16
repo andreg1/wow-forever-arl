@@ -280,8 +280,11 @@ function F:Gets(class, buff)
   if not class then
     return not buff.optIn
   end
-  local row = type(self.db.grid) == "table" and self.db.grid[class]
-  local v = type(row) == "table" and row[buff.key]
+  local row = type(self.db.grid) == "table" and self.db.grid[class] or nil
+  local v = nil
+  if type(row) == "table" then
+    v = row[buff.key]
+  end
   if v ~= nil then
     return v == true
   end
@@ -999,7 +1002,9 @@ end
 -- The grid pane (Buffs by class)
 -------------------------------------------------------------------------------
 
-local ROW_H, LABEL_W, COL_W = 21, 96, 112
+-- Narrow columns: a paladin's three fit the panel; long spell names wrap
+-- onto two lines (whatever the client's language).
+local ROW_H, LABEL_W, COL_W, HEAD_H = 21, 84, 86, 26
 
 function F:GridNote()
   if #MY_BUFFS == 0 then
@@ -1021,13 +1026,14 @@ function F:CreatePane(pane)
   for c, buff in ipairs(MY_BUFFS) do
     local head = Kit.Text(pane, "GameFontNormalSmall")
     head:SetPoint("TOPLEFT", LABEL_W + (c - 1) * COL_W, 0)
-    head:SetWidth(COL_W - 6)
-    head:SetWordWrap(false)
+    head:SetSize(COL_W - 6, HEAD_H)
+    head:SetJustifyV("BOTTOM")
+    head:SetWordWrap(true)
     head:SetText(BuffLabel(buff))
     pane["head" .. c] = head
   end
   for r, class in ipairs(Data.CLASSES) do
-    local y = -16 - (r - 1) * ROW_H
+    local y = -(HEAD_H + 4) - (r - 1) * ROW_H
     local label = Kit.Text(pane, "GameFontHighlightSmall")
     label:SetPoint("TOPLEFT", 0, y - 4)
     local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
@@ -1035,11 +1041,17 @@ function F:CreatePane(pane)
     label:SetText(color and ("|c" .. (color.colorStr or "ffffffff") .. text .. "|r") or text)
     for c, buff in ipairs(MY_BUFFS) do
       local check = Kit.Check(pane)
-      check:SetPoint("TOPLEFT", LABEL_W + (c - 1) * COL_W - 4, y)
-      check:SetSize(20, 20)
-      F:Script(check, "OnClick", function(btn)
-        F:SetGets(class, buff, btn:GetChecked() and true or false)
-        F:Debounce("arm", 0.2, F.Arm)
+      check:SetPoint("TOPLEFT", LABEL_W + (c - 1) * COL_W - 2, y)
+      -- HookScript, not SetScript: the theme's switch moves its knob from
+      -- its own OnClick hook, which SetScript would throw away.
+      check:HookScript("OnClick", function(btn)
+        ARLE.Debug.Call(F, function()
+          F:SetGets(class, buff, btn:GetChecked() and true or false)
+          btn:SetChecked(F:Gets(class, buff)) -- what's stored now, and repaints the switch
+          if F._active then
+            F:Debounce("arm", 0.2, F.Arm)
+          end
+        end)
       end)
       pane.cells[#pane.cells + 1] = { check = check, class = class, buff = buff }
     end
