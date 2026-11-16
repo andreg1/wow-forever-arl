@@ -2,7 +2,7 @@
 ## Title: ARL Extensions: DungeonJournal
 ## Notes: Dungeon Helper: a dungeon window with BiS Finder, Quests and Clear Times tabs.
 ## Author: aredpanda, andreg1
-## Version: 0.4.1
+## Version: 0.4.2
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
 ## OptionalDeps: ForeverDungeonJournal, ForeverLevelingBiS

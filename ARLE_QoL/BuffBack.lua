@@ -102,6 +102,12 @@ local function plain(v)
   return v
 end
 
+-- A table from the client that can be read (a secret one says "table" to
+-- type() but throws when indexed or walked).
+local function Readable(t)
+  return type(t) == "table" and not issecret(t)
+end
+
 local myRealm
 local function Realm()
   if not myRealm then
@@ -316,7 +322,7 @@ local function ReadAuras(unit)
     if not aura then
       break
     end
-    local id = plain(aura.spellId)
+    local id = Readable(aura) and plain(aura.spellId)
     if not id then
       out.unreadable = true
     else
@@ -706,7 +712,7 @@ end
 -------------------------------------------------------------------------------
 
 local function Noticed(self, aura)
-  local id = plain(aura.spellId)
+  local id = Readable(aura) and plain(aura.spellId)
   if not id or not Data.FAVOUR_IDS[id] then
     return
   end
@@ -752,7 +758,7 @@ local function WalkOwn(self)
     if not ok or not aura then
       break
     end
-    local inst = plain(aura.auraInstanceID)
+    local inst = Readable(aura) and plain(aura.auraInstanceID)
     if inst then
       now[inst] = true
       if baselined and not seenIds[inst] then
@@ -771,13 +777,17 @@ function F:OnOwnAura(_, _, info)
     baselined = false
     return
   end
-  if type(info) == "table" and not plain(info.isFullUpdate) then
-    for _, aura in ipairs(type(info.addedAuras) == "table" and info.addedAuras or {}) do
-      if not plain(aura.isHarmful) then
+  -- The client can hand back the update, or its list of added auras, as a
+  -- secret table (in combat, in an instance): type() says "table", but it
+  -- can't be read or walked. Then the walk by instance id decides instead.
+  local added = Readable(info) and Readable(info.addedAuras) and info.addedAuras
+  if Readable(info) and not plain(info.isFullUpdate) and added then
+    for _, aura in ipairs(added) do
+      if Readable(aura) and not plain(aura.isHarmful) then
         Noticed(self, aura)
       end
     end
-  elseif type(info) == "table" then
+  elseif Readable(info) and plain(info.isFullUpdate) then
     -- A full update (zoning, a reload): what is on you now is no favour.
     baselined = false
     WalkOwn(self)

@@ -29,6 +29,11 @@ if not ARLE then
 end
 local Skin, Kit, Secure, Items = ARLE.Skin, ARLE.UI.Kit, ARLE.Secure, ARLE.Lib.Items
 
+-- A value the client hides (secret): never index, walk or compare it.
+local function Secret(v)
+  return issecretvalue ~= nil and issecretvalue(v) == true
+end
+
 local MAX_LEVEL = 60
 local GOURMAND = 1225499
 local FOOD_ICON = 133964 -- INV_Misc_Food_15 (fallback)
@@ -143,7 +148,7 @@ local function Normalize(text)
 end
 
 local function LineText(line)
-  if type(line) ~= "table" then
+  if type(line) ~= "table" or Secret(line) then
     return ""
   end
   local left, right = line.leftText, line.rightText
@@ -218,8 +223,8 @@ local USE_PREFIX = Normalize((ITEM_SPELL_TRIGGER_ONUSE or "Use:"):match("^[^%%]*
 -- line it came from (for /arl food debug). hasUse: the tooltip must show a
 -- "Use:" line before "no XP" is believed (bag items).
 local function ParseTooltip(data, needUse)
-  local lines = data and data.lines
-  if type(lines) ~= "table" or #lines < 2 then
+  local lines = data and not Secret(data) and data.lines
+  if type(lines) ~= "table" or Secret(lines) or #lines < 2 then
     return nil
   end
   local texts, sawUse = {}, false
@@ -344,15 +349,17 @@ local function ScanBuff(debugOut)
     if not ok or not aura then
       break
     end
-    local spellID = aura.spellId
-    if issecretvalue and issecretvalue(spellID) then
+    -- In combat or an instance the aura, or any field of it, can be secret:
+    -- indexing a secret table or comparing a secret number throws.
+    local spellID = not Secret(aura) and aura.spellId
+    if not spellID or Secret(spellID) then
       out.unknown = true
     else
       local p, line = auraCache[spellID], nil
       if p == nil or debugOut then
         local okTip, data = pcall(C_TooltipInfo.GetUnitBuff, "player", i, "HELPFUL")
         p = nil
-        if okTip and data and type(data.lines) == "table" then
+        if okTip and data and not Secret(data) and type(data.lines) == "table" and not Secret(data.lines) then
           local lines = data.lines
           if #lines == 1 then
             p = nil -- only the name: description not loaded yet
@@ -376,14 +383,15 @@ local function ScanBuff(debugOut)
         end
       end
       if debugOut then
-        debugOut[#debugOut + 1] = string.format("buff %s: %s%s", tostring(aura.name),
+        debugOut[#debugOut + 1] = string.format("buff %s: %s%s", Secret(aura.name) and "?" or tostring(aura.name),
           p == nil and "not readable yet" or (p and (p .. "% XP") or "no XP bonus"),
           line and ("  |cff999999" .. line .. "|r") or "")
       end
       if p == nil then
         out.unknown = true
       elseif p then
-        local expires = type(aura.expirationTime) == "number" and aura.expirationTime > 0 and aura.expirationTime or 0
+        local exp = aura.expirationTime
+        local expires = not Secret(exp) and type(exp) == "number" and exp > 0 and exp or 0
         if p > out.percent or (p == out.percent and (expires == 0 or expires > out.expires)) then
           out.percent, out.expires, out.spellID = p, expires, spellID
         end

@@ -62,9 +62,21 @@ local testUntil
 -- Status
 -------------------------------------------------------------------------------
 
+-- What a secret aura reads as (in combat or an instance the client can hide
+-- it): there, at full stacks and no known end, so nothing is reminded about
+-- a buff that can't be read. Never indexed or compared as the real one.
+local HIDDEN = { applications = 3, expirationTime = 0 }
+
+local function Secret(v)
+  return issecretvalue ~= nil and issecretvalue(v) == true
+end
+
 local function PlayerAura(spellID)
   if C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
     local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, spellID)
+    if ok and aura and Secret(aura) then
+      return HIDDEN
+    end
     return ok and aura or nil
   end
   if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
@@ -74,7 +86,8 @@ local function PlayerAura(spellID)
       if not aura then
         return nil
       end
-      if aura.spellId == spellID then
+      local id = not Secret(aura) and aura.spellId
+      if id and not Secret(id) and id == spellID then
         return aura
       end
       index = index + 1
@@ -108,7 +121,8 @@ local function Status(now)
   local aura = PlayerAura(BUFF)
   local stacks = 0
   if aura then
-    stacks = type(aura.applications) == "number" and aura.applications or 0
+    local applications = aura.applications
+    stacks = not Secret(applications) and type(applications) == "number" and applications or MAX_STACKS
     if stacks < 1 then
       stacks = 1
     end
@@ -117,6 +131,9 @@ local function Status(now)
   local lying = PlayerAura(AREA) ~= nil
   local cooldown = owned and CooldownRemaining(now) or 0
   local expirationTime = aura and aura.expirationTime
+  if Secret(expirationTime) then
+    expirationTime = nil
+  end
   local remaining = stacks > 0 and type(expirationTime) == "number" and expirationTime > 0
     and expirationTime - now or nil
   return {
