@@ -2,7 +2,7 @@
 ## Title: ARL Extensions: EllesmereUI
 ## Notes: Extras for EllesmereUI: the quest tracker (item buttons, missing items, zone focus) and Item Lock for the bags.
 ## Author: aredpanda, andreg1
-## Version: 0.3.0
+## Version: 0.4.0
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
 ## OptionalDeps: EllesmereUI, EllesmereUIQuestTracker, EllesmereUIBags, QuestieDB, Questie

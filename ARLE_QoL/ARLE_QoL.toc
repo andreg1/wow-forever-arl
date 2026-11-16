@@ -1,15 +1,15 @@
 ## Interface: 16001, 120105, 120107
 ## Title: ARL Extensions: Quality of Life
-## Notes: Sleeping Bag reminders, XP Food, Fishing Pole Alert, Spec Gear Swap, LFG Role Filter, Leveling BiS Spec, Auto Uprank, Quick Loot and Loot Sparkles.
+## Notes: Sleeping Bag reminders, XP Food, Fishing Pole Alert, Spec Gear Swap, LFG Role Filter, Leveling BiS Spec, Auto Uprank, Quick Loot, Loot Sparkles and Buff Back.
 ## Author: aredpanda, andreg1
-## Version: 0.3.0
+## Version: 0.4.0
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
 ## OptionalDeps: ForeverLevelingBiS
 ## LoadOnDemand: 1
 ## X-ARLE-Pack: QoL
 ## X-ARLE-Group: QualityOfLife
-## X-ARLE-Features: SleepingBag, XPFood, FishingPoleAlert, SpecGearSwap, LFGRoleFilter, LevelingBiSSpec, AutoUprank, QuickLoot, LootSparkles
+## X-ARLE-Features: SleepingBag, XPFood, FishingPoleAlert, SpecGearSwap, LFGRoleFilter, LevelingBiSSpec, AutoUprank, QuickLoot, LootSparkles, BuffBack
 ## X-ARLE-Feature-SleepingBag: title=Sleeping Bag; cmd=bag; default=off; replaces=ForeverSleepingBag
 ## X-ARLE-Feature-XPFood: title=XP Food; cmd=food; default=off; replaces=ForeverSnackTrack
 ## X-ARLE-Feature-FishingPoleAlert: title=Fishing Pole Alert; cmd=fish; default=off; replaces=FishingPoleAlert
@@ -19,6 +19,7 @@
 ## X-ARLE-Feature-AutoUprank: title=Auto Uprank; cmd=uprank; default=off
 ## X-ARLE-Feature-QuickLoot: title=Quick Loot; cmd=loot; default=off
 ## X-ARLE-Feature-LootSparkles: title=Loot Sparkles; cmd=sparkle; default=off; replaces=ForeverLootSparkles
+## X-ARLE-Feature-BuffBack: title=Buff Back; cmd=buff; default=off; replaces=Manners
 
 SleepingBag.lua
 XPFood.lua
@@ -29,3 +30,5 @@ LevelingBiSSpec.lua
 AutoUprank.lua
 QuickLoot.lua
 LootSparkles.lua
+BuffBackData.lua
+BuffBack.lua

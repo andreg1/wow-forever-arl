@@ -53,6 +53,7 @@ end)
 local BUTTONS = {
   FishingSwap = { kind = "macro", label = "Fishing Pole Alert: put my weapons back on" },
   RareScan = { kind = "macro", label = "Rare Objectives: scan for rare quest mobs" },
+  BuffBack = { kind = "macro", label = "Buff Back: buff the next person in the queue" },
   UseItem = { kind = "item" }, -- Sleeping Bag's bag icon
   UseFood = { kind = "item" }, -- XP Food's food icon (both alerts can be up at once)
 }

@@ -21,6 +21,7 @@ Copy every folder of this repo (`ARLExtensions` and the `ARLE_*` packs) into `Wo
 | Quality of Life | Auto Uprank: swaps lower spell ranks on your action bars for a new rank when you (or your pet) learn it | `/arl uprank` | Nothing |
 | Quality of Life | Quick Loot: loots everything at once (Shift opens the window normally); leaves rolls, bind-on-pickup confirms and items that don't fit | `/arl loot` | Nothing |
 | Quality of Life | Loot Sparkles: keeps the sparkle on lootable quest items, even after a graphics preset turns it off | `/arl sparkle` | Nothing |
+| Quality of Life | Buff Back: one key buffs back whoever buffed you, whoever asks in chat, and your group; you choose which buffs each class gets | `/arl buff` | Nothing |
 | Questie | New in Forever: star on quests that are new in WoW Forever | `/arl new` | Questie |
 | Questie | Sub-Quest Filter: hides sub-quests until you can pick them up | `/arl subq` | Questie |
 | Questie | Rare Objectives: alerts and a scan key for rare quest mobs you still need | `/arl rare` | QuestieDB |
@@ -41,7 +42,7 @@ When a feature hits an error, ARL says so once in chat. A feature that keeps fai
 
 ## Coming from the standalone addons
 
-Several features started as standalone addons (ForeverSleepingBag, FishingPoleAlert, SpecGearSwap, LFGRoleFilter, Questie_NewInForever, Questie_SubQuestFilter, Questie_RareObjectives, QuestieDB_Search, EllesmereUIQuestTracker_QuestItems, EllesmereUIBags_ItemLock, Auctionator_DarkmoonTickets, ForeverLevelingBiS_AutoSpec), and XP Food and Loot Sparkles take over from Forever SnackTrack and Forever Loot Sparkles. While one of those is still turned on, its feature here stays paused, so the two don't run twice, and copies the old addon's saved data (locks, gear set links, macros, settings). Turn the old addon off in the AddOns list and `/reload` to switch over.
+Several features started as standalone addons (ForeverSleepingBag, FishingPoleAlert, SpecGearSwap, LFGRoleFilter, Questie_NewInForever, Questie_SubQuestFilter, Questie_RareObjectives, QuestieDB_Search, EllesmereUIQuestTracker_QuestItems, EllesmereUIBags_ItemLock, Auctionator_DarkmoonTickets, ForeverLevelingBiS_AutoSpec), and XP Food, Loot Sparkles and Buff Back take over from Forever SnackTrack, Forever Loot Sparkles and Manners. Buff Back uses Manners' spell data (MIT, © 2026 Sacha); see `ARLE_QoL/BuffBackData.lua`. While one of those is still turned on, its feature here stays paused, so the two don't run twice, and copies the old addon's saved data (locks, gear set links, macros, settings). Turn the old addon off in the AddOns list and `/reload` to switch over.
 
 ## Development
 

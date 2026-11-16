@@ -4,4 +4,6 @@
   </Binding>
   <Binding name="CLICK ARLE_SecureRareScan:LeftButton" category="ADDONS">
   </Binding>
+  <Binding name="CLICK ARLE_SecureBuffBack:LeftButton" category="ADDONS">
+  </Binding>
 </Bindings>
