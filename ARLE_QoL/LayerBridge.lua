@@ -450,7 +450,12 @@ end
 -- (search, whispers, replies, the chat line and what the server said about
 -- it, invites) is recorded whether or not "/arl debug layer" is on.
 local RUN_SUMMARY, RUN_WATCH = 25, 90
-local run, lastRun
+local run, lastRun, lastInvitedAt
+-- Player searches per zone: { at, heard } of the last one. The server turns
+-- searches down when they come too often ("Unable to complete your request"),
+-- and a zone where no LayerSwap user answered is skipped for a while.
+local SEARCH_GAP, SEARCH_EMPTY = 60, 300
+local searched = {}
 
 function F:Step(fmt, ...)
   if not run then
@@ -491,10 +496,20 @@ function F:Summary(r)
     parts[#parts + 1] = "chat line: not used"
   elseif r.line then
     parts[#parts + 1] = "chat line: sent"
+  elseif #r.invites > 0 and r.box ~= "to be typed by hand" then
+    parts[#parts + 1] = "chat line: sent (invites came, though no echo was seen)"
   else
     parts[#parts + 1] = "chat line: never left (" .. (r.box or "?") .. ")"
   end
   parts[#parts + 1] = #r.invites > 0 and ("invited by " .. table.concat(r.invites, ", ")) or "no invite"
+  -- AutoLayer hosts invite a player from the channel once per 5 minutes.
+  if #r.invites == 0 and lastInvitedAt and r.at - lastInvitedAt < 300 then
+    parts[#parts + 1] = string.format("AutoLayer hosts that invited you %d s ago won't again until 5 min have passed",
+      r.at - lastInvitedAt)
+  end
+  if #r.invites > 0 then
+    lastInvitedAt = r.at
+  end
   for _, n in ipairs(r.notices) do
     if n:find("Unable to complete") then
       parts[#parts + 1] = "the server turned the player search down (too many searches?): wait a minute"
@@ -671,12 +686,25 @@ function F:Ask(via)
     self:Print("couldn't tell which zone you're in.")
     return
   end
+  local last = searched[zone]
+  if last and now - last.at < SEARCH_GAP then
+    run.skipWho = string.format("player search skipped: the last one here was %d s ago (the server refuses "
+      .. "searches that come too often)", now - last.at)
+    self:Step(run.skipWho)
+    return
+  end
+  if last and not last.noAnswer and (last.heard or 0) == 0 and now - last.at < SEARCH_EMPTY then
+    run.skipWho = string.format("player search skipped: no LayerSwap user in this zone answered %d s ago", now - last.at)
+    self:Step(run.skipWho)
+    return
+  end
   if not layer.id then
     self:Print("your layer isn't read yet (target or mouse over a creature first), so hosts on your own "
       .. "layer may invite you too.")
   end
   ask = { at = now, zone = zone, layer = layer.id, line = AskLine(), queue = {}, sent = 0, via = via,
     heard = 0, hosts = 0 }
+  searched[zone] = ask -- its .at and .heard are what the next press looks at
   stats.asked = stats.asked + 1
   if C_FriendList.SetWhoToUi then
     pcall(C_FriendList.SetWhoToUi, true)
@@ -710,6 +738,7 @@ function F:Ask(via)
   self:After(WHO_WAIT, function(def)
     if ask == mine and mine.whoAt then
       mine.whoAt = nil
+      mine.noAnswer = true
       Unhush()
       def:Step("search: no answer within %d s", WHO_WAIT)
       def:Print("the player search got no answer; try again in a moment.")
@@ -1026,11 +1055,16 @@ end
 
 -- A LayerSwap line someone typed (General, a whisper, guild): "inv layer <LS ...>".
 -- AutoLayer drops it (digits, no NovaWorldBuffs layer), so we answer it.
-function F:OnChatLine(event, msg, sender, _, _, _, _, _, _, channelName)
+function F:OnChatLine(event, msg, sender, _, _, _, _, _, _, channelName, _, _, guid)
   if not Str(msg) or not Str(sender) then
+    if run and Str(guid) and guid == UnitGUID("player") then
+      run.line = true -- our own line, its text hidden from addons
+      self:Step("your line went out (%s; its text is hidden from addons)", event)
+    end
     return
   end
-  if run and Short(sender) == MyName() and msg:lower():find("inv%s+layer") then
+  local mine = (Str(guid) and guid == UnitGUID("player")) or Short(sender) == MyName()
+  if run and mine and msg:lower():find("inv%s+layer") then
     run.line = true
     self:Step("your line went out: \"%s\" in %s", msg, tostring(Str(channelName) or event))
     return
@@ -1065,6 +1099,12 @@ function F:OnEnable()
   end)
   self:On("UPDATE_MOUSEOVER_UNIT", function(def)
     def:Observe("mouseover")
+  end)
+  -- Creatures already on screen count too, without targeting them.
+  self:Ticker(2, function(def)
+    for i = 1, 40 do
+      def:Observe("nameplate" .. i)
+    end
   end)
   for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA" }) do
     self:On(e, function(def)
