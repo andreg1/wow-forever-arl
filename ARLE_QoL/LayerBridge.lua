@@ -73,8 +73,9 @@ local F = {
     .. "your zone. Hosting with LayerSwap, you also invite AutoLayer users' asks. Needs AutoLayer or LayerSwap.",
   options = {
     { type = "info", text = function(def) return def:GetStatus() end },
-    { key = "host", type = "boolean", label = "Host for the other addon's users", default = true,
-      desc = "With AutoLayer hosting: answer LayerSwap users. With LayerSwap hosting: invite AutoLayer users." },
+    { key = "host", type = "boolean", label = "Host for the other addon's users", default = false,
+      desc = "Off: ARL never invites anyone or answers anyone's ask. On, and only while AutoLayer or LayerSwap "
+        .. "hosts too: answer LayerSwap users (AutoLayer hosting) or invite AutoLayer users (LayerSwap hosting)." },
     { key = "ask", type = "boolean", label = "Ask the other addon's hosts too", default = true,
       desc = "AutoLayer's hop button also asks LayerSwap hosts in your zone, out of sight." },
     { key = "box", type = "boolean", label = "Put \"inv layer\" in the chat box for AutoLayer hosts", default = true,
