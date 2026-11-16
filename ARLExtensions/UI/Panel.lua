@@ -491,7 +491,7 @@ local function Field(index)
       self.armed = nil
       local ok, err = pcall(opt.run, def)
       if not ok then
-        geterrorhandler()(err)
+        ARLE.Debug:Record(def, err)
       end
       ARLE:RefreshUI()
     end

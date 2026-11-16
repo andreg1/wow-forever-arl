@@ -2,7 +2,7 @@
 ## Title: Associação Rei Leão's Extensions
 ## Notes: One place to enable, disable and configure small extensions for the addons you already use. /arl
 ## Author: aredpanda, andreg1
-## Version: 0.2.1
+## Version: 0.3.0
 ## SavedVariables: ARLExtensionsDB
 ## SavedVariablesPerCharacter: ARLExtensionsCharDB
 ## OptionalDeps: EllesmereUI, ElvUI
@@ -11,6 +11,7 @@
 
 Core\Init.lua
 Core\DB.lua
+Core\Debug.lua
 Core\Guild.lua
 Core\Comm.lua
 Lib\Util.lua
@@ -28,6 +29,7 @@ UI\Kit.lua
 UI\Window.lua
 UI\Alert.lua
 UI\Panel.lua
+UI\Report.lua
 Builtin\Settings.lua
 Builtin\OfficerTools.lua
 Builtin\EUIOptions.lua

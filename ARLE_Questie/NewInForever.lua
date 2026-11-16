@@ -237,7 +237,7 @@ function F:OnEnable()
         drawn[icon] = true
         local ok, err = pcall(Apply, icon)
         if not ok then
-          geterrorhandler()(err)
+          ARLE.Debug:Record(F, err)
         end
       end
     end
@@ -249,7 +249,7 @@ function F:OnEnable()
     orig(icon, Tooltip, ...)
     local ok, err = pcall(AfterShowOnTooltip, Tooltip, rebuildBefore)
     if not ok then
-      geterrorhandler()(err)
+      ARLE.Debug:Record(F, err)
     end
   end) then
     self:Print("Questie's MapIconTooltip.ShowOnTooltip was not found (Questie update?); tooltips won't be marked.")

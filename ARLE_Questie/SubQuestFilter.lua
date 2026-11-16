@@ -201,7 +201,7 @@ function F:OnEnable()
     local function after()
       local ok, err = pcall(Sweep)
       if not ok then
-        geterrorhandler()(err)
+        ARLE.Debug:Record(F, err)
       end
       if callback then
         callback()

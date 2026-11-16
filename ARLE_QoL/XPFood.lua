@@ -879,11 +879,13 @@ function F:Evaluate()
   end
   local level = UnitLevel("player")
   if type(level) == "number" and level >= MAX_LEVEL then
+    self:Debug("off: level %d", level)
     ResetState()
     HideAlert()
     return
   end
   if (not self.db.whileResting and IsResting()) or UnitAffectingCombat("player") or InCombatLockdown() then
+    self:Debug("waiting: %s", IsResting() and "resting" or "in combat")
     HideAlert()
     return
   end
@@ -896,6 +898,9 @@ function F:Evaluate()
   local bags, buff = ScanBags(), ScanBuff()
   lastBags, lastBuff = bags, buff
   self:CheckExpiry(buff, now)
+  self:Debug("bags: %d XP food(s), best %s, %d serving(s)%s · buff %d%%%s", #bags.foods,
+    bags.foods[1] and (bags.foods[1].percent .. "% " .. tostring(bags.foods[1].name)) or "none", bags.servings,
+    bags.complete and "" or " (some not readable yet)", buff.percent, buff.unknown and " (a buff not readable yet)" or "")
 
   -- Low stock: once, until the stock goes back above the threshold.
   local low = self.db.lowStock or 0
@@ -913,6 +918,7 @@ function F:Evaluate()
   local best = bags.foods[1]
   if best then
     if buff.unknown and buff.percent < best.percent then
+      self:Debug("waiting: a buff isn't readable yet and might be the food's")
       return -- an unreadable buff might be the food's: wait
     end
     if buff.percent < best.percent then
@@ -927,10 +933,12 @@ function F:Evaluate()
       message = "You have no XP food left in your bags."
     end
   else
+    self:Debug("waiting: food tooltips still loading")
     return -- bags still loading
   end
 
   if not key then
+    self:Debug("nothing to remind")
     currentKey, dismissedKey, lastFire = nil, nil, nil
     HideAlert()
     return
@@ -942,6 +950,7 @@ function F:Evaluate()
     end
   end
   if dismissedKey == key or (snoozeUntil and now < snoozeUntil) then
+    self:Debug("%s: %s", key, dismissedKey == key and "dismissed" or "snoozed")
     HideAlert()
     return
   end
@@ -949,6 +958,7 @@ function F:Evaluate()
   local repeatSec = (self.db.repeatMinutes or 0) * 60
   if not lastFire or (repeatSec > 0 and now - lastFire >= repeatSec) then
     lastFire = now
+    self:Debug("%s: reminding", key)
     if self.db.chat then
       self:Print(message)
     end

@@ -28,6 +28,10 @@
 --   self:OutOfCombat(fn)               now, or once combat ends
 --   self:Alert(spec)                   the shared alert (UI/Alert.lua)
 --   self:Print(msg)
+--   self:Debug(fmt, ...)               a trace line while "/arl debug <feature>" is on
+--   self:Script(frame, script, fn)     SetScript on its own frames, errors caught
+-- Everything these run is error-checked per feature (Core/Debug.lua: recorded,
+-- told in chat once, and a feature that keeps failing is turned off).
 --   self.db (this character's settings and on/off switch), self.char (this
 --   character's data), self.shared (data shared by all characters)
 local ADDON_NAME, ns = ...
@@ -42,11 +46,15 @@ local M = ARLE.Modules
 local Feature = {}
 M.Feature = Feature
 
-local function Safe(fn, ...)
-  local ok, err = pcall(fn, ...)
-  if not ok then
-    geterrorhandler()(err)
-  end
+-- Runs feature code; an error is recorded under owner (Core/Debug.lua).
+local Call = ARLE.Debug.Call
+local function Safe(owner, fn, ...)
+  Call(owner, fn, ...)
+end
+M.Safe = Safe
+
+local function Pack(...)
+  return { n = select("#", ...), ... }
 end
 
 local function EventFrame(self)
@@ -55,7 +63,7 @@ local function EventFrame(self)
     frame:SetScript("OnEvent", function(_, event, ...)
       local fn = self._events and self._events[event]
       if fn and self._active then
-        Safe(fn, self, event, ...)
+        Safe(self, fn, self, event, ...)
       end
     end)
     self._eventFrame = frame
@@ -107,7 +115,7 @@ function Feature:After(delay, fn)
   local gen = self._gen
   C_Timer.After(delay or 0, function()
     if self._active and self._gen == gen then
-      Safe(fn, self)
+      Safe(self, fn, self)
     end
   end)
 end
@@ -140,7 +148,7 @@ function Feature:Ticker(delay, fn)
       return
     end
     self:After(delay, Tick)
-    Safe(fn, self)
+    Safe(self, fn, self)
   end
   self:After(delay, Tick)
   return handle
@@ -168,7 +176,7 @@ function Feature:Hook(target, name, fn)
   local function Call(...)
     local h = byTarget[name]
     if self._active and h then
-      Safe(h, ...)
+      Safe(self, h, ...)
     end
   end
   local ok
@@ -202,7 +210,7 @@ function Feature:HookScript(frame, script, fn)
     local ok = pcall(frame.HookScript, frame, script, function(...)
       local h = byFrame[script]
       if self._active and h then
-        Safe(h, ...)
+        Safe(self, h, ...)
       end
     end)
     if not ok then
@@ -242,7 +250,21 @@ function Feature:Wrap(tbl, name, wrapper)
   local new = { wrapper = wrapper, orig = tbl[name] }
   new.mine = function(...)
     if self._active and not new.dead then
-      return new.wrapper(new.orig, ...)
+      -- A failing wrapper must not break the other addon: the error is
+      -- recorded, and the call still gets the original's results (from the
+      -- original run the wrapper already made, or from running it now).
+      local origResults
+      local function orig(...)
+        origResults = Pack(new.orig(...))
+        return unpack(origResults, 1, origResults.n)
+      end
+      local results = Pack(Call(self, new.wrapper, orig, ...))
+      if results[1] then
+        return unpack(results, 2, results.n)
+      end
+      if origResults then
+        return unpack(origResults, 1, origResults.n)
+      end
     end
     return new.orig(...)
   end
@@ -263,7 +285,7 @@ end
 function Feature:Comm(kind, fn)
   local handler = function(...)
     if self._active then
-      fn(self, ...)
+      Safe(self, fn, self, ...)
     end
   end
   ARLE:RegisterComm(kind, handler)
@@ -276,7 +298,7 @@ function Feature:OutOfCombat(fn)
   local gen = self._gen
   ARLE.Secure:Run(function()
     if self._active and self._gen == gen then
-      fn(self)
+      Safe(self, fn, self)
     end
   end)
 end
@@ -287,6 +309,23 @@ end
 
 function Feature:Print(msg)
   ARLE:Print("|cffffd100" .. (self.title or self.id) .. "|r: " .. tostring(msg))
+end
+
+-- A trace line, only while "/arl debug <feature>" is on (otherwise free):
+--   self:Debug("skipped slot %d: %s", slot, why)
+function Feature:Debug(fmt, ...)
+  if ARLE.Debug:Tracing(self.id) then
+    ARLE.Debug:Trace(self, fmt, ...)
+  end
+end
+
+-- SetScript on one of the feature's own frames, with errors caught and
+-- recorded like the other helpers (frame scripts otherwise bypass them).
+-- fn(frame, ...) as with SetScript; returns nothing.
+function Feature:Script(frame, script, fn)
+  frame:SetScript(script, fn and function(...)
+    Safe(self, fn, ...)
+  end or nil)
 end
 
 -- Clears everything the helpers set up; runs after OnDisable.
@@ -399,10 +438,7 @@ function ARLE:CallEnable(def)
     def._conflict = old
     if def.Import and not def._imported then
       def._imported = true
-      local ok, err = pcall(def.Import, def, old)
-      if not ok then
-        self:Print("Error importing " .. old .. " data into " .. def.id .. ": " .. tostring(err))
-      end
+      Safe(def, def.Import, def, old) -- an error is recorded and said in chat
     end
     if not toldConflict[def.id] then
       toldConflict[def.id] = true
@@ -417,12 +453,11 @@ function ARLE:CallEnable(def)
   def._active = true
   def._gen = (def._gen or 0) + 1
   if def.OnEnable then
-    local ok, err = pcall(def.OnEnable, def)
+    local ok, err = Call(def, def.OnEnable, def) -- recorded and said in chat
     if not ok then
       def._active = false
       def._error = tostring(err)
       Cleanup(def)
-      self:Print("Error enabling " .. def.id .. ": " .. tostring(err))
     end
   end
 end
@@ -434,10 +469,7 @@ function ARLE:CallDisable(def)
   end
   def._active = false
   if def.OnDisable then
-    local ok, err = pcall(def.OnDisable, def)
-    if not ok then
-      self:Print("Error disabling " .. def.id .. ": " .. tostring(err))
-    end
+    Safe(def, def.OnDisable, def)
   end
   Cleanup(def)
 end
@@ -447,7 +479,7 @@ function ARLE:Bind(def)
   def.char = self:CharDB(def.id)                -- this character's data
   def.shared = self:SharedDB(def.id)            -- data shared by all characters
   if def.OnBind then
-    Safe(def.OnBind, def)
+    Safe(def, def.OnBind, def)
   end
   if self.unlocked and def.db.enabled ~= false then
     self:CallEnable(def)
@@ -623,10 +655,18 @@ function ARLE:GetInfo(id)
     info.state, info.status = "pending", "Loads after /reload"
   end
   if info.active and def and def.GetStatus then
-    local ok, extra = pcall(def.GetStatus, def)
+    local ok, extra = Call(def, def.GetStatus, def)
     if ok and extra then
       info.status = extra
     end
+  end
+  if info.state == "off" and def and def._tripped then
+    info.status = "Off: turned itself off after repeated errors (/arl errors)"
+  end
+  info.errors = ARLE.Debug:SessionCount(id)
+  if info.errors > 0 then
+    info.status = info.status .. "  ·  |cffff6060" .. info.errors .. " error" .. (info.errors == 1 and "" or "s")
+      .. " this session|r (/arl errors)"
   end
   return info
 end
@@ -730,6 +770,7 @@ function ARLE:SetModuleEnabled(id, enabled)
     if def then
       def.db = db
       def._error = nil
+      ARLE.Debug:Reset(id) -- turned back on by the player: a fresh start for the breaker
       self:CallEnable(def)
     end
   elseif def then
@@ -761,10 +802,7 @@ function ARLE:SetOption(id, key, value)
     def.db[key] = value
   end
   if def._active and def.OnOptionChanged then
-    local ok, err = pcall(def.OnOptionChanged, def, key, value)
-    if not ok then
-      self:Print("Error updating " .. id .. ": " .. tostring(err))
-    end
+    Safe(def, def.OnOptionChanged, def, key, value)
   end
   self:Changed()
 end
@@ -813,7 +851,7 @@ function ARLE:Startup()
     self:EnsureDB(id)
   end
   if self.OnStartup then
-    Safe(self.OnStartup, self)
+    Safe(nil, self.OnStartup, self)
   end
   -- Packs load only once the player is confirmed in the guild.
   self:ApplyGuild()
@@ -848,9 +886,6 @@ events:SetScript("OnEvent", function(_, event, name)
       ARLE:OnAddonLoaded(name)
     end
   elseif event == "PLAYER_LOGIN" then
-    local ok, err = pcall(ARLE.Startup, ARLE)
-    if not ok then
-      ARLE:Print(err)
-    end
+    Safe(nil, ARLE.Startup, ARLE) -- recorded under "ARL" and said in chat
   end
 end)

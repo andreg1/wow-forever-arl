@@ -32,6 +32,13 @@ Copy every folder of this repo (`ARLExtensions` and the `ARLE_*` packs) into `Wo
 
 Officers and the Guild Master also get **Officer Tools**: who in the guild runs the addon, and which version.
 
+## Something went wrong?
+
+When a feature hits an error, ARL says so once in chat. A feature that keeps failing turns itself off, so it can't slow the game down.
+- `/arl errors` lists what was caught on this character.
+- `/arl report` opens a window with everything needed to fix it: versions, each feature's state, the errors and the trace. Click **Select all**, press Ctrl+C, and paste it to us.
+- `/arl debug <feature>`: for "it didn't do what I expected" without an error. It shows what the feature decides, in chat and in the report. Run it again to turn it off.
+
 ## Coming from the standalone addons
 
 Several features started as standalone addons (ForeverSleepingBag, FishingPoleAlert, SpecGearSwap, LFGRoleFilter, Questie_NewInForever, Questie_SubQuestFilter, Questie_RareObjectives, QuestieDB_Search, EllesmereUIQuestTracker_QuestItems, EllesmereUIBags_ItemLock, Auctionator_DarkmoonTickets, ForeverLevelingBiS_AutoSpec), and XP Food and Loot Sparkles take over from Forever SnackTrack and Forever Loot Sparkles. While one of those is still turned on, its feature here stays paused, so the two don't run twice, and copies the old addon's saved data (locks, gear set links, macros, settings). Turn the old addon off in the AddOns list and `/reload` to switch over.

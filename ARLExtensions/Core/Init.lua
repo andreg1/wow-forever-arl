@@ -174,7 +174,7 @@ function ARLE:Changed()
   for _, fn in ipairs(self.listeners) do
     local ok, err = pcall(fn)
     if not ok then
-      geterrorhandler()(err)
+      ARLE.Debug:Record(nil, err) -- (Core/Debug.lua loads after this file; this runs later)
     end
   end
 end

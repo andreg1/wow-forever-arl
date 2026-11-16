@@ -164,7 +164,7 @@ comms:SetScript("OnEvent", function(_, _, prefix, message, channel, sender)
     for _, fn in ipairs({ unpack(list) }) do
       local ok, err = pcall(fn, from, payload, channel)
       if not ok then
-        geterrorhandler()(err)
+        ARLE.Debug:Record(nil, err)
       end
     end
   end

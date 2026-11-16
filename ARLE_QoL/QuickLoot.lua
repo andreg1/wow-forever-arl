@@ -161,14 +161,16 @@ end
 -- Runs with the game's own Auto Loot on as well (as EllesmereUI's does): it
 -- takes the slots faster than the client does; a slot already taken is a
 -- no-op.
-function F:OnLootReady()
+function F:OnLootReady(_, autoLoot)
   if IsShiftKeyDown() or Paused() then
+    self:Debug("skipped: %s", Paused() and "EllesmereUI's Quick Loot is on" or "Shift held")
     return
   end
   lootGen = lootGen + 1
   stopped = false
   local gen = lootGen
   local count = GetNumLootItems() or 0
+  self:Debug("loot ready: %d slot(s), client auto-loot %s", count, tostring(autoLoot))
   if count == 0 then
     CloseLoot()
     return
@@ -179,6 +181,7 @@ function F:OnLootReady()
     local _, _, quantity, _, _, locked = GetLootSlotInfo(slot)
     if locked then
       -- Under a roll or master loot: not ours to take.
+      self:Debug("slot %d: left (locked: roll or master loot)", slot)
     elseif SlotType(slot) ~= ITEM_TYPE then
       queue[#queue + 1] = { slot = slot } -- coins and currency always fit
     else
@@ -187,6 +190,7 @@ function F:OnLootReady()
         queue[#queue + 1] = { slot = slot, item = true }
       else
         left = left + 1
+        self:Debug("slot %d: left (no room for item %s x%s)", slot, tostring(itemID), tostring(quantity))
       end
     end
   end
@@ -194,7 +198,10 @@ function F:OnLootReady()
     self:After(SPACING * i, function()
       -- After an "inventory full" error, coins and currency are still taken.
       if lootGen == gen and not (stopped and entry.item) then
+        self:Debug("slot %d: looting", entry.slot)
         LootSlot(entry.slot)
+      else
+        self:Debug("slot %d: dropped (%s)", entry.slot, lootGen ~= gen and "window closed" or "bags full")
       end
     end)
   end

@@ -31,7 +31,7 @@ function S:Run(fn)
   end
   local ok, err = pcall(fn)
   if not ok then
-    geterrorhandler()(err)
+    ARLE.Debug:Record(nil, err)
   end
   return true
 end
@@ -44,7 +44,7 @@ events:SetScript("OnEvent", function()
   for _, fn in ipairs(list) do
     local ok, err = pcall(fn)
     if not ok then
-      geterrorhandler()(err)
+      ARLE.Debug:Record(nil, err)
     end
   end
 end)

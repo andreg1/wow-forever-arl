@@ -288,7 +288,7 @@ local function Dispatch(def, rest, raw)
       def:Print("is off. /arl " .. def.command .. " on turns it on.")
       return
     end
-    action.run(def, tail, rawTail)
+    ARLE.Debug.Call(def, action.run, def, tail, rawTail)
     return
   end
   local opt = word ~= "" and FindSetting(def, word)
@@ -305,7 +305,7 @@ local function Dispatch(def, rest, raw)
     return
   end
   if def.main then
-    def.main(def, rest, raw)
+    ARLE.Debug.Call(def, def.main, def, rest, raw)
   elseif word == "" then
     ARLE:PrintStatus(def)
   else
@@ -550,7 +550,8 @@ SlashCmdList.ARLEXTENSIONS = function(message)
   if c then
     -- Outside the guild only the read-only commands answer.
     if c.open or ARLE:Allowed() then
-      c.fn(rest, raw)
+      -- Errors go on the feature the command belongs to (or ARL's own).
+      ARLE.Debug.Call(c.feature or (c.module and ARLE.modules[c.module]) or nil, c.fn, rest, raw)
     end
     return
   end
