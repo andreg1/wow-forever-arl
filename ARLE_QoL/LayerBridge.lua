@@ -73,26 +73,26 @@ local F = {
   command = "layer",
   commandHelp = "change layer with LayerSwap and AutoLayer users",
   description = "Change layer with LayerSwap and AutoLayer users, with or without either addon installed. "
-    .. "The Swap layer button asks LayerSwap hosts in your zone out of sight and says \"inv layer\" in the "
-    .. "layer channel for AutoLayer hosts. With hosting on, you also invite their users' asks.",
+    .. "Two buttons: LayerSwap asks LayerSwap hosts in your zone out of sight; AutoLayer says \"inv layer\" in "
+    .. "the layer channel for AutoLayer hosts. With hosting on, you also invite their users' asks.",
   options = {
     { type = "info", text = function(def) return def:GetStatus() end },
     { key = "layerswap", type = "boolean", label = "Work with LayerSwap users", default = true, cmd = "ls",
       desc = "Your asks reach LayerSwap hosts in your zone, out of sight (a player search, then hidden whispers)." },
     { key = "autolayer", type = "boolean", label = "Work with AutoLayer users", default = true, cmd = "al",
-      desc = "When AutoLayer's turn comes, the Swap layer button says \"inv layer\" in the \"layer\" channel, if "
-        .. "you're in it (ARL never joins it for you). Not on realms that refuse addon chat lines, such as live "
-        .. "Forever: there a refused line can get you barred from the channel." },
+      desc = "The AutoLayer button says \"inv layer\" in the \"layer\" channel, if you're in it (ARL never joins "
+        .. "it for you). On realms that refuse addon chat lines, such as live Forever, the line may not go out, "
+        .. "and a refused line can get you barred from the channel." },
     { key = "host", type = "boolean", label = "Host for the other addon's users", default = false,
       desc = "Off: ARL never invites anyone or answers anyone's ask. On, and only while AutoLayer or LayerSwap "
         .. "hosts too: answer LayerSwap users (AutoLayer hosting) or invite AutoLayer users (LayerSwap hosting)." },
     { key = "leave", type = "boolean", label = "Leave the group after the move", default = true,
       desc = "After an ask of ours, leave the host's group once the layer has changed." },
-    { key = "button", type = "boolean", label = "Show the Swap layer button", default = true,
-      desc = "A small movable button: one click asks for another layer (and shows the layer you're on)." },
+    { key = "button", type = "boolean", label = "Show the LayerSwap / AutoLayer buttons", default = true,
+      desc = "A small movable box with the two buttons, the layer you're on and the AutoLayer button's state." },
     ARLE.Options.Preset.ResetPosition(),
-    { type = "button", label = "Swap layer now", nocmd = true,
-      run = function(def) def:Ask("button") end },
+    { type = "button", label = "Ask LayerSwap hosts now", nocmd = true,
+      run = function(def) def:Ask("panel", "layerswap") end },
   },
 }
 
@@ -632,8 +632,7 @@ function F:BoxLine(via, retried)
   if run then
     run.box = "to be typed by hand"
   end
-  self:Print(string.format("to reach AutoLayer hosts too, type: /%d inv layer  (the Swap layer button sends it "
-    .. "for you)", id))
+  self:Print(string.format("to reach AutoLayer hosts, type: /%d inv layer  (or press the AutoLayer button)", id))
 end
 
 -- One pool per press: AutoLayer hosts first (the line in the layer channel),
@@ -695,11 +694,12 @@ local function OurMacro(body)
 end
 
 function F:ArmButton()
-  local pool = self:Pool()
-  local id = pool == "autolayer" and LayerChannelId() or nil
+  -- The secure button is the AutoLayer button: its macro is the line,
+  -- whenever "Work with AutoLayer users" is on and we're in the channel.
+  local id = self.db.autolayer and LayerChannelId() or nil
   local text = id and ("/" .. id .. " inv layer") or nil
   self.armedText = text
-  self.armedPool = pool
+  self.armedPool = "autolayer"
   if InCombatLockdown() then
     return
   end
@@ -747,7 +747,9 @@ function F:Asked()
   lastAsk = { at = GetTime(), layer = layer.id }
 end
 
-function F:Ask(via)
+-- forced: "layerswap" or "autolayer" from the pad's two buttons; otherwise
+-- (/arl layer ask, AutoLayer's hop button) F:Pool decides.
+function F:Ask(via, forced)
   if not self.db.layerswap and not self.db.autolayer then
     self:Print("\"Work with LayerSwap users\" and \"Work with AutoLayer users\" are both off.")
     return
@@ -757,7 +759,7 @@ function F:Ask(via)
     return
   end
   local now = GetTime()
-  if ask and now - ask.at < ASK_GAP then
+  if forced ~= "autolayer" and ask and now - ask.at < ASK_GAP then
     self:Print(string.format("wait %d s before asking again.", ASK_GAP - (now - ask.at)))
     return
   end
@@ -775,14 +777,10 @@ function F:Ask(via)
     self:Print("you're in a group. Leave it to swap layers.")
     return
   end
-  -- One pool per press (see F:Pool). The button's macro already carried the
-  -- decision made in its PreClick.
+  -- One pool per press: the button pressed, or F:Pool.
   local pool, wait = self:Pool()
-  if via == "button" and self.armedPool then
-    pool = self.armedPool
-    local fresh = self.preClickAt and GetTime() - self.preClickAt < 2
-    self:Step("pool decided %s: %s (macro: %s)", fresh and "at the click" or "EARLIER (PreClick didn't run)",
-      pool, tostring(self.armedText or "none"))
+  if forced then
+    pool = forced
   end
   run.pool = pool
   if pool == "none" then
@@ -792,12 +790,33 @@ function F:Ask(via)
     return
   end
   if pool == "autolayer" then
-    self:Step("pool: AutoLayer hosts (the inv layer line); LayerSwap hosts next while AutoLayer is on cooldown")
+    if not self.db.autolayer then
+      run.skipWho = "AutoLayer hosts: \"Work with AutoLayer users\" is off"
+      self:Step(run.skipWho)
+      self:Print("\"Work with AutoLayer users\" is off.")
+      return
+    end
+    if via == "button" then
+      local fresh = self.preClickAt and GetTime() - self.preClickAt < 2
+      self:Step("AutoLayer button: macro %s, armed %s", tostring(self.armedMacro or self.armedText or "none"),
+        fresh and "at the click" or "EARLIER (PreClick didn't run)")
+    end
+    self:Step("pool: AutoLayer hosts (the inv layer line)")
+    if not LayerChannelId() then
+      self:Print("you're not in the \"layer\" channel, so AutoLayer hosts can't hear you (ARL doesn't join it "
+        .. "for you).")
+    end
     -- AutoLayer posts its own line where the realm allows it.
     if via ~= "AutoLayer" or Restricted() then
       self:BoxLine(via)
     end
-    run.skipWho = "LayerSwap hosts: not this press (AutoLayer's turn)"
+    run.skipWho = "LayerSwap hosts: not this press"
+    return
+  end
+  if not self.db.layerswap then
+    run.skipWho = "LayerSwap hosts: \"Work with LayerSwap users\" is off"
+    self:Step(run.skipWho)
+    self:Print("\"Work with LayerSwap users\" is off.")
     return
   end
   if wait == nil then
@@ -1273,7 +1292,8 @@ function F:OnLayerChanged(was)
 end
 
 -------------------------------------------------------------------------------
--- The Swap layer button (a plain button: a click is what /who needs)
+-- The box: a LayerSwap button (plain: a click is what /who needs) and an
+-- AutoLayer button (the host's secure macro button laid over it)
 -------------------------------------------------------------------------------
 
 local pad
@@ -1286,7 +1306,7 @@ end
 
 local function BuildPad()
   local f = Skin:CreateTooltipWindow(nil, UIParent)
-  f:SetSize(220, 60)
+  f:SetSize(226, 62)
   f:SetFrameStrata("MEDIUM")
   f:SetClampedToScreen(true)
   f:SetMovable(true)
@@ -1302,33 +1322,53 @@ local function BuildPad()
     end
     PlacePad()
   end)
-  f.swap = Kit.Button(f, "Swap layer", 134)
-  f.swap:SetPoint("TOP", 0, -6)
-  local TIP = "Asks LayerSwap hosts in your zone out of sight, and says \"inv layer\" in the layer channel for "
-    .. "AutoLayer hosts. Accept the invite that comes; the group is left once you've moved. Drag the box to move it."
+  -- Two buttons, one per pool. LayerSwap: a plain button (its click is the
+  -- hardware event /who needs). AutoLayer: the host's secure macro button,
+  -- laid over the visible one.
+  f.ls = Kit.Button(f, "LayerSwap", 104)
+  f.ls:SetPoint("TOPLEFT", 6, -6)
+  f.al = Kit.Button(f, "AutoLayer", 104)
+  f.al:SetPoint("TOPRIGHT", -6, -6)
+  f.swap = f.al -- the secure overlay's target
+  F:Script(f.ls, "OnClick", function()
+    F:Ask("button", "layerswap")
+  end)
+  F:Script(f.ls, "OnEnter", function(self)
+    Kit.SimpleTooltip(self, "LayerSwap hosts", "Searches your zone and asks LayerSwap hosts out of sight (known "
+      .. "hosts first). Accept the invite that comes; the group is left once you've moved. Drag the box to move it.")
+  end)
+  F:Script(f.ls, "OnLeave", GameTooltip_Hide)
+  local function AlTip(owner)
+    local lines = "Says \"inv layer\" in the layer channel, through your \"" .. MACRO_BASE .. "\" macro, for "
+      .. "AutoLayer hosts. Only while you're in the layer channel (ARL never joins it for you)."
+    if Restricted() then
+      lines = lines .. "\n\n|cffff6060This realm refuses addon chat lines: the line may not go out, and a "
+        .. "refused line can get you barred from the channel.|r"
+    end
+    Kit.SimpleTooltip(owner, "AutoLayer hosts", lines)
+  end
   -- Fallback when the host's secure button is missing (game not restarted
-  -- since the update): the out-of-sight ask still works, the line doesn't.
-  F:Script(f.swap, "OnClick", function()
-    F:Ask("plain button")
+  -- since the update): the click can't say the line.
+  F:Script(f.al, "OnClick", function()
+    F:Ask("plain button", "autolayer")
   end)
-  F:Script(f.swap, "OnEnter", function(self)
-    Kit.SimpleTooltip(self, "Swap layer", TIP)
-  end)
-  F:Script(f.swap, "OnLeave", GameTooltip_Hide)
+  F:Script(f.al, "OnEnter", AlTip)
+  F:Script(f.al, "OnLeave", GameTooltip_Hide)
   f.text = Kit.Text(f, "GameFontHighlightSmall")
   f.text:SetPoint("BOTTOM", 0, 5)
+  f.text:SetJustifyH("CENTER")
   f:Hide()
   pad = f
   PlacePad()
-  -- The host's secure macro button laid over the visible one (out of combat):
-  -- its macro says "inv layer" as the player; PostClick runs the rest.
+  -- The host's secure macro button laid over the AutoLayer one (out of
+  -- combat): its macro says "inv layer" as the player; PostClick runs the rest.
   local sec = ARLE.Secure:Button("LayerSwap")
   if sec then
     ARLE.Secure:Run(function()
       sec:SetParent(f)
       sec:ClearAllPoints()
-      sec:SetAllPoints(f.swap)
-      sec:SetFrameLevel(f.swap:GetFrameLevel() + 5)
+      sec:SetAllPoints(f.al)
+      sec:SetFrameLevel(f.al:GetFrameLevel() + 5)
       sec:Show()
     end)
     -- SetScript, as Buff Back and Rare Objectives do on their host buttons
@@ -1343,20 +1383,20 @@ local function BuildPad()
     end)
     sec:SetScript("PostClick", function()
       if F._active then
-        ARLE.Debug.Call(F, F.Ask, F, "button")
+        ARLE.Debug.Call(F, F.Ask, F, "button", "autolayer")
       end
     end)
     F:HookScript(sec, "OnEnter", function(self)
-      f.swap:LockHighlight()
-      Kit.SimpleTooltip(self, "Swap layer", TIP)
+      f.al:LockHighlight()
+      AlTip(self)
     end)
     F:HookScript(sec, "OnLeave", function()
-      f.swap:UnlockHighlight()
+      f.al:UnlockHighlight()
       GameTooltip:Hide()
     end)
     F:ArmButton()
   else
-    F:Step("the secure Swap layer button is missing: restart the game")
+    F:Step("the secure AutoLayer button is missing: restart the game")
   end
 end
 
@@ -1384,19 +1424,34 @@ function F:PadText()
     return
   end
   local top = layer.id and self:LayerLabel(layer.id) or "|cff999999Layer unknown: look at a creature|r"
-  local pool, wait = self:Pool()
-  local alOff = self:AutoLayerWait() == nil
-  wait = math.floor(wait or 0)
-  local nextLine
-  if alOff then
-    nextLine = self.db.layerswap and "Next: LayerSwap hosts" or "Nobody to ask: both pools are off"
-  elseif pool == "autolayer" then
-    nextLine = "Next: AutoLayer hosts" .. ((wait or 0) > 0 and string.format(" (ready in %d:%02d)",
-      math.floor(wait / 60), wait % 60) or "")
+  -- The AutoLayer button's state: off, not in the channel, a refusing realm,
+  -- or AutoLayer hosts' 5-minute wait after they invited you.
+  local al
+  local inChannel = LayerChannelId() ~= nil
+  if not self.db.autolayer then
+    al = "AutoLayer: off"
+  elseif not inChannel then
+    al = "AutoLayer: not in the layer channel"
+  elseif Restricted() then
+    al = "|cffff8040AutoLayer: realm blocks addon chat|r"
   else
-    nextLine = string.format("Next: LayerSwap hosts · AutoLayer in %d:%02d", math.floor(wait / 60), wait % 60)
+    local inv = Since(self.char.alInvitedAt)
+    local wait = inv and inv < AL_COOLDOWN and math.floor(AL_COOLDOWN - inv) or 0
+    al = wait > 0 and string.format("AutoLayer: hosts again in %d:%02d", math.floor(wait / 60), wait % 60)
+      or "AutoLayer: ready"
   end
-  pad.text:SetText(top .. "\n|cffaaaaaa" .. nextLine .. "|r")
+  local usable = self.db.autolayer and inChannel
+  if usable then
+    pad.al:Enable()
+  else
+    pad.al:Disable()
+  end
+  if self.db.layerswap then
+    pad.ls:Enable()
+  else
+    pad.ls:Disable()
+  end
+  pad.text:SetText(top .. "\n|cffaaaaaa" .. al .. "|r")
 end
 
 function F:Paint()
@@ -1674,8 +1729,8 @@ F.commands = {
       print("   " .. l)
     end
   end },
-  { name = "button", help = "shows the Swap layer button (or says why it's hidden)", run = function(self)
-    local why = not self.db.button and "\"Show the Swap layer button\" is off"
+  { name = "button", help = "shows the LayerSwap / AutoLayer buttons (or says why they're hidden)", run = function(self)
+    local why = not self.db.button and "\"Show the LayerSwap / AutoLayer buttons\" is off"
       or InInstance() and "you're in an instance" or nil
     self:Paint()
     if why then
