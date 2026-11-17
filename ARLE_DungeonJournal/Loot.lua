@@ -21,7 +21,7 @@ local Bosses, FLB, Members, Me = H.Bosses, H.FLB, H.Members, H.Me
 local ColorName, TooltipSide = H.ColorName, H.TooltipSide
 local GetItemInfo, GetItemIcon = H.GetItemInfo, H.GetItemIcon
 
-local BOSS_H, ITEM_H, BIG = 22, 18, 36
+local BOSS_H, ITEM_H, BIG = 38, 34, 50
 local OTHER = "@other" -- the Other loot entry
 local SKULL = "Interface\\TargetingFrame\\UI-TargetingFrame-Skull"
 local BAG = "Interface\\Icons\\INV_Misc_Bag_10"
@@ -341,8 +341,9 @@ local function PartyTooltip(owner)
   GameTooltip:AddLine(" ")
   GameTooltip:AddLine("ARL members score the drops with their own Forever Leveling BiS and share the numbers. "
     .. "Others get no marks.", 0.8, 0.8, 0.8, true)
-  GameTooltip:AddLine("|cffffd100Gold-edged square|r: BiS from this dungeon for that slot", 0.8, 0.8, 0.8)
-  GameTooltip:AddLine("Plain square: an upgrade", 0.8, 0.8, 0.8)
+  GameTooltip:AddLine("|cffffd100Gold-edged class icon|r: BiS from this dungeon for that slot", 0.8, 0.8, 0.8)
+  GameTooltip:AddLine("Plain class icon: an upgrade", 0.8, 0.8, 0.8)
+  GameTooltip:AddLine(H.Inline(H.ICON.star) .. " and |cff66ff66+12.3|r on a drop: what it gains you", 0.8, 0.8, 0.8)
   GameTooltip:Show()
 end
 
@@ -369,16 +370,20 @@ end
 
 -------------------------------------------------------------------------------
 -- The list: bosses, the rares, Other loot
+--   [face] Kirtonos the Herald         [c][c]
+--          *2  +1  · 6 drops
 -------------------------------------------------------------------------------
 
 local listPool, sectionPool, listEmpty
 local detail = {}
+local STAR = H.Inline(H.ICON.star, 12)
 
 -- What a boss's drops hold for the filter: visible items, BiS and upgrade
 -- counts, and the members it has something for (strong: BiS for them).
 local function Summary(items, marks, filter)
   local me = Me()
   local visible, bis, ups, who, order = {}, 0, 0, {}, {}
+  local myBis, myUps = 0, 0
   for _, item in ipairs(items) do
     local mk = marks[item.id] or {}
     local mine = false
@@ -390,6 +395,11 @@ local function Summary(items, marks, filter)
       end
       if m.member.name == me then
         mine = true
+        if m.bis then
+          myBis = myBis + 1
+        else
+          myUps = myUps + 1
+        end
       end
       local w = who[m.member.name]
       if not w then
@@ -407,18 +417,22 @@ local function Summary(items, marks, filter)
       visible[#visible + 1] = item
     end
   end
-  return { visible = visible, bis = bis, ups = ups, who = order }
+  return { visible = visible, bis = bis, ups = ups, who = order, myBis = myBis, myUps = myUps }
 end
 
-local function CountText(sum)
+-- "*2  +1  · 6 drops": BiS (a star), upgrades (green), the drops.
+local function CountText(sum, drops)
   local parts = {}
   if sum.bis > 0 then
-    parts[#parts + 1] = "|cffffd100" .. sum.bis .. " BiS|r"
+    parts[#parts + 1] = STAR .. "|cffffd100" .. sum.bis .. "|r"
   end
   if sum.ups > 0 then
-    parts[#parts + 1] = "|cffaaaaaa" .. sum.ups .. " up|r"
+    parts[#parts + 1] = "|cff66ff66+" .. sum.ups .. "|r"
   end
-  return table.concat(parts, " ")
+  if drops then
+    parts[#parts + 1] = "|cff888888" .. drops .. (drops == 1 and " drop" or " drops") .. "|r"
+  end
+  return table.concat(parts, "  ")
 end
 
 local function WhoLines(sum)
@@ -434,6 +448,16 @@ local function WhoLines(sum)
     lines[#lines + 1] = ColorName(w.member) .. ": " .. table.concat(parts, ", ")
   end
   return lines
+end
+
+local function GearCount(items)
+  local n = 0
+  for _, item in ipairs(items) do
+    if item.loc then
+      n = n + 1
+    end
+  end
+  return n
 end
 
 -- The entries of the list, in order, with their summaries.
@@ -457,6 +481,28 @@ local function Entries(marks, filter)
   return list, rares, other
 end
 
+-- Killed in the run in progress (Clear Times keeps it).
+local function Killed(e)
+  if e.boss == OTHER then
+    return false
+  end
+  local times = H.byKey and H.byKey.times
+  return times and times.IsKilled and times:IsKilled(H.shown, e.boss.group or e.boss.name) or false
+end
+
+local function Fighting(e)
+  return tab.fighting ~= nil and e.boss ~= OTHER and (e.key == tab.fighting or e.boss.group == tab.fighting)
+end
+
+local function LinkItem(id)
+  if IsModifiedClick and IsModifiedClick("CHATLINK") then
+    local _, link = GetItemInfo(id)
+    if link and ChatEdit_InsertLink then
+      ChatEdit_InsertLink(link)
+    end
+  end
+end
+
 function tab:Create(bar, list, detailFrame)
   self.filters = H.FilterButtons(bar, {
     { key = "all", label = "All", tip = "Every gear drop" },
@@ -465,17 +511,14 @@ function tab:Create(bar, list, detailFrame)
   }, Filter, function(key)
     mod.db.filter = key
   end)
-  self.partyButton = CreateFrame("Button", nil, bar)
-  self.partyButton:SetPoint("LEFT", self.filters.last, "RIGHT", 8, 0)
-  self.partyButton:SetSize(160, 18)
-  self.partyButton.text = Kit.Text(self.partyButton, "GameFontHighlightSmall")
-  self.partyButton.text:SetPoint("LEFT")
-  S(self.partyButton, "OnEnter", PartyTooltip)
-  S(self.partyButton, "OnLeave", GameTooltip_Hide)
+  self.party = H.PartyStrip(bar)
+  self.party:SetPoint("RIGHT", 0, 0)
+  S(self.party, "OnEnter", PartyTooltip)
+  S(self.party, "OnLeave", GameTooltip_Hide)
 
   self.listFrame = list
   listPool = H.Pool(function()
-    local r = H.Row(list, BOSS_H, 18)
+    local r = H.Row(list, BOSS_H, BOSS_H - 6)
     S(r, "OnClick", function(row)
       Select(row.key)
     end)
@@ -486,43 +529,27 @@ function tab:Create(bar, list, detailFrame)
   sectionPool = H.Pool(function()
     return H.Section(list)
   end)
-  listEmpty = Kit.Text(list, "GameFontDisableSmall")
+  listEmpty = H.Empty(list)
 
-  -- Details: a big portrait and the boss's name over its drops.
+  -- Details: a banner (portrait, name, tags) over the drops.
   detail.frame = detailFrame
-  detail.portrait = detailFrame:CreateTexture(nil, "ARTWORK")
-  detail.portrait:SetSize(BIG, BIG)
-  detail.portrait:SetPoint("TOPLEFT", 4, -4)
-  detail.title = Kit.Text(detailFrame, "GameFontNormal")
-  detail.title:SetPoint("TOPLEFT", detail.portrait, "TOPRIGHT", 8, -2)
-  detail.title:SetPoint("RIGHT", -4, 0)
-  detail.title:SetWordWrap(false)
-  detail.sub = Kit.Text(detailFrame, "GameFontDisableSmall")
-  detail.sub:SetPoint("TOPLEFT", detail.title, "BOTTOMLEFT", 0, -3)
-  detail.sub:SetPoint("RIGHT", -4, 0)
-  detail.sub:SetWordWrap(false)
+  detail.banner = H.Banner(detailFrame, BIG)
   detail.items = H.Pool(function()
-    local r = H.Row(detailFrame, ITEM_H, ITEM_H - 2)
-    r.pic:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    local r = H.Row(detailFrame, ITEM_H, ITEM_H - 4)
     r.mine = r:CreateTexture(nil, "ARTWORK")
     r.mine:SetWidth(2)
-    r.mine:SetPoint("TOPLEFT", 1, -1)
-    r.mine:SetPoint("BOTTOMLEFT", 1, 1)
+    r.mine:SetPoint("TOPLEFT", 1, -2)
+    r.mine:SetPoint("BOTTOMLEFT", 1, 2)
     r.mine:SetColorTexture(0.3, 1, 0.4, 0.9)
     S(r, "OnEnter", ItemTooltip)
     S(r, "OnLeave", GameTooltip_Hide)
     S(r, "OnClick", function(row)
-      if IsModifiedClick and IsModifiedClick("CHATLINK") then
-        local _, link = GetItemInfo(row.item.id)
-        if link and ChatEdit_InsertLink then
-          ChatEdit_InsertLink(link)
-        end
-      end
+      LinkItem(row.item.id)
     end)
     return r
   end)
-  detail.note = Kit.Text(detailFrame, "GameFontDisableSmall")
-  detail.legend = Kit.Text(detailFrame, "GameFontDisableSmall")
+  detail.note = H.Empty(detailFrame)
+  detail.hint = Kit.Text(detailFrame, "GameFontDisableSmall")
 end
 
 -- What the list and the details both need, worked out once per render.
@@ -536,9 +563,11 @@ local function View()
     list, rares, other = Entries(marks, filter)
   end
   local byKey = {}
+  local myBis = 0
   for _, group in ipairs({ list, rares, other and { other } or {} }) do
     for _, e in ipairs(group) do
       byKey[e.key] = e
+      myBis = myBis + e.sum.myBis
     end
   end
   local sel = H.shown and selected[H.shown]
@@ -558,48 +587,59 @@ local function View()
     end
   end
   view = { members = members, marks = marks, filter = filter, list = list, rares = rares, other = other,
-    byKey = byKey, sel = sel }
+    byKey = byKey, sel = sel, myBis = myBis, shown = H.shown }
   return view
+end
+
+-- The tab's count: BiS drops for you in this dungeon.
+function tab:Badge()
+  local v = View()
+  if v.myBis > 0 then
+    return tostring(v.myBis), H.GOLD, H.ICON.star
+  end
 end
 
 function tab:RenderList(width)
   self.filters.Paint()
   local v = View()
-  local sharing = 0
-  for _, m in ipairs(v.members) do
+  H.PaintPartyStrip(self.party, v.members, function(m)
     local p = party[m.name]
-    if p and p.dungeon == H.shown then
-      sharing = sharing + 1
-    end
-  end
-  self.partyButton.text:SetText("Party: " .. sharing .. "/" .. #v.members .. " with ARL")
+    return p and p.dungeon == H.shown
+  end)
 
-  local y = 0
+  local y = 2
   local function Place(e)
     local r = listPool:Get()
     r.key, r.boss = e.key, e.boss
     r.who = WhoLines(e.sum)
     if e.boss == OTHER then
-      r.pic:SetTexture(BAG)
-      r.pic:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+      H.SetIcon(r.pic, BAG)
       r.portraitOf = nil
     elseif r.portraitOf ~= e.boss then
       r.portraitOf = e.boss -- (SetPortrait is slow-ish: only when the row shows another boss)
-      H.SetPortrait(r.pic, e.boss)
+      r.pic.tex:SetDesaturated(false)
+      H.SetPortrait(r.pic.tex, e.boss)
     end
     local marks = {}
     for _, w in ipairs(e.sum.who) do
       marks[#marks + 1] = { class = w.class, strong = w.strong }
     end
-    local empty = #e.sum.visible == 0
-    local fight = tab.fighting ~= nil and (e.key == tab.fighting or (e.boss ~= OTHER and e.boss.group == tab.fighting))
-    local name = (e.boss == OTHER and "Other loot" or e.boss.name)
+    local killed, fight = Killed(e), Fighting(e)
+    local sub = CountText(e.sum, #e.items)
     if fight then
-      name = "|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_8:12:12|t " .. name
+      sub = "|cffff5040fighting|r  " .. sub
     end
-    H.PaintRow(r, name, CountText(e.sum), marks, e.key == v.sel)
-    r.name:SetTextColor(empty and 0.5 or 1, empty and 0.5 or 1, empty and 0.5 or 1)
-    r.pic:SetAlpha(empty and 0.5 or 1)
+    H.PaintRow(r, {
+      name = e.boss == OTHER and "Other loot" or e.boss.name,
+      sub = sub,
+      marks = marks,
+      selected = e.key == v.sel,
+      dim = #e.sum.visible == 0,
+      tint = fight and { 1, 0.2, 0.1, 0.12 } or nil,
+    })
+    local ar, ag, ab = ARLE.Skin:Accent()
+    H.SetEdge(r.pic, ar, ag, ab, e.key == v.sel and 0.9 or 0.3)
+    H.SetCorner(r.pic, (fight and H.ICON.skull) or (killed and H.ICON.ready) or nil)
     y = H.Place(r, y, BOSS_H)
   end
   for _, e in ipairs(v.list) do
@@ -612,131 +652,173 @@ function tab:RenderList(width)
       allRare = allRare and e.boss.rare
     end
     H.PaintSection(h, allRare and "Rares" or "Rares & optional", nil, RARE_ICON)
-    y = H.Place(h, y + 4, 18)
+    y = H.Place(h, y + 6, 20, 2)
     for _, e in ipairs(v.rares) do
       Place(e)
     end
   end
   if v.other then
     local h = sectionPool:Get()
-    H.PaintSection(h, "Elsewhere in the dungeon")
-    y = H.Place(h, y + 4, 18)
+    H.PaintSection(h, "Around the dungeon")
+    y = H.Place(h, y + 6, 20, 2)
     Place(v.other)
   end
   listPool:Done()
   sectionPool:Done()
 
-  local empty = #v.list == 0 and #v.rares == 0 and not v.other
-  listEmpty:SetShown(empty)
-  if empty then
+  if #v.list == 0 and #v.rares == 0 and not v.other then
     local text
     if not FLB() then
-      text = "Bosses & Loot needs Forever Leveling BiS v1.3 or newer."
+      text = "Needs Forever Leveling BiS\n(v1.3 or newer)"
     elseif not H.shown then
-      text = "Not in a dungeon. Pick one with the v button."
+      text = "Not in a dungeon"
     else
-      text = "DungeonJournal lists no bosses here."
+      text = "No bosses listed here"
     end
-    y = H.Para(listEmpty, 6, width, text)
+    y = H.ShowEmpty(listEmpty, 8, width, text, SKULL)
+  else
+    listEmpty:Hide()
   end
   return y
 end
 
-local function MyNote(item, marks)
+-- "Head · Cloth", "Trinket", or what a non-gear drop is ("Tailoring").
+local function SlotText(item)
   if not item.loc then
-    -- Non-gear (recipes...) says what it is instead: "Tailoring", "Reagent".
     local kind = item.kind
     if kind then
       kind = kind:match("^Recipe,%s*(.+)$") or kind:match("^([^,]+)")
     end
-    return kind and ("|cff888888" .. kind .. "|r") or ""
+    return kind or ""
   end
+  local slot = _G[item.loc]
+  local _, _, subType, _, _, classID = H.GetItemInstant(item.id)
+  local parts = {}
+  if type(slot) == "string" and slot ~= "" then
+    parts[#parts + 1] = slot
+  end
+  if type(subType) == "string" and subType ~= "" and subType ~= "Miscellaneous" and subType ~= slot
+      and (classID == 2 or classID == 4) then
+    parts[#parts + 1] = subType
+  end
+  return table.concat(parts, " · ")
+end
+
+-- Your own gain from an item: note (green "+12.4"), noteSub ("best in slot"), bis.
+local function MyGain(marks)
   for _, mk in ipairs(marks) do
     if mk.member.name == Me() then
-      return (mk.bis and "|cffffd100BiS|r " or "") .. string.format("|cff66ff66+%.1f|r", mk.gain)
+      return string.format("|cff66ff66+%.1f|r", mk.gain), mk.bis and "|cffffd100best in slot|r" or "upgrade", mk.bis
     end
   end
-  return ""
 end
 
 function tab:RenderDetail(width)
   local v = view or View()
   local e = v.sel and v.byKey[v.sel]
+  local b = detail.banner
   if not e then
-    detail.portrait:Hide()
-    detail.title:Hide()
-    detail.sub:Hide()
+    b:Hide()
     detail.items:Done()
-    detail.legend:Hide()
-    local y = H.Para(detail.note, 6, width, H.shown and FLB() and "Pick a boss on the left." or "")
-    return y
+    detail.hint:Hide()
+    if H.shown and FLB() then
+      return H.ShowEmpty(detail.note, 20, width, "Pick a boss", SKULL)
+    end
+    detail.note:Hide()
+    return 1
   end
-  detail.portrait:Show()
-  detail.title:Show()
-  detail.sub:Show()
+
+  -- Banner: portrait, name, and tags.
+  b:ClearAllPoints()
+  b:SetPoint("TOPLEFT", 0, 0)
+  b:SetWidth(width)
   if e.boss == OTHER then
-    detail.portrait:SetTexture(BAG)
-    detail.portrait:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-    detail.title:SetText("Other loot")
+    H.SetIcon(b.pic, BAG)
   else
-    H.SetPortrait(detail.portrait, e.boss)
-    detail.title:SetText(e.boss.name)
+    b.pic.tex:SetDesaturated(false)
+    H.SetPortrait(b.pic.tex, e.boss)
   end
   local ar, ag, ab = ARLE.Skin:Accent()
-  detail.title:SetTextColor(ar, ag, ab)
-  local sub = {}
+  H.SetEdge(b.pic, ar, ag, ab, 0.8)
+  local tags = {}
+  local fight, killed = Fighting(e), Killed(e)
+  if fight then
+    tags[#tags + 1] = { text = "Fighting", color = { 1, 0.35, 0.25 }, icon = H.ICON.skull }
+  elseif killed then
+    tags[#tags + 1] = { text = "Killed", color = H.GREEN, icon = H.ICON.ready,
+      tip = { "Killed", "Down in this run (Clear Times)." } }
+  end
   if e.boss ~= OTHER and e.boss.rare then
-    sub[#sub + 1] = "Rare: may not spawn"
+    tags[#tags + 1] = { text = "Rare", color = { 0.75, 0.8, 0.9 }, tip = { "Rare", "May not spawn in every run." } }
   elseif e.boss ~= OTHER and e.boss.optional then
-    sub[#sub + 1] = "Optional: summoned or brought by a quest"
+    tags[#tags + 1] = { text = "Optional", color = { 0.75, 0.8, 0.9 },
+      tip = { "Optional", "Summoned, or brought by a quest: a clear doesn't need it." } }
   end
-  local gear = 0
-  for _, item in ipairs(e.items) do
-    if item.loc then
-      gear = gear + 1
-    end
+  local gear = GearCount(e.items)
+  tags[#tags + 1] = { text = gear .. (gear == 1 and " drop" or " drops"), color = H.GREY }
+  if e.sum.bis > 0 then
+    tags[#tags + 1] = { text = e.sum.bis .. " BiS", color = H.GOLD, icon = H.ICON.star,
+      tip = { "Best in slot", "Drops that are the best this dungeon has for that slot, for someone in the party." } }
   end
-  sub[#sub + 1] = gear .. " gear drop(s)"
-  local counts = CountText(e.sum)
-  if counts ~= "" then
-    sub[#sub + 1] = counts
+  if e.sum.ups > 0 then
+    tags[#tags + 1] = { text = "+" .. e.sum.ups .. " upgrade" .. (e.sum.ups == 1 and "" or "s"), color = H.GREEN,
+      tip = { "Upgrades", "Drops that gain someone in the party something, but aren't their best here." } }
   end
-  detail.sub:SetText(table.concat(sub, "  ·  "))
+  H.PaintBanner(b, e.boss == OTHER and "Other loot" or e.boss.name, nil, tags)
+  b.pic:SetAlpha(1)
 
-  local y = BIG + 10
+  local y = H.BANNER_H + 6
   local me = Me()
   for _, item in ipairs(e.sum.visible) do
     local r = detail.items:Get()
     local mk = v.marks[item.id] or {}
     r.item, r.marks = item, mk
-    r.pic:SetTexture(GetItemIcon(item.id) or 134400)
+    H.SetItemPic(r.pic, item.id, item.quality)
     local marks, helpsMe = {}, false
     for _, m in ipairs(mk) do
-      marks[#marks + 1] = { class = m.member.class, strong = m.bis }
+      if m.member.name ~= me then
+        marks[#marks + 1] = { class = m.member.class, strong = m.bis }
+      end
       helpsMe = helpsMe or m.member.name == me
     end
-    H.PaintRow(r, (GetItemInfo(item.id)) or item.name or ("item " .. item.id), MyNote(item, mk), marks, false)
-    r.name:SetTextColor(H.QualityColor(item.quality))
+    local note, noteSub, mineBis = MyGain(mk)
+    local sub = SlotText(item)
+    if item.sources and #item.sources > 0 then
+      sub = (sub ~= "" and (sub .. "  ·  ") or "") .. item.sources[1] .. (#item.sources > 1 and " +" .. (#item.sources - 1) or "")
+    end
+    local qr, qg, qb = H.QualityColor(item.quality)
+    H.PaintRow(r, {
+      name = (GetItemInfo(item.id)) or item.name or ("item " .. item.id),
+      sub = sub,
+      note = note,
+      noteSub = noteSub,
+      marks = marks,
+      color = { qr, qg, qb },
+      tint = helpsMe and { 0.3, 1, 0.4, 0.05 } or nil,
+    })
+    H.SetCorner(r.pic, mineBis and H.ICON.star or nil)
     r.mine:SetShown(helpsMe)
-    y = H.Place(r, y, ITEM_H, 0)
+    y = H.Place(r, y, ITEM_H, 2)
   end
   detail.items:Done()
+
   local hidden = #e.items - #e.sum.visible
-  if hidden > 0 or #e.sum.visible == 0 then
-    local text = #e.sum.visible == 0 and (#e.items == 0 and "No gear listed for this boss."
-      or "Nothing here for " .. (v.filter == "mine" and "you" or "the party") .. ".")
-      or (hidden .. " more hidden by the filter.")
-    if hidden > 0 and #e.sum.visible == 0 then
-      text = text .. " " .. hidden .. " drop(s) hidden by the filter: try All."
+  if #e.sum.visible == 0 then
+    local text = #e.items == 0 and "No gear listed"
+      or ("Nothing for " .. (v.filter == "mine" and "you" or "the party") .. " here")
+    if hidden > 0 then
+      text = text .. "\n|cff888888" .. hidden .. " more under All|r"
     end
-    y = H.Para(detail.note, y + 4, width, text)
+    y = H.ShowEmpty(detail.note, y + 4, width, text, BAG)
+    detail.hint:Hide()
+  elseif hidden > 0 then
+    detail.note:Hide()
+    y = H.Para(detail.hint, y + 4, width, hidden .. " more under All")
   else
     detail.note:Hide()
+    detail.hint:Hide()
   end
-  y = H.Para(detail.legend, y + 6, width, "Squares: ARL members in the party. |cffffd100Gold edge|r: BiS from "
-    .. "this dungeon for that slot; plain: an upgrade. Green bar and number: what it gains you. Hover an item "
-    .. "for everyone's numbers.")
-  return y
+  return y + 4
 end
 
 function tab:Status()

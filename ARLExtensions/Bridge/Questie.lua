@@ -33,6 +33,7 @@ local function Get(entity, id, field)
   if ok then
     return value
   end
+  return nil -- (one value always: tonumber(DB.Quest(...)) throws on none)
 end
 DB.Get = Get
 

@@ -57,7 +57,7 @@ local mod = {
     hideInCombat = true,
     openOnPull = true,
     openOnKill = true,
-    maxHeight = 420,
+    maxHeight = 540,
     tab = "bis",
     showShared = true,
     showOther = true,
@@ -112,7 +112,7 @@ local mod = {
       tooltip = "When a boss dies inside a dungeon, opens Bosses & Loot on that boss (even if you closed or folded "
         .. "the window), so you can see what it drops and who it's for while the loot is rolled.",
     },
-    { key = "maxHeight", type = "number", label = "Window height (200-800)", min = 200, max = 800 },
+    { key = "maxHeight", type = "number", label = "Window height (300-900)", min = 300, max = 900 },
     {
       key = "tab",
       type = "select",
@@ -176,8 +176,8 @@ local mod = {
       page = "times",
       key = "timerInTitle",
       type = "boolean",
-      label = "Show the running time in the title bar",
-      tooltip = "Visible on every tab, and when the window is folded.",
+      label = "Show the running time on the window",
+      tooltip = "In the dungeon banner on every tab, and in the title bar when the window is folded.",
     },
     {
       page = "times",
@@ -208,6 +208,7 @@ H.FLB = ARLE.Bridge.FLB
 local GetItemInfoInstant = (C_Item and C_Item.GetItemInfoInstant) or _G.GetItemInfoInstant
 H.GetItemInfo = (C_Item and C_Item.GetItemInfo) or _G.GetItemInfo
 H.GetItemIcon = (C_Item and C_Item.GetItemIconByID) or _G.GetItemIcon
+H.GetItemInstant = GetItemInfoInstant
 
 local function EquipLoc(itemID)
   local _, _, _, loc, _, classID = GetItemInfoInstant(itemID)
@@ -664,43 +665,180 @@ function H.Tip(frame, title, text)
   H.Script(frame, "OnLeave", GameTooltip_Hide)
 end
 
+
 -------------------------------------------------------------------------------
--- Row widgets, the same in every tab and both panes:
---   H.Section(parent)  a section header: accent label left, a note right
---   H.Row(parent, h)   a clickable row: a picture (portrait or icon), a
---                      name, a note on the right, and member marks (small
---                      class-coloured squares: gold-edged = strong, faded =
---                      weak). row.selected draws the accent bar on its left.
--- Lists keep their rows in a pool and Place them top to bottom.
+-- Widgets, the same in every tab and both panes. The look is ARL's flat skin
+-- (1px edges, the accent colour) with the game's own art for what a player
+-- reads at a glance: boss portraits, item icons edged in their quality
+-- colour, class icons, quest marks, the raid-target star. Words go into
+-- tooltips; the rows carry pictures, numbers and short tags.
+--   H.Edge(frame)          a 1px edge around a frame (H.SetEdge recolours it)
+--   H.Pic(parent, size)    a framed picture: portrait, item or quest icon,
+--                          with an optional corner mark and a bottom label
+--   H.Section(parent)      a section header: accent label, a rule, a note
+--   H.Row(parent, h, pic)  a clickable row: picture, name over a sub line (or
+--                          a progress bar), a note (and a line under it) on
+--                          the right, and member marks: class icons, gold-
+--                          edged = strong (BiS, ready), faded = weak
+--   H.Bar(parent)          a thin progress bar
+--   H.Badge(parent)        a small tag: tinted fill, optional icon, text
+--   H.Tile(parent)         a stat tile: a big value over a small label
+--   H.Banner(parent)       the details' header: big picture, title, tags
+-- Lists keep their widgets in a pool and Place them top to bottom.
 -------------------------------------------------------------------------------
 
-H.MARK, H.MAX_MARKS = 8, 5
+H.MARK, H.MAX_MARKS = 14, 5
+
+-- Art from the game (every client has these).
+H.ICON = {
+  star = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_1",
+  skull = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8",
+  bossSkull = "Interface\\TargetingFrame\\UI-TargetingFrame-Skull",
+  ready = "Interface\\RaidFrame\\ReadyCheck-Ready",
+  waiting = "Interface\\RaidFrame\\ReadyCheck-Waiting",
+  no = "Interface\\RaidFrame\\ReadyCheck-NotReady",
+  available = "Interface\\GossipFrame\\AvailableQuestIcon",
+  active = "Interface\\GossipFrame\\ActiveQuestIcon",
+  lock = "Interface\\PetBattles\\PetBattle-LockIcon",
+  dungeon = "Interface\\Minimap\\Dungeon",
+  watch = "Interface\\Icons\\INV_Misc_PocketWatch_01",
+  bag = "Interface\\Icons\\INV_Misc_Bag_10",
+  scroll = "Interface\\Icons\\INV_Misc_Note_01",
+}
+
+-- Inline art for a FontString: |T...|t.
+function H.Inline(path, size)
+  size = size or 12
+  return "|T" .. path .. ":" .. size .. ":" .. size .. "|t"
+end
+
+local GREEN, GOLD, GREY = { 0.4, 1, 0.45 }, { 1, 0.82, 0 }, { 0.6, 0.6, 0.6 }
+H.GREEN, H.GOLD, H.GREY = GREEN, GOLD, GREY
+
+local EDGES = {
+  { "TOPLEFT", "TOPRIGHT", false },
+  { "BOTTOMLEFT", "BOTTOMRIGHT", false },
+  { "TOPLEFT", "BOTTOMLEFT", true },
+  { "TOPRIGHT", "BOTTOMRIGHT", true },
+}
+
+function H.Edge(frame, layer)
+  frame.edge = {}
+  for i, e in ipairs(EDGES) do
+    local t = frame:CreateTexture(nil, layer or "BORDER")
+    t:SetPoint(e[1])
+    t:SetPoint(e[2])
+    if e[3] then
+      t:SetWidth(1)
+    else
+      t:SetHeight(1)
+    end
+    frame.edge[i] = t
+  end
+  H.SetEdge(frame, 0, 0, 0, 1)
+end
+
+function H.SetEdge(frame, r, g, b, a)
+  for _, t in ipairs(frame.edge or {}) do
+    t:SetColorTexture(r, g, b, a or 1)
+  end
+end
+
+-- Class icon (the character-creation sheet), or a class-coloured square on
+-- a client without the coordinates.
+local CLASS_SHEET = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes"
+function H.SetClassIcon(tex, class)
+  local c = class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[class]
+  if c then
+    tex:SetTexture(CLASS_SHEET)
+    tex:SetTexCoord(c[1] + 0.015, c[2] - 0.015, c[3] + 0.015, c[4] - 0.015)
+  else
+    tex:SetTexCoord(0, 1, 0, 1)
+    tex:SetColorTexture(H.ClassColor(class))
+  end
+end
+
+-- A framed picture. pic.tex is the texture (H.SetPortrait works on it);
+-- pic.corner a small mark at the bottom right; pic.label a line over the
+-- bottom edge.
+function H.Pic(parent, size)
+  local p = CreateFrame("Frame", nil, parent)
+  p:SetSize(size, size)
+  p.back = p:CreateTexture(nil, "BACKGROUND")
+  p.back:SetAllPoints()
+  p.back:SetColorTexture(0, 0, 0, 0.6)
+  p.tex = p:CreateTexture(nil, "ARTWORK")
+  p.tex:SetPoint("TOPLEFT", 1, -1)
+  p.tex:SetPoint("BOTTOMRIGHT", -1, 1)
+  H.Edge(p, "OVERLAY")
+  p.corner = p:CreateTexture(nil, "OVERLAY", nil, 2)
+  local c = math.max(math.floor(size * 0.45), 10)
+  p.corner:SetSize(c, c)
+  p.corner:SetPoint("BOTTOMRIGHT", 3, -3)
+  p.corner:Hide()
+  p.label = Kit.Text(p, "NumberFontNormalSmall")
+  p.label:SetPoint("BOTTOMRIGHT", -1, 2)
+  p.label:SetJustifyH("RIGHT")
+  return p
+end
+
+-- An icon (item, spell, quest mark) in the picture, trimmed of its border.
+function H.SetIcon(pic, path, trim)
+  pic.tex:SetDesaturated(false)
+  pic.tex:SetVertexColor(1, 1, 1)
+  pic.tex:SetTexture(path or 134400)
+  if trim == false then
+    pic.tex:SetTexCoord(0, 1, 0, 1)
+  else
+    pic.tex:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+  end
+end
+
+-- An item's icon, edged in its quality colour.
+function H.SetItemPic(pic, itemID, quality)
+  H.SetIcon(pic, H.GetItemIcon(itemID) or 134400)
+  local r, g, b = H.QualityColor(quality or 1)
+  H.SetEdge(pic, r, g, b, 0.9)
+end
+
+function H.SetCorner(pic, path)
+  if path then
+    pic.corner:SetTexture(path)
+    pic.corner:Show()
+  else
+    pic.corner:Hide()
+  end
+end
+
+-------------------------------------------------------------------------------
+-- Section header: LABEL ───────────── note
+-------------------------------------------------------------------------------
 
 function H.Section(parent)
   local h = CreateFrame("Button", nil, parent)
-  h:SetHeight(18)
-  h.bg = h:CreateTexture(nil, "BACKGROUND")
-  h.bg:SetAllPoints()
+  h:SetHeight(20)
   h.icon = h:CreateTexture(nil, "ARTWORK")
   h.icon:SetSize(14, 14)
   h.icon:SetPoint("LEFT", 4, 0)
   h.icon:Hide()
-  h.label = Kit.Text(h, "GameFontNormalSmall")
-  h.label:SetPoint("LEFT", 6, 0)
+  h.label = Kit.Text(h, "GameFontNormal")
   h.label:SetWordWrap(false)
   h.note = Kit.Text(h, "GameFontHighlightSmall")
   h.note:SetPoint("RIGHT", -4, 0)
   h.note:SetJustifyH("RIGHT")
-  h.label:SetPoint("RIGHT", h.note, "LEFT", -4, 0)
+  h.rule = h:CreateTexture(nil, "ARTWORK")
+  h.rule:SetHeight(1)
+  h.rule:SetPoint("LEFT", h.label, "RIGHT", 6, 0)
+  h.rule:SetPoint("RIGHT", h.note, "LEFT", -6, 0)
   return h
 end
 
--- label, note, icon (texture path, atlas or nil)
+-- label, note, icon (texture path, "atlas:<name>" or nil)
 function H.PaintSection(h, label, note, icon)
   local ar, ag, ab = ARLE.Skin:Accent()
-  h.bg:SetColorTexture(ar, ag, ab, 0.1)
   h.label:SetText(label)
   h.label:SetTextColor(ar, ag, ab)
+  h.rule:SetColorTexture(ar, ag, ab, 0.3)
   h.note:SetText(note or "")
   h.label:ClearAllPoints()
   if icon then
@@ -710,13 +848,168 @@ function H.PaintSection(h, label, note, icon)
       local path = type(icon) == "string" and (icon:gsub("^atlas:", "")) or icon
       h.icon:SetTexture(path)
     end
-    h.label:SetPoint("LEFT", h.icon, "RIGHT", 3, 0)
+    h.label:SetPoint("LEFT", h.icon, "RIGHT", 4, 0)
   else
     h.icon:Hide()
-    h.label:SetPoint("LEFT", 6, 0)
+    h.label:SetPoint("LEFT", 4, 0)
   end
-  h.label:SetPoint("RIGHT", h.note, "LEFT", -4, 0)
 end
+
+-------------------------------------------------------------------------------
+-- Progress bar
+-------------------------------------------------------------------------------
+
+function H.Bar(parent)
+  local b = CreateFrame("Frame", nil, parent)
+  b:SetSize(60, 5)
+  b.back = b:CreateTexture(nil, "BACKGROUND")
+  b.back:SetAllPoints()
+  b.back:SetColorTexture(1, 1, 1, 0.1)
+  b.fill = b:CreateTexture(nil, "ARTWORK")
+  b.fill:SetPoint("TOPLEFT")
+  b.fill:SetPoint("BOTTOMLEFT")
+  return b
+end
+
+-- value/max filled, in r, g, b (the accent when not given).
+function H.SetBar(b, value, max, r, g, b2)
+  local frac = (max and max > 0) and math.min(math.max((value or 0) / max, 0), 1) or 0
+  if not r then
+    r, g, b2 = ARLE.Skin:Accent()
+  end
+  b.fill:SetColorTexture(r, g, b2, 0.9)
+  b.fill:SetWidth(math.max((b.width or b:GetWidth() or 0) * frac, 0.01))
+  b.fill:SetShown(frac > 0)
+end
+
+-------------------------------------------------------------------------------
+-- Badge: a small tag
+-------------------------------------------------------------------------------
+
+function H.Badge(parent)
+  local b = CreateFrame("Frame", nil, parent)
+  b:SetHeight(16)
+  b.bg = b:CreateTexture(nil, "BACKGROUND")
+  b.bg:SetAllPoints()
+  b.icon = b:CreateTexture(nil, "ARTWORK")
+  b.icon:SetSize(12, 12)
+  b.icon:SetPoint("LEFT", 3, 0)
+  b.text = Kit.Text(b, "GameFontHighlightSmall")
+  b.text:SetWordWrap(false)
+  return b
+end
+
+-- spec = { text, color = {r,g,b}, icon, tip = {title, text} }. Returns its width.
+function H.PaintBadge(b, spec)
+  local c = spec.color or GREY
+  b.bg:SetColorTexture(c[1], c[2], c[3], 0.16)
+  b.text:SetTextColor(c[1], c[2], c[3])
+  b.text:SetText(spec.text or "")
+  b.text:ClearAllPoints()
+  if spec.icon then
+    b.icon:SetTexture(spec.icon)
+    b.icon:Show()
+    b.text:SetPoint("LEFT", b.icon, "RIGHT", 2, 0)
+  else
+    b.icon:Hide()
+    b.text:SetPoint("LEFT", 5, 0)
+  end
+  local w = math.ceil((b.text:GetStringWidth() or 20) + (spec.icon and 22 or 10))
+  b:SetWidth(w)
+  b.tip = spec.tip
+  b:EnableMouse(spec.tip ~= nil)
+  if spec.tip and not b.tipSet then
+    b.tipSet = true
+    H.Tip(b, function(self)
+      return self.tip and self.tip[1] or ""
+    end, function(self)
+      return self.tip and self.tip[2]
+    end)
+  end
+  b:Show()
+  return w
+end
+
+-- Lays badges left to right from a point; returns the pool's count used.
+function H.LayBadges(pool, anchor, point, relPoint, x, y, specs, maxWidth)
+  local used, prev = 0, nil
+  for _, spec in ipairs(specs or {}) do
+    local b = pool:Get()
+    local w = H.PaintBadge(b, spec)
+    b:ClearAllPoints()
+    if prev then
+      b:SetPoint("LEFT", prev, "RIGHT", 4, 0)
+    else
+      b:SetPoint(point, anchor, relPoint, x, y)
+    end
+    used = used + w + 4
+    if maxWidth and used > maxWidth then
+      b:Hide()
+    end
+    prev = b
+  end
+  return used
+end
+
+-------------------------------------------------------------------------------
+-- Stat tile: a big value over a small label
+-------------------------------------------------------------------------------
+
+function H.Tile(parent)
+  local t = CreateFrame("Frame", nil, parent)
+  t:SetHeight(42)
+  t.bg = t:CreateTexture(nil, "BACKGROUND")
+  t.bg:SetAllPoints()
+  H.Edge(t)
+  t.value = Kit.Text(t, "GameFontHighlightLarge")
+  t.value:SetPoint("TOP", 0, -6)
+  t.value:SetJustifyH("CENTER")
+  t.label = Kit.Text(t, "GameFontDisableSmall")
+  t.label:SetPoint("BOTTOM", 0, 5)
+  t.label:SetJustifyH("CENTER")
+  return t
+end
+
+-- tiles = { {value, label, color, tip}, ... } in one row: y = Tiles(pool, y, width, tiles)
+function H.Tiles(pool, y, width, tiles)
+  local n = #tiles
+  if n == 0 then
+    return y
+  end
+  local ar, ag, ab = ARLE.Skin:Accent()
+  local gap = 4
+  local w = (width - 12 - (n - 1) * gap) / n
+  for i, spec in ipairs(tiles) do
+    local t = pool:Get()
+    t:ClearAllPoints()
+    t:SetPoint("TOPLEFT", 6 + (i - 1) * (w + gap), -y)
+    t:SetWidth(w)
+    t.bg:SetColorTexture(ar, ag, ab, spec.strong and 0.14 or 0.06)
+    H.SetEdge(t, ar, ag, ab, spec.strong and 0.5 or 0.18)
+    t.value:SetText(spec.value or "")
+    local c = spec.color
+    t.value:SetTextColor(c and c[1] or 1, c and c[2] or 1, c and c[3] or 1)
+    t.label:SetText(spec.label or "")
+    t.label:SetWidth(w - 6)
+    t.label:SetWordWrap(false)
+    t.tip = spec.tip
+    t:EnableMouse(spec.tip ~= nil)
+    if spec.tip and not t.tipSet then
+      t.tipSet = true
+      H.Tip(t, function(self)
+        return self.tip and self.tip[1] or ""
+      end, function(self)
+        return self.tip and self.tip[2]
+      end)
+    end
+    t:Show()
+  end
+  return y + 42 + 6
+end
+
+-------------------------------------------------------------------------------
+-- Rows
+-------------------------------------------------------------------------------
 
 function H.Row(parent, height, picture)
   local r = CreateFrame("Button", nil, parent)
@@ -730,66 +1023,170 @@ function H.Row(parent, height, picture)
   r.bar:SetPoint("TOPLEFT", 0, 0)
   r.bar:SetPoint("BOTTOMLEFT", 0, 0)
   r.bar:Hide()
-  r.pic = r:CreateTexture(nil, "ARTWORK")
-  r.pic:SetSize(picture or (height - 2), picture or (height - 2))
-  r.pic:SetPoint("LEFT", 5, 0)
-  r.name = Kit.Text(r, "GameFontHighlightSmall")
-  r.name:SetPoint("LEFT", r.pic, "RIGHT", 4, 0)
+  local size = picture or (height - 6)
+  r.pic = H.Pic(r, size)
+  r.pic:SetPoint("LEFT", 6, 0)
+  r.name = Kit.Text(r, height >= 26 and "GameFontHighlight" or "GameFontHighlightSmall")
   r.name:SetWordWrap(false)
-  r.note = Kit.Text(r, "GameFontHighlightSmall")
+  r.sub = Kit.Text(r, "GameFontDisableSmall")
+  r.sub:SetWordWrap(false)
+  r.note = Kit.Text(r, height >= 26 and "GameFontHighlight" or "GameFontHighlightSmall")
   r.note:SetJustifyH("RIGHT")
-  r.squares = {}
+  r.noteSub = Kit.Text(r, "GameFontDisableSmall")
+  r.noteSub:SetJustifyH("RIGHT")
+  r.markIcons = {}
   for k = 1, H.MAX_MARKS do
     local edge = r:CreateTexture(nil, "ARTWORK")
     edge:SetSize(H.MARK + 2, H.MARK + 2)
-    edge:SetPoint("RIGHT", -(4 + (k - 1) * (H.MARK + 4)), 0)
+    edge:SetPoint("RIGHT", -(6 + (k - 1) * (H.MARK + 4)), 0)
     edge:SetColorTexture(1, 0.82, 0, 1)
-    local fill = r:CreateTexture(nil, "OVERLAY")
-    fill:SetSize(H.MARK, H.MARK)
-    fill:SetPoint("CENTER", edge, "CENTER")
-    r.squares[k] = { edge = edge, fill = fill }
+    local icon = r:CreateTexture(nil, "OVERLAY")
+    icon:SetSize(H.MARK, H.MARK)
+    icon:SetPoint("CENTER", edge, "CENTER")
+    r.markIcons[k] = { edge = edge, icon = icon }
   end
   r.more = Kit.Text(r, "GameFontDisableSmall")
-  r.more:SetPoint("RIGHT", -(4 + H.MAX_MARKS * (H.MARK + 4)), 0)
+  r.more:SetPoint("RIGHT", -(6 + H.MAX_MARKS * (H.MARK + 4)), 0)
   r.hl = r:CreateTexture(nil, "HIGHLIGHT")
   r.hl:SetAllPoints()
-  r.hl:SetColorTexture(1, 1, 1, 0.07)
+  r.hl:SetColorTexture(1, 1, 1, 0.06)
   return r
 end
 
--- marks = { {class, strong, weak}, ... }; note = right-hand text. Lays the
--- name out between the picture and whatever is on the right.
-function H.PaintRow(r, name, note, marks, selected)
+-- o = {
+--   name, sub, note, noteSub,       texts (sub: under the name; noteSub: under the note)
+--   color = {r,g,b},                the name's colour (white)
+--   marks = { {class, strong, weak}, ... },
+--   progress = {have, need, r,g,b}, a bar under the name, the sub after it
+--   selected, dim,                  the accent bar and tint; faded
+--   tint = {r,g,b,a},               a background tint when not selected
+-- }
+function H.PaintRow(r, o)
   local ar, ag, ab = ARLE.Skin:Accent()
-  r.name:SetText(name or "")
-  marks = marks or {}
+  local marks = o.marks or {}
   local n = math.min(#marks, H.MAX_MARKS)
   for k = 1, H.MAX_MARKS do
-    local sq, mk = r.squares[k], marks[k]
+    local sq, mk = r.markIcons[k], marks[k]
     if mk and k <= n then
-      local cr, cg, cb = H.ClassColor(mk.class)
-      sq.fill:SetColorTexture(cr, cg, cb, 1)
-      sq.fill:SetAlpha(mk.weak and 0.35 or (mk.strong and 1 or 0.6))
-      sq.fill:Show()
+      H.SetClassIcon(sq.icon, mk.class)
+      sq.icon:SetDesaturated(mk.weak and true or false)
+      sq.icon:SetAlpha(mk.weak and 0.45 or 1)
+      sq.icon:Show()
       sq.edge:SetShown(mk.strong and true or false)
     else
-      sq.fill:Hide()
+      sq.icon:Hide()
       sq.edge:Hide()
     end
   end
   local extra = #marks - n
   r.more:SetText(extra > 0 and ("+" .. extra) or "")
-  local right = 4 + n * (H.MARK + 4) + (extra > 0 and 14 or 0)
+  local right = 6 + n * (H.MARK + 4) + (extra > 0 and 16 or 0) + (n > 0 and 2 or 0)
+
+  local two = (o.sub and o.sub ~= "") or o.progress ~= nil
+  local noteTwo = o.noteSub and o.noteSub ~= ""
+  r.note:SetText(o.note or "")
+  r.noteSub:SetText(o.noteSub or "")
   r.note:ClearAllPoints()
-  r.note:SetPoint("RIGHT", r, "RIGHT", -right, 0)
-  r.note:SetText(note or "")
+  r.note:SetPoint("RIGHT", r, "RIGHT", -right, noteTwo and 6 or 0)
+  r.noteSub:ClearAllPoints()
+  r.noteSub:SetPoint("RIGHT", r, "RIGHT", -right, -7)
+  r.noteSub:SetShown(noteTwo and true or false)
+  local noteW = math.max(r.note:GetStringWidth() or 0, noteTwo and (r.noteSub:GetStringWidth() or 0) or 0)
+  local nameRight = right + (noteW > 0 and (noteW + 8) or 2)
+
+  r.name:SetText(o.name or "")
   r.name:ClearAllPoints()
-  r.name:SetPoint("LEFT", r.pic, "RIGHT", 4, 0)
-  r.name:SetPoint("RIGHT", r.note, "LEFT", -4, 0)
+  r.name:SetPoint("LEFT", r.pic, "RIGHT", 7, two and 7 or 0)
+  r.name:SetPoint("RIGHT", r, "RIGHT", -nameRight, two and 7 or 0)
+  local c = o.color
+  local fade = o.dim and 0.55 or 1
+  r.name:SetTextColor((c and c[1] or 1) * fade, (c and c[2] or 1) * fade, (c and c[3] or 1) * fade)
+
+  r.sub:ClearAllPoints()
+  if o.progress then
+    if not r.prog then
+      r.prog = H.Bar(r)
+    end
+    local p = o.progress
+    r.prog:ClearAllPoints()
+    r.prog:SetPoint("LEFT", r.pic, "RIGHT", 7, -7)
+    r.prog:SetWidth(56)
+    r.prog:Show()
+    H.SetBar(r.prog, p[1], p[2], p[3], p[4], p[5])
+    r.sub:SetPoint("LEFT", r.prog, "RIGHT", 5, 0)
+  else
+    if r.prog then
+      r.prog:Hide()
+    end
+    r.sub:SetPoint("LEFT", r.pic, "RIGHT", 7, -7)
+  end
+  r.sub:SetPoint("RIGHT", r, "RIGHT", -nameRight, -7)
+  r.sub:SetText(o.sub or "")
+  r.sub:SetShown(two and true or false)
+
+  r.pic:SetAlpha(o.dim and 0.55 or 1)
+  r.pic.tex:SetDesaturated(o.dim and true or false)
   r.bar:SetColorTexture(ar, ag, ab, 1)
-  r.bar:SetShown(selected and true or false)
-  r.bg:SetColorTexture(ar, ag, ab, selected and 0.14 or 0)
+  r.bar:SetShown(o.selected and true or false)
+  if o.selected then
+    r.bg:SetColorTexture(ar, ag, ab, 0.16)
+  elseif o.tint then
+    r.bg:SetColorTexture(o.tint[1], o.tint[2], o.tint[3], o.tint[4] or 0.08)
+  else
+    r.bg:SetColorTexture(0, 0, 0, 0)
+  end
 end
+
+-------------------------------------------------------------------------------
+-- Banner: the details' header
+--   [picture] Title
+--             [tag] [tag] [tag]
+-------------------------------------------------------------------------------
+
+H.BANNER_H = 60
+
+function H.Banner(parent, size)
+  local b = CreateFrame("Frame", nil, parent)
+  b:SetHeight(H.BANNER_H)
+  b.bg = b:CreateTexture(nil, "BACKGROUND")
+  b.bg:SetAllPoints()
+  b.line = b:CreateTexture(nil, "ARTWORK")
+  b.line:SetHeight(1)
+  b.line:SetPoint("BOTTOMLEFT")
+  b.line:SetPoint("BOTTOMRIGHT")
+  b.pic = H.Pic(b, size or 48)
+  b.pic:SetPoint("LEFT", 6, 0)
+  b.title = Kit.Text(b, "GameFontNormalLarge")
+  b.title:SetPoint("TOPLEFT", b.pic, "TOPRIGHT", 9, -3)
+  b.title:SetWordWrap(false)
+  b.badges = H.Pool(function()
+    return H.Badge(b)
+  end)
+  return b
+end
+
+-- title, color ({r,g,b}; the accent when nil), badges (specs), rightInset
+-- (room kept for buttons at the top right). The picture is the caller's.
+function H.PaintBanner(b, title, color, badges, rightInset)
+  local ar, ag, ab = ARLE.Skin:Accent()
+  b.bg:SetColorTexture(ar, ag, ab, 0.07)
+  b.line:SetColorTexture(ar, ag, ab, 0.35)
+  b.title:SetText(title or "")
+  b.title:SetPoint("RIGHT", b, "RIGHT", -(rightInset or 6), 0)
+  if color then
+    b.title:SetTextColor(color[1], color[2], color[3])
+  else
+    b.title:SetTextColor(ar, ag, ab)
+  end
+  local maxW = (b:GetWidth() or 300) - (b.pic:GetWidth() or 48) - 20
+  H.LayBadges(b.badges, b.pic, "BOTTOMLEFT", "BOTTOMRIGHT", 9, 4, badges, maxW)
+  b.badges:Done()
+  b:Show()
+end
+
+-------------------------------------------------------------------------------
+-- Layout
+-------------------------------------------------------------------------------
 
 -- Places frames top to bottom in a pane: y = Place(frame, y, height, gap).
 function H.Place(frame, y, height, gap)
@@ -822,14 +1219,88 @@ function H.Pool(make)
   return pool
 end
 
--- A paragraph of text in a pane: y = Para(fs, y, width, text). The width is
--- set outright, so the height is right before the pane is laid out.
-function H.Para(fs, y, width, text, gap)
+-- A paragraph of text in a pane: y = Para(fs, y, width, text, gap, indent).
+-- The width is set outright, so the height is right before the pane is laid
+-- out.
+function H.Para(fs, y, width, text, gap, indent)
+  indent = indent or 6
   fs:ClearAllPoints()
-  fs:SetPoint("TOPLEFT", 6, -y)
-  fs:SetWidth(math.max(width - 12, 20))
+  fs:SetPoint("TOPLEFT", indent, -y)
+  fs:SetWidth(math.max(width - indent - 6, 20))
   fs:SetWordWrap(true)
   fs:SetText(text or "")
   fs:Show()
   return y + math.max(fs:GetStringHeight() or 12, 12) + (gap or 4)
+end
+
+-- An empty pane's message: a faded picture over a short line.
+function H.Empty(parent)
+  local e = CreateFrame("Frame", nil, parent)
+  e:SetHeight(90)
+  e.icon = e:CreateTexture(nil, "ARTWORK")
+  e.icon:SetSize(36, 36)
+  e.icon:SetPoint("TOP", 0, -14)
+  e.icon:SetAlpha(0.35)
+  e.icon:SetDesaturated(true)
+  e.text = Kit.Text(e, "GameFontDisable")
+  e.text:SetPoint("TOP", e.icon, "BOTTOM", 0, -8)
+  e.text:SetJustifyH("CENTER")
+  return e
+end
+
+-- y = ShowEmpty(e, y, width, text, icon)
+function H.ShowEmpty(e, y, width, text, icon)
+  e.icon:SetTexture(icon or H.ICON.bossSkull)
+  e.text:SetWidth(math.max(width - 24, 40))
+  e.text:SetText(text or "")
+  e:ClearAllPoints()
+  e:SetPoint("TOPLEFT", 0, -y)
+  e:SetPoint("RIGHT")
+  e:SetHeight(14 + 36 + 8 + (e.text:GetStringHeight() or 12) + 10)
+  e:Show()
+  return y + e:GetHeight()
+end
+
+-------------------------------------------------------------------------------
+-- Party strip (toolbars): "Party [c][c][c][c][c]", members with ARL in full
+-- colour, the others faded. The tab gives the tooltip.
+-------------------------------------------------------------------------------
+
+function H.PartyStrip(parent)
+  local f = CreateFrame("Button", nil, parent)
+  f:SetSize(150, 20)
+  f.label = Kit.Text(f, "GameFontDisableSmall")
+  f.label:SetPoint("LEFT")
+  f.label:SetText("Party")
+  f.icons = {}
+  for k = 1, 5 do
+    local edge = f:CreateTexture(nil, "ARTWORK")
+    edge:SetSize(18, 18)
+    edge:SetPoint("LEFT", f.label, "RIGHT", 6 + (k - 1) * 21, 0)
+    local icon = f:CreateTexture(nil, "OVERLAY")
+    icon:SetSize(16, 16)
+    icon:SetPoint("CENTER", edge, "CENTER")
+    f.icons[k] = { edge = edge, icon = icon }
+  end
+  return f
+end
+
+-- has(member) -> true when that member shares (runs ARL).
+function H.PaintPartyStrip(f, members, has)
+  local ar, ag, ab = ARLE.Skin:Accent()
+  for k, slot in ipairs(f.icons) do
+    local m = members[k]
+    if m then
+      local on = has(m) and true or false
+      H.SetClassIcon(slot.icon, m.class)
+      slot.icon:SetDesaturated(not on)
+      slot.icon:SetAlpha(on and 1 or 0.35)
+      slot.edge:SetColorTexture(ar, ag, ab, on and 0.8 or 0.15)
+      slot.icon:Show()
+      slot.edge:Show()
+    else
+      slot.icon:Hide()
+      slot.edge:Hide()
+    end
+  end
 end

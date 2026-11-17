@@ -1,22 +1,27 @@
 -- Dungeon Helper: the window, the events that drive the tabs, the /arl dh
 -- command, and the records pane on the module's options page.
 --
--- The window is a tooltip-style box (ARL's skin) in two panes:
+-- The window is a tooltip-style box (ARL's skin):
 --
---   [-] ARL Dungeon Helper - Scholomance ............ 12:34 [v][x]
---   [ Bosses & Loot ][ Quests ][ Clear Times ]
+--   [-] ARL Dungeon Helper ............................. [v][x]
+--   +- banner: the dungeon's art (DungeonJournal's) ----------------+
+--   | [icon] Scholomance                                   12:34    |
+--   |        Level 58-60 · Western Plaguelands            3/7 bosses |
+--   +---------------------------------------------------------------+
+--   [skull Bosses & Loot *2][! Quests 1][watch Clear Times]
 --   toolbar of the tab (filters, party, reset...)
 --   +- list ----------------+- details of the selected entry --------+
---   | (o) Kirtonos   2 BiS  | Kirtonos the Herald                    |
---   | (o) Jandice    1 up   | [i] Gravestone Scepter       [] []     |
+--   | [face] Kirtonos       | [ face ] Kirtonos the Herald           |
+--   |        *2  +1     [c] |          [6 drops] [*2 BiS]            |
 --   +-----------------------+----------------------------------------+
 --
 -- Each tab (Loot.lua, Quests.lua, Times.lua) draws its own list and details
 -- (tab:Create(bar, list, detail), tab:RenderList(w), tab:RenderDetail(w),
--- both returning their height). The window folds to its title bar, and
--- follows the current dungeon unless one is picked with the v button.
--- Everything here is our own frames: nothing is secure, so it all works in
--- combat. Scripts go through mod:Script (H.Script), so their errors are caught.
+-- both returning their height; tab:Badge() the count on its tab). The
+-- window folds to its title bar, and follows the current dungeon unless one
+-- is picked with the v button. Everything here is our own frames: nothing is
+-- secure, so it all works in combat. Scripts go through mod:Script
+-- (H.Script), so their errors are caught.
 local _, ns = ...
 local ARLE = _G.ARLExtensions
 local H = ns.H
@@ -27,17 +32,25 @@ local mod = H.mod
 local Skin, Kit = ARLE.Skin, ARLE.UI.Kit
 local S = H.Script
 
-local WIDTH, LIST_W = 560, 220
-local HEADER_H, TABS_H, TOOL_H = 22, 20, 22
-local TOP = HEADER_H + TABS_H + TOOL_H + 4
-local LIST_CHILD_W = LIST_W - 26 -- the list's scroll bar sits in the gap
-local DETAIL_X = LIST_W + 4
+local WIDTH, LIST_W = 660, 260
+local HEADER_H, BANNER_H, TABS_H, TOOL_H = 22, 54, 26, 26
+local TOP = HEADER_H + BANNER_H + TABS_H + TOOL_H + 8
+local MIN_H = 300
+local LIST_CHILD_W = LIST_W - 24 -- the list's scroll bar sits in the gap
+local DETAIL_X = LIST_W + 6
 local DETAIL_CHILD_W = WIDTH - DETAIL_X - 28
+
+local TAB_ICONS = {
+  bis = H.ICON.bossSkull,
+  quests = H.ICON.available,
+  times = H.ICON.watch,
+}
 
 local tabs = {}
 for _, t in ipairs(H.tabs) do
   tabs[t.key] = t
 end
+H.byKey = tabs
 H.auto = true -- follow the current dungeon
 
 local frame, listScroll, detailScroll, placeFrame
@@ -66,16 +79,103 @@ function H.DetailToTop()
   end
 end
 
--- The run time in the title bar, on every tab and when folded.
+-- The run time: big in the banner, in the title bar when folded.
 local function UpdateClock()
   if not frame then
     return
   end
   local text, done = tabs.times:Clock()
-  if text and mod.db.timerInTitle then
-    frame.clock:SetText(done and ("|cffffd100" .. text .. "|r") or text)
+  local shown = text and mod.db.timerInTitle
+  local folded = mod.db.listCollapsed
+  frame.clock:SetText((shown and folded) and (done and ("|cffffd100" .. text .. "|r") or text) or "")
+  local b = frame.banner
+  if shown and not folded then
+    b.clock:SetText(text)
+    if done then
+      b.clock:SetTextColor(1, 0.82, 0)
+    else
+      b.clock:SetTextColor(1, 1, 1)
+    end
+    b.progress:SetText(tabs.times:Progress() or "")
   else
-    frame.clock:SetText("")
+    b.clock:SetText("")
+    b.progress:SetText("")
+  end
+end
+
+-- DungeonJournal's card art for a dungeon, and its texture coordinates.
+local function DungeonArt(dungeon)
+  local fdj = H.FDJ() or {}
+  local art = dungeon and type(fdj.DUNGEON_HOME_ART) == "table" and fdj.DUNGEON_HOME_ART[dungeon]
+  local tc = dungeon and type(fdj.DUNGEON_HOME_TEXCOORD) == "table" and fdj.DUNGEON_HOME_TEXCOORD[dungeon]
+  return art, type(tc) == "table" and tc or nil
+end
+
+local function PaintBanner()
+  local b = frame.banner
+  local fdj = H.FDJ()
+  local d = H.shown and fdj and fdj.DB[H.shown]
+  local art, tc = DungeonArt(H.shown)
+  if art then
+    -- A strip across the middle of the card art.
+    local l, r, t, bt = 0, 1, 0, 1
+    if tc then
+      l, r, t, bt = tc[1] or 0, tc[2] or 1, tc[3] or 0, tc[4] or 1
+    end
+    local mid, span = t + (bt - t) * 0.42, (bt - t) * 0.24
+    b.art:SetTexture(art)
+    b.art:SetTexCoord(l, r, mid - span / 2, mid + span / 2)
+    b.art:Show()
+  else
+    b.art:Hide()
+  end
+  local ar, ag, ab = Skin:Accent()
+  b.tint:SetColorTexture(ar, ag, ab, art and 0.06 or 0.12)
+  b.line:SetColorTexture(ar, ag, ab, 0.5)
+  H.SetIcon(b.icon, d and type(d.icon) == "string" and d.icon or H.ICON.dungeon, d and d.icon and true or false)
+  H.SetEdge(b.icon, ar, ag, ab, 0.7)
+  b.name:SetText(H.shown or "No dungeon")
+  local sub = {}
+  if not H.shown then
+    sub[1] = "Enter a dungeon, or pick one with the v button"
+  else
+    if d and d.level then
+      sub[#sub + 1] = "Level " .. tostring(d.level)
+    end
+    if d and type(d.location) == "string" then
+      sub[#sub + 1] = d.location
+    end
+    if not H.auto then
+      sub[#sub + 1] = "|cffffd100picked|r"
+    end
+  end
+  b.sub:SetText(table.concat(sub, "  ·  "))
+end
+
+local function PaintTabs(current)
+  local ar, ag, ab = Skin:Accent()
+  for _, b in ipairs(frame.tabButtons) do
+    local on = b.tab == current
+    b.text:SetTextColor(on and 1 or 0.7, on and 1 or 0.7, on and 1 or 0.7)
+    b.bg:SetColorTexture(on and ar or 1, on and ag or 1, on and ab or 1, on and 0.18 or 0.04)
+    b.bar:SetColorTexture(ar, ag, ab, 1)
+    b.bar:SetShown(on)
+    b.icon:SetDesaturated(not on)
+    b.icon:SetAlpha(on and 1 or 0.7)
+    local text, color, icon = nil, nil, nil
+    if b.tab.Badge then
+      text, color, icon = b.tab:Badge()
+    end
+    if text then
+      H.PaintBadge(b.badge, { text = text, color = color, icon = icon })
+      b.text:SetPoint("CENTER", -((b.badge:GetWidth() or 0) + 4) / 2 + 9, 0)
+    else
+      b.badge:Hide()
+      b.text:SetPoint("CENTER", 9, 0)
+    end
+    b.tab.bar:SetShown(on)
+    b.tab.list:SetShown(on)
+    b.tab.detail:SetShown(on)
   end
 end
 
@@ -87,21 +187,14 @@ local function DoRender()
   end
   local db = mod.db
   local tab = CurrentTab()
-  frame.title:SetText(H.shown and ("ARL Dungeon Helper - " .. H.shown) or "ARL Dungeon Helper")
-  frame.collapse:SetText(db.listCollapsed and "+" or "-")
+  local folded = db.listCollapsed
+  frame.title:SetText(folded and H.shown and ("ARL Dungeon Helper - " .. H.shown) or "ARL Dungeon Helper")
+  frame.collapse:SetText(folded and "+" or "-")
   frame.pick:SetText(H.auto and "v" or "|cffffd100v|r")
+  PaintBanner()
   UpdateClock()
 
   local ar, ag, ab = Skin:Accent()
-  for _, b in ipairs(frame.tabButtons) do
-    local on = b.tab == tab
-    b.text:SetTextColor(on and ar or 0.75, on and ag or 0.75, on and ab or 0.75)
-    b.bg:SetColorTexture(on and ar or 1, on and ag or 1, on and ab or 1, on and 0.15 or 0.04)
-    b.bar:SetShown(on)
-    b.tab.bar:SetShown(on)
-    b.tab.list:SetShown(on)
-    b.tab.detail:SetShown(on)
-  end
   frame.divider:SetColorTexture(ar, ag, ab, 0.25)
   if frame.scrolled ~= tab then
     frame.scrolled = tab
@@ -114,15 +207,16 @@ local function DoRender()
   local dy = tab:RenderDetail(DETAIL_CHILD_W) or 1
   tab.list:SetHeight(math.max(ly, 1))
   tab.detail:SetHeight(math.max(dy, 1))
+  PaintTabs(tab) -- (after the render: the badges count what it worked out)
 
   -- Folded: just the title bar, like a collapsed tooltip.
-  local shown = not db.listCollapsed
-  for _, f in ipairs({ listScroll, detailScroll, frame.tabStrip, frame.toolbars, frame.divider }) do
-    f:SetShown(shown)
+  for _, f in ipairs({ listScroll, detailScroll, frame.tabStrip, frame.toolbars, frame.divider, frame.banner,
+    frame.listBack }) do
+    f:SetShown(not folded)
   end
-  if shown then
-    local maxH = math.min(math.max(tonumber(db.maxHeight) or 420, 200), 800)
-    frame:SetHeight(math.max(math.min(TOP + 6 + math.max(ly, dy), maxH), 160))
+  if not folded then
+    local maxH = math.min(math.max(tonumber(db.maxHeight) or 540, MIN_H), 900)
+    frame:SetHeight(math.max(math.min(TOP + 8 + math.max(ly, dy), maxH), MIN_H))
   else
     frame:SetHeight(HEADER_H + 4)
   end
@@ -192,16 +286,63 @@ local function Pane(name)
   return scroll
 end
 
+local function CreateBanner()
+  local b = CreateFrame("Frame", nil, frame)
+  b:SetPoint("TOPLEFT", 1, -HEADER_H)
+  b:SetPoint("TOPRIGHT", -1, -HEADER_H)
+  b:SetHeight(BANNER_H)
+  if b.SetClipsChildren then
+    b:SetClipsChildren(true)
+  end
+  b.art = b:CreateTexture(nil, "BACKGROUND", nil, 1)
+  b.art:SetAllPoints()
+  b.art:SetAlpha(0.6)
+  -- Darker on the left (the name) and the right (the clock).
+  b.shade = b:CreateTexture(nil, "BACKGROUND", nil, 2)
+  b.shade:SetAllPoints()
+  b.shade:SetColorTexture(0, 0, 0, 0.45)
+  if b.shade.SetGradient and CreateColor then
+    pcall(b.shade.SetGradient, b.shade, "HORIZONTAL", CreateColor(0, 0, 0, 0.75), CreateColor(0, 0, 0, 0.2))
+  end
+  b.tint = b:CreateTexture(nil, "BACKGROUND", nil, 3)
+  b.tint:SetAllPoints()
+  b.line = b:CreateTexture(nil, "ARTWORK")
+  b.line:SetHeight(1)
+  b.line:SetPoint("BOTTOMLEFT")
+  b.line:SetPoint("BOTTOMRIGHT")
+  b.icon = H.Pic(b, 38)
+  b.icon:SetPoint("LEFT", 10, 0)
+  b.name = Kit.Text(b, "GameFontNormalLarge")
+  b.name:SetPoint("BOTTOMLEFT", b.icon, "RIGHT", 10, 1)
+  b.name:SetTextColor(1, 0.95, 0.85)
+  b.name:SetShadowOffset(1, -1)
+  b.sub = Kit.Text(b, "GameFontHighlightSmall")
+  b.sub:SetPoint("TOPLEFT", b.icon, "RIGHT", 10, -3)
+  b.sub:SetTextColor(0.85, 0.85, 0.85)
+  b.clock = Kit.Text(b, "GameFontNormalHuge")
+  b.clock:SetPoint("RIGHT", -14, 6)
+  b.clock:SetJustifyH("RIGHT")
+  b.clock:SetShadowOffset(1, -1)
+  b.progress = Kit.Text(b, "GameFontHighlightSmall")
+  b.progress:SetPoint("TOPRIGHT", b.clock, "BOTTOMRIGHT", 0, -2)
+  b.progress:SetJustifyH("RIGHT")
+  b.name:SetPoint("RIGHT", b.clock, "LEFT", -10, 0)
+  b.sub:SetPoint("RIGHT", b.clock, "LEFT", -10, 0)
+  b.name:SetWordWrap(false)
+  b.sub:SetWordWrap(false)
+  frame.banner = b
+end
+
 local function CreateWindow()
   frame = Skin:CreateTooltipWindow("ARLEDungeonHelperFrame", UIParent)
-  frame:SetSize(WIDTH, 200)
+  frame:SetSize(WIDTH, MIN_H)
   frame:SetFrameStrata("MEDIUM")
   -- Kept where it's dragged (char.position: the Reset position preset
   -- clears it). Up to 0.7.0 it was db.pos, an anchor: dropped.
   mod.db.pos = nil
   placeFrame = Kit.Movable(frame, mod, { x = 330, y = 60 })
 
-  -- Title bar: [-] ARL Dungeon Helper - Dungeon .... 12:34 [v][x]
+  -- Title bar: [-] ARL Dungeon Helper .... (12:34 when folded) [v][x]
   frame.collapse = H.SmallButton(frame, "-", 18)
   frame.collapse:SetPoint("TOPLEFT", 4, -3)
   S(frame.collapse, "OnClick", function()
@@ -229,28 +370,36 @@ local function CreateWindow()
   frame.title:SetPoint("RIGHT", frame.clock, "LEFT", -4, 0)
   frame.title:SetWordWrap(false)
 
-  -- Tab strip: [Bosses & Loot][Quests][Clear Times]
+  CreateBanner()
+
+  -- Tab strip: [icon Bosses & Loot n][icon Quests n][icon Clear Times]
   local strip = CreateFrame("Frame", nil, frame)
-  strip:SetPoint("TOPLEFT", 4, -HEADER_H)
-  strip:SetPoint("TOPRIGHT", -4, -HEADER_H)
+  strip:SetPoint("TOPLEFT", 4, -(HEADER_H + BANNER_H + 3))
+  strip:SetPoint("TOPRIGHT", -4, -(HEADER_H + BANNER_H + 3))
   strip:SetHeight(TABS_H - 2)
   frame.tabStrip = strip
   frame.tabButtons = {}
-  local tabW = (WIDTH - 8 - (#H.tabs - 1) * 2) / #H.tabs
+  local tabW = (WIDTH - 8 - (#H.tabs - 1) * 3) / #H.tabs
   for i, tab in ipairs(H.tabs) do
     local b = CreateFrame("Button", nil, strip)
     b:SetSize(tabW, TABS_H - 2)
-    b:SetPoint("LEFT", (i - 1) * (tabW + 2), 0)
+    b:SetPoint("LEFT", (i - 1) * (tabW + 3), 0)
     b.bg = b:CreateTexture(nil, "BACKGROUND")
     b.bg:SetAllPoints()
     b.bar = b:CreateTexture(nil, "ARTWORK")
     b.bar:SetHeight(2)
     b.bar:SetPoint("BOTTOMLEFT")
     b.bar:SetPoint("BOTTOMRIGHT")
-    b.bar:SetColorTexture(Skin:Accent())
-    b.text = Kit.Text(b, "GameFontNormalSmall")
-    b.text:SetPoint("CENTER", 0, 1)
+    b.text = Kit.Text(b, "GameFontNormal")
+    b.text:SetPoint("CENTER", 9, 0)
     b.text:SetText(tab.label)
+    b.icon = b:CreateTexture(nil, "ARTWORK")
+    b.icon:SetSize(18, 18)
+    b.icon:SetPoint("RIGHT", b.text, "LEFT", -5, 0)
+    b.icon:SetTexture(TAB_ICONS[tab.key] or H.ICON.scroll)
+    b.badge = H.Badge(b)
+    b.badge:SetPoint("LEFT", b.text, "RIGHT", 6, 0)
+    b.badge:Hide()
     b.hl = b:CreateTexture(nil, "HIGHLIGHT")
     b.hl:SetAllPoints()
     b.hl:SetColorTexture(1, 1, 1, 0.06)
@@ -263,21 +412,28 @@ local function CreateWindow()
 
   -- One toolbar per tab; two scroll panes whose children switch with the tab.
   local toolbars = CreateFrame("Frame", nil, frame)
-  toolbars:SetPoint("TOPLEFT", 4, -(HEADER_H + TABS_H + 1))
-  toolbars:SetPoint("TOPRIGHT", -4, -(HEADER_H + TABS_H + 1))
+  toolbars:SetPoint("TOPLEFT", 6, -(HEADER_H + BANNER_H + TABS_H + 4))
+  toolbars:SetPoint("TOPRIGHT", -6, -(HEADER_H + BANNER_H + TABS_H + 4))
   toolbars:SetHeight(TOOL_H - 2)
   frame.toolbars = toolbars
 
+  -- The list sits on a darker backing, like a journal's index.
+  frame.listBack = frame:CreateTexture(nil, "BACKGROUND", nil, 1)
+  frame.listBack:SetPoint("TOPLEFT", 4, -TOP + 2)
+  frame.listBack:SetPoint("BOTTOMLEFT", 4, 4)
+  frame.listBack:SetWidth(LIST_W - 4)
+  frame.listBack:SetColorTexture(0, 0, 0, 0.22)
+
   listScroll = Pane("ARLEDungeonHelperList")
   listScroll:SetPoint("TOPLEFT", 4, -TOP)
-  listScroll:SetPoint("BOTTOMLEFT", 4, 4)
+  listScroll:SetPoint("BOTTOMLEFT", 4, 6)
   listScroll:SetWidth(LIST_CHILD_W)
   detailScroll = Pane("ARLEDungeonHelperDetail")
   detailScroll:SetPoint("TOPLEFT", DETAIL_X, -TOP)
-  detailScroll:SetPoint("BOTTOMRIGHT", -24, 4)
+  detailScroll:SetPoint("BOTTOMRIGHT", -24, 6)
   frame.divider = frame:CreateTexture(nil, "ARTWORK")
   frame.divider:SetWidth(1)
-  frame.divider:SetPoint("TOPLEFT", DETAIL_X - 3, -TOP)
+  frame.divider:SetPoint("TOPLEFT", DETAIL_X - 3, -TOP + 2)
   frame.divider:SetPoint("BOTTOMLEFT", DETAIL_X - 3, 4)
 
   for _, tab in ipairs(H.tabs) do
@@ -673,6 +829,13 @@ function mod:OnEnable()
   -- Up to 0.7.0: party members without ARL were inspected and scored with a
   -- picked spec; only ARL members' own numbers count now.
   self.db.specs = nil
+  -- 0.9.0 made the window roomier: the old default height (420) grows with it.
+  if not self.db.roomy then
+    if self.db.maxHeight == 420 then
+      self.db.maxHeight = 540
+    end
+    self.db.roomy = true
+  end
   lastCurrent, rosterKey = false, nil
   wipe(recentKills)
   -- 0.2.0 had an "only upgrades" switch; it is the Party filter now.

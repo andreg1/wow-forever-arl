@@ -39,7 +39,7 @@ local S = H.Script
 local Bosses, Members, ColorName = H.Bosses, H.Members, H.ColorName
 local FormatTime, FormatDelta, Now = H.FormatTime, H.FormatDelta, H.Now
 
-local ROW_H, PORTRAIT, BIG, LINE_H = 22, 20, 36, 15
+local ROW_H, PORTRAIT, BIG, LINE_H = 38, 32, 50, 26
 local RESUME = 45 * 60 -- an unfinished run older than this starts over
 local CLEAR = "@clear" -- the clear's entry in the list
 local BOARD_TOP = 10
@@ -48,10 +48,6 @@ local ASK_EVERY, ANSWER_EVERY = 15 * 60, 60
 
 local tab = { key = "times", label = "Clear Times" }
 H.tabs[#H.tabs + 1] = tab
-
--------------------------------------------------------------------------------
--- Runs and records
--------------------------------------------------------------------------------
 
 -------------------------------------------------------------------------------
 -- Runs and records
@@ -696,19 +692,26 @@ end
 
 -------------------------------------------------------------------------------
 -- View
---   list:    (portrait) Boss name ........ -0:12  4:05    (one per boss)
---            Clear .......................... 23:41
---            Rares: (portrait) Rare ......... --:--
---   details: the selected entry: this run, your records, the party's, the
---            guild leaderboard
+--   list:    [face] Boss name            4:05     (this run's split)
+--                   best 4:17           -0:12     (against your best)
+--            [watch] Full clear         23:41
+--            Rares: [face] Rare ...
+--   details: the selected entry: a banner, this run and your records as
+--            stat tiles, the party, the guild leaderboard (gold, silver and
+--            copper coins for the top three)
 -------------------------------------------------------------------------------
 
 local selected = {} -- dungeon -> boss name or CLEAR
 local listPool, sectionPool, listEmpty
 local detail = {}
+local COINS = {
+  "Interface\\MoneyFrame\\UI-GoldIcon",
+  "Interface\\MoneyFrame\\UI-SilverIcon",
+  "Interface\\MoneyFrame\\UI-CopperIcon",
+}
 
 local function DateText(t)
-  return t and date and date("%Y-%m-%d", t) or ""
+  return t and date and date("%d %b %Y", t) or ""
 end
 
 local function Select(key)
@@ -736,33 +739,49 @@ local function ResetClick(self)
   end)
 end
 
--- A line of the details: label on the left, value on the right.
-local function MakeLine(parent)
-  local f = CreateFrame("Frame", nil, parent)
-  f:SetHeight(LINE_H)
-  f.left = Kit.Text(f, "GameFontHighlightSmall")
-  f.left:SetPoint("LEFT", 6, 0)
-  f.left:SetWordWrap(false)
-  f.right = Kit.Text(f, "GameFontHighlightSmall")
-  f.right:SetPoint("RIGHT", -4, 0)
-  f.right:SetJustifyH("RIGHT")
-  f.left:SetPoint("RIGHT", f.right, "LEFT", -6, 0)
-  f.bg = f:CreateTexture(nil, "BACKGROUND")
-  f.bg:SetAllPoints()
-  return f
+-- Killed in the run in progress (the other tabs mark it too).
+function tab:IsKilled(dungeon, name)
+  local run = Run()
+  return run ~= nil and run.dungeon == dungeon and type(run.splits) == "table" and run.splits[name] ~= nil
+end
+
+local function Killed(run, dungeon)
+  local required, killed = Required(dungeon), 0
+  for _, name in ipairs(required) do
+    if run.splits[name] then
+      killed = killed + 1
+    end
+  end
+  return killed, #required
+end
+
+-- "3/7 bosses" under the banner's clock, while a run is going here.
+function tab:Progress()
+  local run, dungeon = Run(), H.shown
+  if not (run and dungeon and run.dungeon == dungeon and run.start) then
+    return nil
+  end
+  if run.done then
+    return "|cffffd100cleared|r"
+  end
+  local killed, total = Killed(run, dungeon)
+  return killed .. "/" .. total .. " bosses"
 end
 
 function tab:Create(bar, list, detailFrame)
-  self.clock = Kit.Text(bar, "GameFontNormal")
-  self.clock:SetPoint("LEFT", 2, 0)
-  self.reset = H.SmallButton(bar, "Reset", 48)
+  self.statusIcon = bar:CreateTexture(nil, "ARTWORK")
+  self.statusIcon:SetSize(16, 16)
+  self.statusIcon:SetPoint("LEFT", 2, 0)
+  self.statusIcon:SetTexture(H.ICON.watch)
+  self.statusIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+  self.reset = H.SmallButton(bar, "Reset", 52)
   self.reset:SetPoint("RIGHT", 0, 0)
   S(self.reset, "OnClick", ResetClick)
   H.Tip(self.reset, "Start over", "Throws away this run and waits for the next pull. Records are kept. "
     .. "Click twice to confirm.")
-  self.status = Kit.Text(bar, "GameFontDisableSmall")
-  self.status:SetPoint("LEFT", self.clock, "RIGHT", 8, 0)
-  self.status:SetPoint("RIGHT", self.reset, "LEFT", -4, 0)
+  self.status = Kit.Text(bar, "GameFontHighlight")
+  self.status:SetPoint("LEFT", self.statusIcon, "RIGHT", 6, 0)
+  self.status:SetPoint("RIGHT", self.reset, "LEFT", -6, 0)
   self.status:SetWordWrap(false)
 
   listPool = H.Pool(function()
@@ -780,86 +799,64 @@ function tab:Create(bar, list, detailFrame)
       .. "they are kept apart and a clear doesn't need them. When one is killed it still gets a split and records.")
     return h
   end)
-  listEmpty = Kit.Text(list, "GameFontDisableSmall")
+  listEmpty = H.Empty(list)
 
-  detail.portrait = detailFrame:CreateTexture(nil, "ARTWORK")
-  detail.portrait:SetSize(BIG, BIG)
-  detail.portrait:SetPoint("TOPLEFT", 4, -4)
-  detail.title = Kit.Text(detailFrame, "GameFontNormal")
-  detail.title:SetPoint("TOPLEFT", detail.portrait, "TOPRIGHT", 8, -2)
-  detail.title:SetPoint("RIGHT", -4, 0)
-  detail.title:SetWordWrap(false)
-  detail.sub = Kit.Text(detailFrame, "GameFontDisableSmall")
-  detail.sub:SetPoint("TOPLEFT", detail.title, "BOTTOMLEFT", 0, -3)
-  detail.sub:SetPoint("RIGHT", -4, 0)
-  detail.sub:SetWordWrap(false)
+  detail.banner = H.Banner(detailFrame, BIG)
   detail.sections = H.Pool(function()
     return H.Section(detailFrame)
   end)
-  detail.lines = H.Pool(function()
-    return MakeLine(detailFrame)
+  detail.tiles = H.Pool(function()
+    return H.Tile(detailFrame)
+  end)
+  detail.rows = H.Pool(function()
+    return H.Row(detailFrame, LINE_H, LINE_H - 6)
   end)
   detail.paras = H.Pool(function()
     return Kit.Text(detailFrame, "GameFontDisableSmall")
   end)
+  detail.empty = H.Empty(detailFrame)
 end
 
--- The running parts: clock, status and the times in the list.
+-- The running parts: the status line and the clear's time in the list.
 function tab:Tick()
-  if not self.clock then
+  if not self.status then
     return
   end
   local dungeon = H.shown
   local run = Run()
   local live = run and dungeon and run.dungeon == dungeon
-  if live and run.start then
-    self.clock:SetText(FormatTime(Elapsed(run)))
-    if run.done then
-      self.clock:SetTextColor(1, 0.82, 0)
-    else
-      self.clock:SetTextColor(1, 1, 1)
-    end
-  else
-    self.clock:SetText(FormatTime(nil))
-    self.clock:SetTextColor(0.6, 0.6, 0.6)
-  end
   local status
   if not dungeon then
-    status = ""
+    status = "|cff888888No dungeon|r"
   elseif not live then
-    status = "records only (not this run)"
+    status = "|cff888888No run here: your records|r"
   elseif run.done then
-    status = "|cffffd100cleared!|r"
+    status = "|cffffd100Cleared in " .. FormatTime(Elapsed(run)) .. "|r"
   elseif not run.start then
-    status = mod.db.timerStart == "enter" and "starting" or "starts on the first pull"
+    status = mod.db.timerStart == "enter" and "Starting..." or "|cff888888Starts on the first pull|r"
   else
-    local required, killed = Required(dungeon), 0
-    for _, name in ipairs(required) do
-      if run.splits[name] then
-        killed = killed + 1
-      end
-    end
-    status = killed .. "/" .. #required .. " bosses"
+    local killed, total = Killed(run, dungeon)
+    status = "Run going  ·  " .. killed .. "/" .. total .. " bosses"
   end
   self.status:SetText(status)
+  self.statusIcon:SetDesaturated(not (live and run.start and not run.done))
   -- The clear's running time.
   if self.clearRow and self.clearRow:IsShown() and live and run.start then
-    local text = FormatTime(Elapsed(run))
-    if run.done and run.prevTotal then
-      text = FormatDelta(run.total - run.prevTotal) .. "  " .. text
-    end
-    self.clearRow.note:SetText(text)
+    self.clearRow.note:SetText(FormatTime(Elapsed(run)))
   end
 end
 
-local function SplitNote(boss, run, live, rec)
+-- A boss row's right side: this run's split (and how it compares), or the
+-- best one, faded.
+local function SplitTexts(boss, run, live, rec)
   local split = live and run.splits[boss.name]
   local best = rec.bosses[boss.name]
+  local bestText = best and best.split and ("best " .. FormatTime(best.split)) or "no record yet"
   if split then
     local prev = run.prev and run.prev[boss.name]
-    return (prev and (FormatDelta(split - prev) .. "  ") or "") .. FormatTime(split), true
+    return FormatTime(split), prev and FormatDelta(split - prev) or "|cffffd100first!|r", bestText, true
   end
-  return "|cff777777" .. FormatTime(best and best.split) .. "|r", false
+  return "|cff777777--:--|r", nil, bestText, false
 end
 
 function tab:RenderList(width)
@@ -888,23 +885,29 @@ function tab:RenderList(width)
     sel = #bosses > 0 and CLEAR or (rares[1] and rares[1].name)
     selected[dungeon] = sel
   end
+  local ar, ag, ab = ARLE.Skin:Accent()
 
-  local y = 0
+  local y = 2
   local function Place(boss)
     local r = listPool:Get()
     r.key = boss.name
     if r.portraitOf ~= boss then
       r.portraitOf = boss
-      H.SetPortrait(r.pic, boss)
+      r.pic.tex:SetDesaturated(false)
+      H.SetPortrait(r.pic.tex, boss)
     end
-    local note, killed = SplitNote(boss, run, live, rec)
-    H.PaintRow(r, boss.name, note, nil, sel == boss.name)
-    r.name:SetTextColor(killed and 1 or 0.7, killed and 1 or 0.7, killed and 1 or 0.7)
-    r.pic:SetAlpha((killed or not live) and 1 or 0.6)
-    if killed and sel ~= boss.name then
-      local ar, ag, ab = ARLE.Skin:Accent()
-      r.bg:SetColorTexture(ar, ag, ab, 0.07)
-    end
+    local note, noteSub, bestText, killed = SplitTexts(boss, run, live, rec)
+    H.PaintRow(r, {
+      name = boss.name,
+      sub = bestText,
+      note = note,
+      noteSub = noteSub,
+      selected = sel == boss.name,
+      dim = live and not killed,
+      tint = killed and { 0.35, 1, 0.45, 0.06 } or nil,
+    })
+    H.SetEdge(r.pic, ar, ag, ab, sel == boss.name and 0.9 or 0.3)
+    H.SetCorner(r.pic, killed and H.ICON.ready or nil)
     y = H.Place(r, y, ROW_H)
   end
   for _, boss in ipairs(bosses) do
@@ -914,18 +917,30 @@ function tab:RenderList(width)
   if #bosses > 0 then
     local r = listPool:Get()
     r.key, r.portraitOf = CLEAR, nil
-    r.pic:SetTexture("Interface\\Icons\\INV_Misc_PocketWatch_01")
-    r.pic:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-    r.pic:SetAlpha(1)
-    local note = live and run.start and FormatTime(Elapsed(run)) or ("|cff777777" .. FormatTime(rec.total) .. "|r")
-    H.PaintRow(r, "Clear", note, nil, sel == CLEAR)
-    local ar, ag, ab = ARLE.Skin:Accent()
-    r.name:SetTextColor(ar, ag, ab)
-    if sel ~= CLEAR then
-      r.bg:SetColorTexture(ar, ag, ab, 0.1)
+    H.SetIcon(r.pic, H.ICON.watch)
+    local note, noteSub, sub
+    if live and run.start then
+      local killed, total = Killed(run, dungeon)
+      note = FormatTime(Elapsed(run))
+      noteSub = (run.done and run.prevTotal) and FormatDelta(run.total - run.prevTotal) or nil
+      sub = run.done and "|cffffd100cleared|r" or (killed .. "/" .. total .. " bosses")
+    else
+      note = "|cff777777" .. FormatTime(rec.total) .. "|r"
+      sub = rec.total and ("best  ·  " .. (rec.clears or 0) .. " clears") or "no clear yet"
     end
+    H.PaintRow(r, {
+      name = "Full clear",
+      sub = sub,
+      note = note,
+      noteSub = noteSub,
+      color = { ar, ag, ab },
+      selected = sel == CLEAR,
+      tint = { ar, ag, ab, 0.08 },
+    })
+    H.SetEdge(r.pic, ar, ag, ab, 0.8)
+    H.SetCorner(r.pic, (live and run.done) and H.ICON.ready or nil)
     self.clearRow = r
-    y = H.Place(r, y + 2, ROW_H)
+    y = H.Place(r, y + 4, ROW_H)
   end
   if #rares > 0 then
     local h = sectionPool:Get()
@@ -936,9 +951,8 @@ function tab:RenderList(width)
       end
     end
     H.PaintSection(h, allRare and "Rares" or "Rares & optional",
-      "|cff888888" .. (live and (killed .. "/" .. #rares) or "may not spawn") .. "|r",
-      "atlas:nameplates-icon-elite-silver")
-    y = H.Place(h, y + 6, 18)
+      "|cff888888" .. (live and (killed .. "/" .. #rares) or "") .. "|r", "atlas:nameplates-icon-elite-silver")
+    y = H.Place(h, y + 8, 20, 2)
     for _, boss in ipairs(rares) do
       Place(boss)
     end
@@ -947,10 +961,10 @@ function tab:RenderList(width)
   sectionPool:Done()
   self:Tick()
 
-  listEmpty:SetShown(y == 0)
-  if y == 0 then
-    y = H.Para(listEmpty, 6, width, dungeon and "DungeonJournal lists no bosses here."
-      or "Not in a dungeon. Pick one with the v button.")
+  if y <= 2 then
+    y = H.ShowEmpty(listEmpty, 8, width, dungeon and "No bosses listed here" or "Not in a dungeon", H.ICON.watch)
+  else
+    listEmpty:Hide()
   end
   return y
 end
@@ -968,98 +982,110 @@ local function SelectedBoss(dungeon)
   end
 end
 
+-- A delta as a tile's value: "-0:12" green, "+0:08" red.
+local function DeltaTile(delta, label)
+  if not delta then
+    return { value = "--", label = label, color = H.GREY }
+  end
+  local color = delta < 0 and H.GREEN or (delta > 0 and { 1, 0.35, 0.25 } or H.GREY)
+  return { value = (delta < 0 and "-" or "+") .. FormatTime(math.abs(delta)), label = label, color = color }
+end
+
 function tab:RenderDetail(width)
   detail.sections:Done()
-  detail.lines:Done()
+  detail.tiles:Done()
+  detail.rows:Done()
   detail.paras:Done()
   local dungeon = H.shown
   if not dungeon or not selected[dungeon] then
-    detail.portrait:Hide()
-    detail.title:Hide()
-    detail.sub:Hide()
+    detail.banner:Hide()
+    detail.empty:Hide()
     return 1
   end
+  detail.empty:Hide()
   AskGuild(dungeon)
   local run = Run()
-  local live = run and run.dungeon == dungeon
+  local live = run and run.dungeon == dungeon and run.start
   local rec = Records(dungeon) or { bosses = {} }
   local boss = SelectedBoss(dungeon)
   local ar, ag, ab = ARLE.Skin:Accent()
 
-  detail.portrait:Show()
-  detail.title:Show()
-  detail.sub:Show()
+  -- Banner.
+  local b = detail.banner
+  b:ClearAllPoints()
+  b:SetPoint("TOPLEFT", 0, 0)
+  b:SetWidth(width)
+  local tags = {}
   if boss then
-    H.SetPortrait(detail.portrait, boss)
-    detail.title:SetText(boss.name)
-    detail.sub:SetText(boss.rare and "Rare: may not spawn" or (boss.optional and "Optional: not needed for a clear")
-      or "Needed for a clear")
+    b.pic.tex:SetDesaturated(false)
+    H.SetPortrait(b.pic.tex, boss)
+    if live and run.splits[boss.name] then
+      tags[#tags + 1] = { text = "Killed", color = H.GREEN, icon = H.ICON.ready }
+    end
+    if boss.rare then
+      tags[#tags + 1] = { text = "Rare", color = { 0.75, 0.8, 0.9 }, tip = { "Rare", "May not spawn in every run." } }
+    elseif boss.optional then
+      tags[#tags + 1] = { text = "Optional", color = { 0.75, 0.8, 0.9 },
+        tip = { "Optional", "Summoned, or brought by a quest: a clear doesn't need it." } }
+    else
+      tags[#tags + 1] = { text = "Needed for a clear", color = H.GREY }
+    end
   else
-    detail.portrait:SetTexture("Interface\\Icons\\INV_Misc_PocketWatch_01")
-    detail.portrait:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-    detail.title:SetText(dungeon .. ": clear")
-    local required = Required(dungeon)
-    detail.sub:SetText("Every boss but the rares and the optional ones: " .. #required .. " bosses")
+    H.SetIcon(b.pic, H.ICON.watch)
+    if live and run.done then
+      tags[#tags + 1] = { text = "Cleared", color = H.GOLD, icon = H.ICON.ready }
+    end
+    tags[#tags + 1] = { text = #Required(dungeon) .. " bosses", color = H.GREY,
+      tip = { "A full clear", "Every boss but the rares and the optional ones." } }
   end
-  detail.title:SetTextColor(ar, ag, ab)
+  H.SetEdge(b.pic, ar, ag, ab, 0.8)
+  H.PaintBanner(b, boss and boss.name or "Full clear", nil, tags)
+  local y = H.BANNER_H + 4
 
-  local y = BIG + 10
   local function Section(label, note)
     local h = detail.sections:Get()
     H.PaintSection(h, label, note)
-    y = H.Place(h, y + 4, 18)
-  end
-  local function Line(left, right, highlight)
-    local f = detail.lines:Get()
-    f.left:SetText(left)
-    f.right:SetText(right or "")
-    f.bg:SetColorTexture(ar, ag, ab, highlight and 0.12 or 0)
-    y = H.Place(f, y, LINE_H, 0)
-  end
-  local function Para(text)
-    local fs = detail.paras:Get()
-    y = H.Para(fs, y + 2, width, text, 2)
+    y = H.Place(h, y + 6, 20, 4)
   end
 
-  -- This run.
-  if live and run.start then
-    Section("This run", run.done and "|cffffd100cleared|r" or nil)
+  -- This run, as tiles.
+  if live then
+    Section("This run")
     if boss then
       local split = run.splits[boss.name]
-      if split then
-        local prev = run.prev and run.prev[boss.name]
-        Line("Split", FormatTime(split) .. (prev and ("  " .. FormatDelta(split - prev)) or ""))
-        if run.fights[boss.name] then
-          Line("Fight", FormatTime(run.fights[boss.name]))
-        end
-      else
-        Line("|cff888888Not killed yet|r")
-      end
+      local prev = run.prev and run.prev[boss.name]
+      y = H.Tiles(detail.tiles, y, width, {
+        { value = FormatTime(split), label = "split", color = split and nil or H.GREY, strong = split ~= nil },
+        { value = FormatTime(run.fights[boss.name]), label = "fight", color = run.fights[boss.name] and nil or H.GREY },
+        DeltaTile(split and prev and (split - prev), "vs your best"),
+      })
     else
-      local required, killed = Required(dungeon), 0
-      for _, name in ipairs(required) do
-        if run.splits[name] then
-          killed = killed + 1
-        end
-      end
-      Line(run.done and "Cleared in" or "Running", FormatTime(Elapsed(run))
-        .. ((run.done and run.prevTotal) and ("  " .. FormatDelta(run.total - run.prevTotal)) or ""))
-      Line("Bosses", killed .. "/" .. #required)
+      local killed, total = Killed(run, dungeon)
+      y = H.Tiles(detail.tiles, y, width, {
+        { value = FormatTime(Elapsed(run)), label = run.done and "cleared in" or "running", strong = true,
+          color = run.done and H.GOLD or nil },
+        { value = killed .. "/" .. total, label = "bosses" },
+        DeltaTile(run.done and run.prevTotal and (run.total - run.prevTotal), "vs your best"),
+      })
     end
   end
 
   -- Your records.
   Section("Your records")
-  local function Rec(label, value, at)
-    Line(label, value and (FormatTime(value) .. "  |cff888888" .. DateText(at) .. "|r") or "|cff888888none yet|r")
-  end
   if boss then
     local best = rec.bosses[boss.name] or {}
-    Rec("Best split", best.split, best.splitAt)
-    Rec("Best fight", best.fight, best.fightAt)
+    y = H.Tiles(detail.tiles, y, width, {
+      { value = FormatTime(best.split), label = best.split and ("best split · " .. DateText(best.splitAt)) or "best split",
+        color = best.split and H.GOLD or H.GREY },
+      { value = FormatTime(best.fight), label = best.fight and ("best fight · " .. DateText(best.fightAt)) or "best fight",
+        color = best.fight and nil or H.GREY },
+    })
   else
-    Rec("Best clear", rec.total, rec.totalAt)
-    Line("Clears", tostring(rec.clears or 0))
+    y = H.Tiles(detail.tiles, y, width, {
+      { value = FormatTime(rec.total), label = rec.total and ("best clear · " .. DateText(rec.totalAt)) or "best clear",
+        color = rec.total and H.GOLD or H.GREY },
+      { value = tostring(rec.clears or 0), label = "clears" },
+    })
   end
 
   -- The party's.
@@ -1073,18 +1099,27 @@ function tab:RenderDetail(width)
     Section("Party")
     for _, m in ipairs(others) do
       local p = party[m.name]
-      local text
-      if not (p and p.dungeon == dungeon) then
-        text = "|cff888888no ARL|r"
+      local note, noteSub
+      local has = p and p.dungeon == dungeon
+      if not has then
+        note = "|cff888888no ARL|r"
       elseif boss then
-        local b = p.bosses[boss.name]
-        text = b and b.split and (FormatTime(b.split) .. (b.fight and ("  |cff888888fight " .. FormatTime(b.fight)
-          .. "|r") or "")) or "|cff888888none yet|r"
+        local bb = p.bosses[boss.name]
+        note = bb and bb.split and FormatTime(bb.split) or "|cff888888--:--|r"
+        noteSub = bb and bb.fight and ("fight " .. FormatTime(bb.fight)) or nil
       else
-        text = p.total and (FormatTime(p.total) .. "  |cff888888" .. (p.clears or 0) .. " clears|r")
-          or "|cff888888no clear yet|r"
+        note = p.total and FormatTime(p.total) or "|cff888888--:--|r"
+        noteSub = p.total and ((p.clears or 0) .. " clears") or nil
       end
-      Line(ColorName(m), text)
+      local r = detail.rows:Get()
+      H.SetClassIcon(r.pic.tex, m.class)
+      H.SetEdge(r.pic, 0, 0, 0, 1)
+      H.SetCorner(r.pic, nil)
+      r.pic.label:SetText("")
+      r.pic.back:SetColorTexture(0, 0, 0, 0.6)
+      local cr, cg, cb = H.ClassColor(m.class)
+      H.PaintRow(r, { name = m.name, note = note, noteSub = noteSub, color = { cr, cg, cb }, dim = not has })
+      y = H.Place(r, y, LINE_H, 1)
     end
   end
 
@@ -1092,21 +1127,40 @@ function tab:RenderDetail(width)
   local leaders = Leaders(dungeon, boss and boss.name)
   Section("Guild leaderboard", "|cff888888" .. (boss and "best split" or "best clear") .. "|r")
   if #leaders == 0 then
-    Para("No ARL member of the guild has shared a record here yet.")
+    y = H.ShowEmpty(detail.empty, y, width, "No records shared yet", COINS[1])
   end
   local meShown = false
   for i, e in ipairs(leaders) do
     if i <= BOARD_TOP or (e.me and not meShown) then
-      local medal = i == 1 and "|cffffd100" or (i == 2 and "|cffc0c0c0" or (i == 3 and "|cffcd7f32" or "|cffaaaaaa"))
-      local name = e.me and ("|cff66ff66" .. e.name .. "|r") or e.name
-      local extra = (not boss and e.clears) and ("  |cff888888" .. e.clears .. " clears|r") or ""
-      Line(medal .. i .. ".|r " .. name, FormatTime(e.value) .. extra, e.me)
+      local r = detail.rows:Get()
+      if COINS[i] then
+        H.SetIcon(r.pic, COINS[i], false)
+        H.SetEdge(r.pic, 0, 0, 0, 0)
+        r.pic.back:SetColorTexture(0, 0, 0, 0)
+        r.pic.label:SetText("")
+      else
+        r.pic.tex:SetTexture(nil)
+        r.pic.tex:SetColorTexture(1, 1, 1, 0.06)
+        H.SetEdge(r.pic, 1, 1, 1, 0.15)
+        r.pic.label:SetText("|cffbbbbbb" .. i .. "|r")
+      end
+      H.SetCorner(r.pic, nil)
+      H.PaintRow(r, {
+        name = e.me and ("|cff66ff66" .. e.name .. "|r") or e.name,
+        note = (i == 1 and "|cffffd100" or "") .. FormatTime(e.value) .. (i == 1 and "|r" or ""),
+        noteSub = (not boss and e.clears) and (e.clears .. " clears") or nil,
+        tint = e.me and { 0.4, 1, 0.45, 0.08 } or (i <= 3 and { ar, ag, ab, 0.05 } or nil),
+      })
+      r.pic.back:SetColorTexture(0, 0, 0, COINS[i] and 0 or 0.6)
+      y = H.Place(r, y, LINE_H, 1)
       meShown = meShown or e.me
     end
   end
-  Para(mod.db.guildBoard and "Records of the guild's ARL members, shared when they set one and when someone "
-    .. "looks here." or "|cffff9933You don't share yours|r (Clear Times settings); you still see the others'.")
-  return y + 4
+  if not mod.db.guildBoard then
+    local fs = detail.paras:Get()
+    y = H.Para(fs, y + 4, width, "|cffff9933You don't share yours|r (Clear Times settings)")
+  end
+  return y + 6
 end
 
 function tab:Status()
