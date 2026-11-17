@@ -57,6 +57,8 @@ local dismissedKey -- dismissed until the need goes away
 local lastChatKey  -- chat once per reminder
 local snoozeUntil
 local testUntil
+local missingSince -- when Well-Rested was first read as gone (it can blink out while refreshed)
+local CONFIRM_MISSING = 3
 
 -------------------------------------------------------------------------------
 -- Status
@@ -71,26 +73,53 @@ local function Secret(v)
   return issecretvalue ~= nil and issecretvalue(v) == true
 end
 
-local function PlayerAura(spellID)
+local function SpellName(spellID)
+  if C_Spell and C_Spell.GetSpellName then
+    local ok, name = pcall(C_Spell.GetSpellName, spellID)
+    if ok and type(name) == "string" and not Secret(name) then
+      return name
+    end
+  end
+  if _G.GetSpellInfo then
+    local ok, name = pcall(_G.GetSpellInfo, spellID)
+    if ok and type(name) == "string" and not Secret(name) then
+      return name
+    end
+  end
+end
+
+-- The direct lookup first; then every buff on you, by spell id or by the
+-- spell's name (the direct lookup has been seen missing a Well-Rested that was
+-- up, 3 stacks, 2026-11-17). By name only when asked (Well-Rested).
+local function PlayerAura(spellID, byName)
   if C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
     local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, spellID)
     if ok and aura and Secret(aura) then
       return HIDDEN
     end
-    return ok and aura or nil
+    if ok and type(aura) == "table" then
+      return aura
+    end
   end
-  if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
-    local index = 1
-    while true do
-      local aura = C_UnitAuras.GetAuraDataByIndex("player", index, "HELPFUL")
-      if not aura then
-        return nil
-      end
-      local id = not Secret(aura) and aura.spellId
-      if id and not Secret(id) and id == spellID then
+  if not (C_UnitAuras and C_UnitAuras.GetAuraDataByIndex) then
+    return nil
+  end
+  local name = byName and SpellName(spellID)
+  if name and name == SpellName(AREA) then
+    name = nil -- (the bag's own aura has the same name: by id only)
+  end
+  for index = 1, 80 do
+    local ok, aura = pcall(C_UnitAuras.GetAuraDataByIndex, "player", index, "HELPFUL")
+    if not ok or not aura then
+      return nil
+    end
+    if Secret(aura) then
+      -- (can't be read: it might be this one)
+    else
+      local id, auraName = aura.spellId, aura.name
+      if (not Secret(id) and id == spellID) or (name and not Secret(auraName) and auraName == name) then
         return aura
       end
-      index = index + 1
     end
   end
 end
@@ -118,7 +147,7 @@ local function BagIcon()
 end
 
 local function Status(now)
-  local aura = PlayerAura(BUFF)
+  local aura = PlayerAura(BUFF, true)
   local stacks = 0
   if aura then
     local applications = aura.applications
@@ -403,9 +432,19 @@ function F:Evaluate()
     testUntil = nil
   end
   local s = Status(now)
+  if s.stacks > 0 then
+    missingSince = nil
+  end
   local key, message
   if s.ready then
     if s.stacks == 0 then
+      -- (only once it has stayed gone a few seconds: one empty read isn't enough)
+      missingSince = missingSince or now
+      if now - missingSince < CONFIRM_MISSING then
+        self:Debug("Well-Rested reads as gone; checking again before reminding")
+        self:After(CONFIRM_MISSING + 0.2, self.Evaluate)
+        return
+      end
       key = "missing"
       message = "Your Cozy Sleeping Bag is ready, but Well-Rested is not active."
     elseif s.remaining and s.remaining <= (self.db.refreshMinutes or 20) * 60 then
@@ -482,7 +521,7 @@ local function DetachUseButton()
 end
 
 function F:OnDisable()
-  currentKey, dismissedKey, lastChatKey, snoozeUntil, testUntil = nil, nil, nil, nil, nil
+  currentKey, dismissedKey, lastChatKey, snoozeUntil, testUntil, missingSince = nil, nil, nil, nil, nil, nil
   HideAlert()
   HideTimeline()
   tl = {}
