@@ -54,6 +54,7 @@ local mod = {
     .. "quests with their prerequisites and chains, and clear times with a guild leaderboard.",
   defaults = {
     autoOpen = true,
+    hideInCombat = true,
     openOnPull = true,
     openOnKill = true,
     maxHeight = 420,
@@ -90,6 +91,14 @@ local mod = {
   options = {
     { type = "header", label = "Window" },
     { key = "autoOpen", type = "boolean", label = "Open automatically inside dungeons" },
+    {
+      key = "hideInCombat",
+      type = "boolean",
+      label = "Hide in combat",
+      tooltip = "Hides the window while you are in combat and brings it back when the fight is over. Anything "
+        .. "that would open it during a fight (a pull, a boss kill) opens it once the fight is over; /arl dh "
+        .. "still opens it at once.",
+    },
     {
       key = "openOnPull",
       type = "boolean",

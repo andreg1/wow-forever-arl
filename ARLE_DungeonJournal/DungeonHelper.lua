@@ -41,6 +41,7 @@ end
 H.auto = true -- follow the current dungeon
 
 local frame, listScroll, detailScroll, placeFrame
+local comeBack = false -- hidden for a fight (Hide in combat): shown again when it ends
 
 local function CurrentTab()
   return tabs[mod.db.tab] or H.tabs[1]
@@ -210,6 +211,7 @@ local function CreateWindow()
   frame.close = H.SmallButton(frame, "x", 18)
   frame.close:SetPoint("TOPRIGHT", -4, -3)
   S(frame.close, "OnClick", function()
+    comeBack = false
     frame:Hide()
   end)
   frame.pick = H.SmallButton(frame, "v", 18)
@@ -308,12 +310,27 @@ local function CreateWindow()
   frame:Hide()
 end
 
-local function Open(tabKey)
+-- Hide in combat: the window goes when a fight starts and comes back when
+-- it ends; automatic openings during a fight wait for its end (comeBack).
+-- Our own frame, nothing secure: hiding it in combat is allowed.
+
+local function HiddenForCombat()
+  return mod.db.hideInCombat and InCombatLockdown() and true or false
+end
+
+-- auto: opened by the feature itself (dungeon entered, pull, kill), not by
+-- the player: waits for the end of the fight when it's hidden in combat.
+local function Open(tabKey, auto)
   if not frame then
     CreateWindow()
   end
   if tabKey then
     SetTab(tabKey)
+  end
+  if auto and HiddenForCombat() then
+    comeBack = true
+    mod:Debug("opening after combat (hidden in combat)")
+    return
   end
   frame:Show()
   -- Item data that came while it was closed: gains catch up now.
@@ -325,6 +342,7 @@ end
 
 local function Toggle(tabKey)
   if frame and frame:IsShown() and (not tabKey or tabKey == mod.db.tab) then
+    comeBack = false
     frame:Hide()
   else
     if not H.shown then
@@ -350,10 +368,7 @@ local function FocusBoss(dungeon, bossName, pulling)
   tabs.bis:Focus(bossName, pulling)
   mod.db.listCollapsed = nil
   mod.db.tab = "bis"
-  if not frame then
-    CreateWindow()
-  end
-  frame:Show()
+  Open(nil, true)
   H.DetailToTop()
   H.Render()
 end
@@ -379,9 +394,9 @@ local function ZoneChanged()
   end
   if current and mod.db.autoOpen and not (frame and frame:IsShown()) then
     autoOpened = true
-    Open()
+    Open(nil, true)
   elseif not current and autoOpened and frame then
-    autoOpened = false
+    autoOpened, comeBack = false, false
     frame:Hide()
   end
   H.Render()
@@ -504,6 +519,18 @@ local function OnEvent(_, event, ...)
     end
   elseif event == "PLAYER_REGEN_DISABLED" then
     tabs.times:OnCombat()
+    if mod.db.hideInCombat and frame and frame:IsShown() then
+      comeBack = true
+      frame:Hide()
+    end
+  elseif event == "PLAYER_REGEN_ENABLED" then
+    if comeBack then
+      comeBack = false
+      if frame and mod.db.hideInCombat then
+        frame:Show()
+        H.Render()
+      end
+    end
   elseif QUEST_EVENTS[event] then
     mod:Debounce("quests", 0.5, function()
       tabs.quests:OnQuestChange()
@@ -672,7 +699,7 @@ function mod:OnEnable()
   for _, e in ipairs({
     "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "ZONE_CHANGED", "ZONE_CHANGED_INDOORS",
     "ENCOUNTER_START", "ENCOUNTER_END", "BOSS_KILL", "PARTY_KILL", "UNIT_DIED", "PLAYER_TARGET_CHANGED",
-    "CHAT_MSG_SYSTEM", "PLAYER_REGEN_DISABLED",
+    "CHAT_MSG_SYSTEM", "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED",
     "GROUP_ROSTER_UPDATE", "PLAYER_EQUIPMENT_CHANGED", "GET_ITEM_INFO_RECEIVED",
     "QUEST_LOG_UPDATE", "QUEST_ACCEPTED", "QUEST_TURNED_IN", "QUEST_REMOVED", "PLAYER_LEVEL_UP",
   }) do
@@ -691,6 +718,7 @@ end
 
 function mod:OnDisable()
   -- (the events registered with self:On are dropped by the host)
+  comeBack = false
   if frame then
     frame:Hide()
   end
@@ -708,6 +736,10 @@ function mod:OnResetPosition()
 end
 
 function mod:OnOptionChanged(key)
+  if key == "hideInCombat" and not self.db.hideInCombat and comeBack and frame then
+    comeBack = false -- switched off mid-fight: back now
+    frame:Show()
+  end
   if key == "showShared" or key == "showOther" then
     H.ClearBossCache()
     tabs.bis.RefreshMine()
