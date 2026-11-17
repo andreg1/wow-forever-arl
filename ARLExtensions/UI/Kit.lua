@@ -149,3 +149,69 @@ function Kit.Rule(parent, alpha)
   t:SetColorTexture(1, 1, 1, alpha or 0.1)
   return t
 end
+
+-- A feature's movable box, kept where the player drags it: the centre's
+-- offset from UIParent's centre, in UIParent units, in def.char[spec.key or
+-- "position"] (what the "Reset position" preset clears). Returns place(),
+-- which puts the frame back there (call it after a reset or a SetScale).
+--   spec.x, spec.y   default offset
+--   spec.secure      the frame holds a secure button (it's protected): no
+--                    drag in combat, and moves wait for combat to end
+--   spec.onMoved     fn() after a drag (e.g. to move a sibling box along)
+function Kit.Movable(f, def, spec)
+  spec = spec or {}
+  local key = spec.key or "position"
+  local Secure = ARLE.Secure
+  f:SetClampedToScreen(true)
+  f:SetMovable(true)
+  f:EnableMouse(true)
+  f:RegisterForDrag("LeftButton")
+  local function Go()
+    f:ClearAllPoints()
+    local pos = def.char and def.char[key]
+    local s = f:GetScale() -- offsets are in the frame's own (scaled) units
+    f:SetPoint("CENTER", UIParent, "CENTER", (pos and pos[1] or spec.x or 0) / s, (pos and pos[2] or spec.y or 0) / s)
+  end
+  local function Place()
+    if spec.secure then
+      Secure:Run(Go, f)
+    else
+      Go()
+    end
+  end
+  local moving
+  local stopKey = {}
+  def:Script(f, "OnDragStart", function(self)
+    if spec.secure and Secure:InCombat() then
+      return
+    end
+    moving = true
+    self:StartMoving()
+  end)
+  def:Script(f, "OnDragStop", function(self)
+    if not moving then
+      return
+    end
+    moving = nil
+    local function Stop()
+      self:StopMovingOrSizing()
+      local x, y = self:GetCenter()
+      local cx, cy = UIParent:GetCenter()
+      local s = self:GetScale()
+      if x and cx then
+        def.char[key] = { x * s - cx, y * s - cy }
+      end
+      Go()
+      if spec.onMoved then
+        spec.onMoved()
+      end
+    end
+    if spec.secure then
+      Secure:Run(Stop, stopKey) -- its own key: a Place queued after it must not replace it
+    else
+      Stop()
+    end
+  end)
+  Place()
+  return Place
+end

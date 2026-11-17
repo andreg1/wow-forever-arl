@@ -1359,31 +1359,23 @@ end
 -------------------------------------------------------------------------------
 
 local pad
+-- Kit.Movable's place function. The pad holds the secure button and the
+-- AutoLayer button has it anchored on top, so both are protected: in combat
+-- they can't be moved, dragged, enabled or disabled (ADDON_ACTION_BLOCKED,
+-- 2026-11-17, from PadText's Disable); those changes wait for combat to end.
+local placePad
 
 local function PlacePad()
-  pad:ClearAllPoints()
-  local pos = F.char.position
-  pad:SetPoint("CENTER", UIParent, "CENTER", pos and pos[1] or 0, pos and pos[2] or -220)
+  if placePad then
+    placePad()
+  end
 end
 
 local function BuildPad()
   local f = Skin:CreateTooltipWindow(nil, UIParent)
   f:SetSize(226, 62)
   f:SetFrameStrata("MEDIUM")
-  f:SetClampedToScreen(true)
-  f:SetMovable(true)
-  f:EnableMouse(true)
-  f:RegisterForDrag("LeftButton")
-  F:Script(f, "OnDragStart", f.StartMoving)
-  F:Script(f, "OnDragStop", function(self)
-    self:StopMovingOrSizing()
-    local x, y = self:GetCenter()
-    local cx, cy = UIParent:GetCenter()
-    if x and cx then
-      F.char.position = { x - cx, y - cy }
-    end
-    PlacePad()
-  end)
+  placePad = Kit.Movable(f, F, { y = -220, secure = true })
   -- Two buttons, one per pool. LayerSwap: a plain button (its click is the
   -- hardware event /who needs). AutoLayer: the host's secure macro button,
   -- laid over the visible one.
@@ -1421,7 +1413,6 @@ local function BuildPad()
   f.text:SetJustifyH("CENTER")
   f:Hide()
   pad = f
-  PlacePad()
   -- The host's secure macro button laid over the AutoLayer one (out of
   -- combat): its macro says "inv layer" as the player; PostClick runs the rest.
   local sec = ARLE.Secure:Button("LayerSwap")
@@ -1502,29 +1493,25 @@ function F:PadText()
     al = wait > 0 and string.format("AutoLayer: hosts again in %d:%02d", math.floor(wait / 60), wait % 60)
       or "AutoLayer: ready"
   end
-  local usable = self.db.autolayer and inChannel
-  if usable then
-    pad.al:Enable()
-  else
-    pad.al:Disable()
-  end
-  if self.db.layerswap then
-    pad.ls:Enable()
-  else
-    pad.ls:Disable()
-  end
+  local usable = self.db.autolayer and inChannel and true or false
+  ARLE.Secure:Run(function()
+    pad.al:SetEnabled(usable)
+  end, "LayerBridge.al")
+  pad.ls:SetEnabled(self.db.layerswap and true or false)
   pad.text:SetText(top .. "\n|cffaaaaaa" .. al .. "|r")
+end
+
+-- Shown while on, wanted and outside instances; checked again when it runs,
+-- since it may wait for combat to end.
+local function SyncPad()
+  pad:SetShown((F._active and F.db.button and not InInstance()) and true or false)
 end
 
 function F:Paint()
   -- The pad holds a secure button: shown and hidden out of combat only.
   if not self._active or not self.db.button or InInstance() then
     if pad then
-      ARLE.Secure:Run(function()
-        if not (F._active and F.db.button and not InInstance()) then
-          pad:Hide()
-        end
-      end)
+      ARLE.Secure:Run(SyncPad, "LayerBridge.pad")
     end
     return
   end
@@ -1532,17 +1519,11 @@ function F:Paint()
     BuildPad()
   end
   self:PadText()
-  ARLE.Secure:Run(function()
-    if F._active and F.db.button and not InInstance() then
-      pad:Show()
-    end
-  end)
+  ARLE.Secure:Run(SyncPad, "LayerBridge.pad")
 end
 
 function F:OnResetPosition()
-  if pad then
-    PlacePad()
-  end
+  PlacePad()
 end
 
 function F:OnOptionChanged(key, value)
@@ -1751,11 +1732,7 @@ function F:OnDisable()
   ask, joined, lastAsk = nil, nil, nil
   self:LeaveLayer()
   if pad then
-    ARLE.Secure:Run(function()
-      if not F._active then
-        pad:Hide()
-      end
-    end)
+    ARLE.Secure:Run(SyncPad, "LayerBridge.pad")
   end
 end
 

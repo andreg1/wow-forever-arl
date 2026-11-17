@@ -214,10 +214,14 @@ end
 -- Alert frame (themed); the bag icon is the host's secure item button
 -------------------------------------------------------------------------------
 
+-- Kit.Movable's place functions (the alert holds a secure button, so its
+-- moves wait for combat to end); the alert and the timeline share a spot.
+local placeAlert, placeTimeline
+
 local function PlaceAlert()
-  alert:ClearAllPoints()
-  local pos = F.char.position
-  alert:SetPoint("CENTER", UIParent, "CENTER", pos and pos[1] or 0, pos and pos[2] or 200)
+  if placeAlert then
+    placeAlert()
+  end
 end
 
 -- The alert holds a secure button, so it can only be hidden out of combat
@@ -225,7 +229,7 @@ end
 local function HideAlert()
   if alert and alert:IsShown() then
     if InCombatLockdown() then
-      Secure:Run(HideAlert)
+      Secure:Run(HideAlert, "SleepingBag.alert")
     else
       alert:Hide()
     end
@@ -233,17 +237,11 @@ local function HideAlert()
 end
 
 local function AttachUseButton()
-  local use = Secure:Button("UseItem")
-  if not use or InCombatLockdown() or not alert then
+  -- Over the icon (same spot), anchored to the alert itself.
+  local use = Secure:Attach("UseItem", alert, { "LEFT", 12, 0 }, 42)
+  if not use then
     return
   end
-  use:SetParent(alert)
-  use:ClearAllPoints()
-  -- On the icon, but anchored to the alert frame: a protected frame can't be
-  -- anchored to a region (the icon is a texture); the client refuses with
-  -- "Cannot anchor protected frames to regions". Same spot as the icon.
-  use:SetPoint("LEFT", alert, "LEFT", 12, 0)
-  use:SetSize(42, 42)
   use:SetAttribute("type", "item")
   use:SetAttribute("item", "item:" .. ITEM)
   use:SetScript("OnEnter", function(self)
@@ -253,27 +251,13 @@ local function AttachUseButton()
     GameTooltip:Show()
   end)
   use:SetScript("OnLeave", GameTooltip_Hide)
-  use:Show()
 end
 
 local function BuildAlert()
   local f = Skin:CreateTooltipWindow(nil, UIParent)
   f:SetSize(360, 74)
   f:SetFrameStrata("MEDIUM")
-  f:SetClampedToScreen(true)
-  f:SetMovable(true)
-  f:EnableMouse(true)
-  f:RegisterForDrag("LeftButton")
-  f:SetScript("OnDragStart", f.StartMoving)
-  f:SetScript("OnDragStop", function(self)
-    self:StopMovingOrSizing()
-    local x, y = self:GetCenter()
-    local cx, cy = UIParent:GetCenter()
-    if x and cx then
-      F.char.position = { x - cx, y - cy }
-    end
-    PlaceAlert()
-  end)
+  placeAlert = Kit.Movable(f, F, { y = 200, secure = true })
 
   f.icon = f:CreateTexture(nil, "ARTWORK")
   f.icon:SetSize(42, 42)
@@ -291,19 +275,18 @@ local function BuildAlert()
 
   local dismiss = Kit.SmallButton(f, "Dismiss", 60)
   dismiss:SetPoint("BOTTOMRIGHT", -8, 8)
-  dismiss:SetScript("OnClick", function()
+  F:Script(dismiss, "OnClick", function()
     dismissedKey = currentKey
     HideAlert()
   end)
   local snooze = Kit.SmallButton(f, "Snooze " .. SNOOZE_MINUTES .. "m", 76)
   snooze:SetPoint("RIGHT", dismiss, "LEFT", -4, 0)
-  snooze:SetScript("OnClick", function()
+  F:Script(snooze, "OnClick", function()
     snoozeUntil = GetTime() + SNOOZE_MINUTES * 60
     HideAlert()
   end)
   f:Hide()
   alert = f
-  PlaceAlert()
 end
 
 local function ShowAlert(message, s)
@@ -321,32 +304,16 @@ local function ShowAlert(message, s)
 end
 
 local function PlaceTimeline()
-  timeline:ClearAllPoints()
-  local pos = F.char.position
-  timeline:SetPoint("CENTER", UIParent, "CENTER", pos and pos[1] or 0, pos and pos[2] or 200)
+  if placeTimeline then
+    placeTimeline()
+  end
 end
 
 local function BuildTimeline()
   local f = Skin:CreateTooltipWindow(nil, UIParent)
   f:SetSize(360, 46)
   f:SetFrameStrata("MEDIUM")
-  f:SetClampedToScreen(true)
-  f:SetMovable(true)
-  f:EnableMouse(true)
-  f:RegisterForDrag("LeftButton")
-  f:SetScript("OnDragStart", f.StartMoving)
-  f:SetScript("OnDragStop", function(self)
-    self:StopMovingOrSizing()
-    local x, y = self:GetCenter()
-    local cx, cy = UIParent:GetCenter()
-    if x and cx then
-      F.char.position = { x - cx, y - cy }
-    end
-    PlaceTimeline()
-    if alert then
-      PlaceAlert()
-    end
-  end)
+  placeTimeline = Kit.Movable(f, F, { y = 200, onMoved = PlaceAlert })
   f.text = Kit.Text(f, "GameFontHighlightSmall")
   f.text:SetPoint("TOPLEFT", 10, -7)
   f.text:SetPoint("RIGHT", -10, 0)
@@ -367,14 +334,13 @@ local function BuildTimeline()
     mark:SetPoint("LEFT", f.bar, "LEFT", 0, 0)
     f.bar["mark" .. i] = mark
   end
-  f.bar:SetScript("OnSizeChanged", function(bar, width)
+  F:Script(f.bar, "OnSizeChanged", function(bar, width)
     for i = 1, MAX_STACKS - 1 do
       bar["mark" .. i]:SetPoint("LEFT", bar, "LEFT", width * i / MAX_STACKS - 1, 0)
     end
   end)
   f:Hide()
   timeline = f
-  PlaceTimeline()
 end
 
 local function HideTimeline()
@@ -409,12 +375,8 @@ local function UpdateTimeline()
 end
 
 function F:OnResetPosition()
-  if alert then
-    PlaceAlert()
-  end
-  if timeline then
-    PlaceTimeline()
-  end
+  PlaceAlert()
+  PlaceTimeline()
 end
 
 -------------------------------------------------------------------------------
@@ -514,17 +476,9 @@ end
 -- our bag. Secure attributes and parents only change out of combat; it's
 -- skipped if this was turned on again, or another feature took the button.
 local function DetachUseButton()
-  local use = Secure:Button("UseItem")
-  if not use or F._active or not alert or use:GetParent() ~= alert then
-    return
+  if not F._active then
+    Secure:Detach("UseItem", alert, { "type", "item" })
   end
-  use:Hide()
-  use:ClearAllPoints()
-  use:SetParent(UIParent)
-  use:SetAttribute("type", nil)
-  use:SetAttribute("item", nil)
-  use:SetScript("OnEnter", nil)
-  use:SetScript("OnLeave", nil)
 end
 
 function F:OnDisable()

@@ -924,11 +924,12 @@ end
 -------------------------------------------------------------------------------
 
 local line
+local placeLine -- Kit.Movable's
 
 local function PlaceLine()
-  line:ClearAllPoints()
-  local pos = F.char.position
-  line:SetPoint("CENTER", UIParent, "CENTER", pos and pos[1] or 0, pos and pos[2] or -160)
+  if placeLine then
+    placeLine()
+  end
 end
 
 local REASON = { asked = "asked", owed = "buffed you", group = "group" }
@@ -937,27 +938,13 @@ local function BuildLine()
   local f = Skin:CreateTooltipWindow(nil, UIParent)
   f:SetSize(320, 26)
   f:SetFrameStrata("MEDIUM")
-  f:SetClampedToScreen(true)
-  f:SetMovable(true)
-  f:EnableMouse(true)
-  f:RegisterForDrag("LeftButton")
-  F:Script(f, "OnDragStart", f.StartMoving)
-  F:Script(f, "OnDragStop", function(self)
-    self:StopMovingOrSizing()
-    local x, y = self:GetCenter()
-    local cx, cy = UIParent:GetCenter()
-    if x and cx then
-      F.char.position = { x - cx, y - cy }
-    end
-    PlaceLine()
-  end)
+  placeLine = Kit.Movable(f, F, { y = -160 })
   f.text = Kit.Text(f, "GameFontHighlightSmall")
   f.text:SetPoint("LEFT", 8, 0)
   f.text:SetPoint("RIGHT", -8, 0)
   f.text:SetWordWrap(false)
   f:Hide()
   line = f
-  PlaceLine()
 end
 
 local function QueueCount()
@@ -993,9 +980,7 @@ function F:Paint()
 end
 
 function F:OnResetPosition()
-  if line then
-    PlaceLine()
-  end
+  PlaceLine()
 end
 
 -------------------------------------------------------------------------------

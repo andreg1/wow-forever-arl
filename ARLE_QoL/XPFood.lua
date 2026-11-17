@@ -571,12 +571,14 @@ end
 -- Alert (themed); the food icon is the host's secure "UseFood" button
 -------------------------------------------------------------------------------
 
+-- Kit.Movable's place function (the alert holds a secure button, so its
+-- moves wait for combat to end).
+local placeAlert
+
 local function PlaceAlert()
-  alert:ClearAllPoints()
-  -- position is in UIParent units; offsets are in the alert's (scaled) units.
-  local pos = F.char.position
-  local s = alert:GetScale()
-  alert:SetPoint("CENTER", UIParent, "CENTER", (pos and pos[1] or 0) / s, (pos and pos[2] or 120) / s)
+  if placeAlert then
+    placeAlert()
+  end
 end
 
 local function HideMenu()
@@ -589,7 +591,7 @@ local function HideAlert()
   HideMenu()
   if alert and alert:IsShown() then
     if InCombatLockdown() then
-      Secure:Run(HideAlert)
+      Secure:Run(HideAlert, "XPFood.alert")
     else
       alert:Hide()
     end
@@ -648,17 +650,17 @@ local function OpenMenu(anchor)
       menu.rows[i] = row
     end
     row:SetText(entry.label)
-    row:SetScript("OnClick", function()
+    F:Script(row, "OnClick", function()
       HideMenu()
       entry.run()
     end)
     -- The food's own tooltip (its stats, well-fed bonus, XP line) on hover.
-    row:SetScript("OnEnter", entry.itemID and function(self)
+    F:Script(row, "OnEnter", entry.itemID and function(self)
       GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
       GameTooltip:SetItemByID(entry.itemID)
       GameTooltip:Show()
     end or nil)
-    row:SetScript("OnLeave", entry.itemID and GameTooltip_Hide or nil)
+    F:Script(row, "OnLeave", entry.itemID and GameTooltip_Hide or nil)
     row:Show()
   end
   for i = #entries + 1, #menu.rows do
@@ -673,22 +675,12 @@ local function OpenMenu(anchor)
 end
 
 local function AttachUseButton()
-  local use = Secure:Button("UseFood")
-  if not use or InCombatLockdown() or not alert then
+  -- Over the icon (same spot as Layout puts it), anchored to the alert itself.
+  local use = alert and Secure:Attach("UseFood", alert, F.db.iconMode and { "CENTER" } or { "TOPLEFT", 12, -12 },
+    alert.icon:GetWidth())
+  if not use then
     return
   end
-  use:SetParent(alert)
-  use:ClearAllPoints()
-  -- On the icon, but anchored to the alert frame: a protected frame can't be
-  -- anchored to a region (the icon is a texture); the client refuses with
-  -- "Cannot anchor protected frames to regions". Same spot as the icon (Layout).
-  if F.db.iconMode then
-    use:SetPoint("CENTER", alert, "CENTER")
-  else
-    use:SetPoint("TOPLEFT", alert, "TOPLEFT", 12, -12)
-  end
-  local size = alert.icon:GetWidth()
-  use:SetSize(size, size)
   use:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     local food = SelectedFood(lastBags)
@@ -714,24 +706,13 @@ local function AttachUseButton()
       OpenMenu("icon")
     end
   end)
-  use:Show()
 end
 
 -- Hand the shared button back clean once off (as Sleeping Bag does).
 local function DetachUseButton()
-  local use = Secure:Button("UseFood")
-  if not use or F._active or not alert or use:GetParent() ~= alert then
-    return
+  if not F._active then
+    Secure:Detach("UseFood", alert, { "type", "type1", "item" })
   end
-  use:Hide()
-  use:ClearAllPoints()
-  use:SetParent(UIParent)
-  use:SetAttribute("type", nil)
-  use:SetAttribute("type1", nil)
-  use:SetAttribute("item", nil)
-  use:SetScript("OnEnter", nil)
-  use:SetScript("OnLeave", nil)
-  use:SetScript("PostClick", nil)
 end
 
 local function Layout()
@@ -760,21 +741,7 @@ end
 local function BuildAlert()
   local f = Skin:CreateTooltipWindow(nil, UIParent)
   f:SetFrameStrata("MEDIUM")
-  f:SetClampedToScreen(true)
-  f:SetMovable(true)
-  f:EnableMouse(true)
-  f:RegisterForDrag("LeftButton")
-  f:SetScript("OnDragStart", f.StartMoving)
-  f:SetScript("OnDragStop", function(self)
-    self:StopMovingOrSizing()
-    local x, y = self:GetCenter()
-    local cx, cy = UIParent:GetCenter()
-    local s = self:GetScale() -- our own units -> UIParent's
-    if x and cx then
-      F.char.position = { x * s - cx, y * s - cy }
-    end
-    PlaceAlert()
-  end)
+  placeAlert = Kit.Movable(f, F, { y = 120, secure = true })
 
   f.icon = f:CreateTexture(nil, "ARTWORK")
   f.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
@@ -785,6 +752,7 @@ local function BuildAlert()
   f.glow:SetVertexColor(1, 0.85, 0.2)
   f.glow:SetPoint("CENTER", f.icon, "CENTER")
   f.glow:SetSize(90, 90)
+  -- Plain SetScript: a two-line pulse every frame isn't worth Debug.Call's cost.
   f:SetScript("OnUpdate", function(self)
     if self.glow:IsShown() then
       self.glow:SetAlpha(0.625 + 0.375 * math.cos(GetTime() * 2 * math.pi / 1.2))
@@ -807,18 +775,17 @@ local function BuildAlert()
 
   f.dismiss = Kit.SmallButton(f, "Dismiss", 60)
   f.dismiss:SetPoint("BOTTOMRIGHT", -8, 8)
-  f.dismiss:SetScript("OnClick", Dismiss)
+  F:Script(f.dismiss, "OnClick", Dismiss)
   f.snooze = Kit.SmallButton(f, "Snooze", 60)
   f.snooze:SetPoint("RIGHT", f.dismiss, "LEFT", -4, 0)
-  f.snooze:SetScript("OnClick", Snooze)
+  F:Script(f.snooze, "OnClick", Snooze)
   f.picker = Kit.SmallButton(f, "Food", 50)
   f.picker:SetPoint("RIGHT", f.snooze, "LEFT", -4, 0)
-  f.picker:SetScript("OnClick", function()
+  F:Script(f.picker, "OnClick", function()
     OpenMenu("picker")
   end)
   f:Hide()
   alert = f
-  PlaceAlert()
 end
 
 local function ShowAlert(message, bags)
@@ -1152,7 +1119,8 @@ end
 function F:OnOptionChanged()
   dismissedKey, lastFire = nil, nil
   if alert then
-    Layout()
+    -- The alert holds a secure button: its size and scale change after combat.
+    Secure:Run(Layout, "XPFood.Layout")
   end
   self:Evaluate()
 end
