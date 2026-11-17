@@ -23,6 +23,7 @@ Copy every folder of this repo (`ARLExtensions` and the `ARLE_*` packs) into `Wo
 | Quality of Life | Loot Sparkles: keeps the sparkle on lootable quest items, even after a graphics preset turns it off | `/arl sparkle` | Nothing |
 | Quality of Life | Buff Back: one key buffs back whoever buffed you, whoever asks in chat, and your group; you choose which buffs each class gets | `/arl buff` | Nothing |
 | Quality of Life | Layer Bridge: AutoLayer and LayerSwap users change layer with each other; a LayerSwap button asks LayerSwap hosts out of sight, an AutoLayer button says "inv layer" in the layer channel, and with hosting on you invite both addons' users | `/arl layer` | Nothing (works alongside AutoLayer / LayerSwap) |
+| Quality of Life | Share Location: guildmates who use OpenMap see you live as a dot where you stand on their map (guild only, never from dungeons, raids or battlegrounds); on unless you turn it off | `/arl share` | Nothing (you don't need OpenMap yourself) |
 | Questie | New in Forever: star on quests that are new in WoW Forever | `/arl new` | Questie |
 | Questie | Sub-Quest Filter: hides sub-quests until you can pick them up | `/arl subq` | Questie |
 | Questie | Rare Objectives: alerts and a scan key for rare quest mobs you still need | `/arl rare` | QuestieDB |
@@ -31,6 +32,7 @@ Copy every folder of this repo (`ARLExtensions` and the `ARLE_*` packs) into `Wo
 | EllesmereUI | Item Lock: Alt+Right-click locks a bag item so it can't be sold or destroyed | `/arl lock` | EllesmereUI Bags |
 | Auctionator | Darkmoon Tickets: Darkmoon Faire turn-ins ranked by gold per Prize Ticket | `/arl dmf` | Auctionator |
 | DungeonJournal | Dungeon Helper: dungeon window with BiS Finder, Quests and Clear Times | `/arl dh` | DungeonJournal (Forever Leveling BiS optional) |
+| OpenMap | Sharer Markers: guildmates and friends who share where they are show as class-coloured diamonds with their names, so your party (round dots with a gold ring) stands apart | `/arl markers` | OpenMap |
 
 Officers and the Guild Master also get **Officer Tools**: who in the guild runs the addon, and which version.
 

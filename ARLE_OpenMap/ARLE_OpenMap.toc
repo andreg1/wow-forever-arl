@@ -1,0 +1,15 @@
+## Interface: 16001, 120105, 120107
+## Title: ARL Extensions: OpenMap
+## Notes: Sharer Markers: guildmates and friends who share where they are show as diamonds with names on OpenMap, apart from your group.
+## Author: aredpanda, andreg1
+## Version: 0.7.0
+## Group: ARLExtensions
+## Dependencies: ARLExtensions
+## OptionalDeps: OpenMap
+## LoadOnDemand: 1
+## X-ARLE-Pack: OpenMap
+## X-ARLE-Group: OpenMap
+## X-ARLE-Features: SharerMarkers
+## X-ARLE-Feature-SharerMarkers: title=Sharer Markers; extends=OpenMap; cmd=markers
+
+SharerMarkers.lua
