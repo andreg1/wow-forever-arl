@@ -1,16 +1,28 @@
 -- Dungeon Helper, shared parts: the module definition and its options, the
--- data sources, the group, the comms every tab uses, and small helpers.
+-- data sources, the group, the comms every tab uses, and the row widgets the
+-- tabs draw their lists with.
 --
--- The window (DungeonHelper.lua) has three tabs, each in its own file:
---   BiS.lua     BiS Finder: which boss drops are BiS or upgrades for whom
---   Quests.lua  the dungeon's quests and who in the party has them
---   Times.lua   clear times: splits by boss, records, party members' records
+-- The window (DungeonHelper.lua) has two panes: a list on the left and the
+-- selected entry's details on the right. Three tabs, each in its own file:
+--   Loot.lua    Bosses & Loot: bosses, their drops, and who in the party (ARL
+--               members) each drop is BiS or an upgrade for
+--   Quests.lua  the dungeon's quests, their prerequisites and the rest of
+--               their chain, and the party's progress
+--   Times.lua   clear times: splits by boss, records, the party's records and
+--               the guild leaderboard
 --
 -- Sources (all read-only, through their public namespaces):
---   DungeonJournal        bosses, loot, quests, encounter IDs, boss portraits
---                         (ForeverDungeonJournal_NS)
+--   DungeonJournal        bosses, loot, quests and their prerequisite chains,
+--                         encounter IDs, boss portraits (ForeverDungeonJournal_NS)
 --   Forever Leveling BiS  item gains for the player (ForeverLevelingBiS_API);
---                         only the BiS Finder needs it
+--                         only Bosses & Loot needs it
+--   QuestieDB (optional)  prerequisites DungeonJournal doesn't list, and the
+--                         quests that follow (ARLE.Bridge.QuestieDB)
+--
+-- What is shared, and with whom: only ARL members see any of it (one addon
+-- prefix, guild-gated in Core/Comm.lua). The party gets each member's gains
+-- for the shown dungeon, quest states and records; the guild gets records
+-- only, for the leaderboard (Times.lua).
 local ADDON, ns = ...
 local ARLE = _G.ARLExtensions
 if not ARLE then
@@ -30,16 +42,16 @@ local mod = {
   extends = "ForeverDungeonJournal",
   command = "dh",
   commandAliases = { "dungeon" },
-  commandArgs = "[bis|quests|timers]",
+  commandArgs = "[loot|quests|timers]",
   commandHelp = "opens or closes the Dungeon Helper, optionally on a tab",
   commandSection = "Dungeon Helper",
   mainHelp = "opens or closes the window on the last tab",
   commandUsage = {
-    { "dh bis | quests | timers", "opens it on that tab" },
+    { "dh loot | quests | timers", "opens it on that tab" },
     { "dh reset", "restarts the run timer" },
-    { "dh spec <name> <spec>", "sets the spec scored for an estimated party member" },
   },
-  description = "A dungeon window with three tabs: BiS Finder, Quests and Clear Times.",
+  description = "A dungeon window: bosses and their loot (BiS and upgrades for you and your ARL partymates), "
+    .. "quests with their prerequisites and chains, and clear times with a guild leaderboard.",
   defaults = {
     autoOpen = true,
     openOnPull = true,
@@ -54,23 +66,24 @@ local mod = {
     timerStart = "pull",
     timerInTitle = true,
     announceRecords = true,
+    guildBoard = true,
   },
   pages = { -- child entries in /arl, one per tab of the window
     {
       key = "bis",
-      label = "BiS Finder",
-      notes = "Boss drops, and who each one is BiS or an upgrade for.",
+      label = "Bosses & Loot",
+      notes = "Each boss's drops, and who in the party each one is BiS or an upgrade for.",
       requires = "ForeverLevelingBiS",
     },
     {
       key = "quests",
       label = "Quests",
-      notes = "The dungeon's quests, and who in the party has them.",
+      notes = "The dungeon's quests, what unlocks them, what follows, and the party's progress.",
     },
     {
       key = "times",
       label = "Clear Times",
-      notes = "A run timer with splits per boss, and your records.",
+      notes = "A run timer with splits per boss, your records, and the guild's.",
     },
   },
   panePage = "times", -- the records list goes on the Clear Times entry
@@ -81,14 +94,14 @@ local mod = {
       key = "openOnPull",
       type = "boolean",
       label = "Jump to the boss when a fight starts",
-      tooltip = "Opens the window on the BiS Finder, folds every boss and unfolds the one you are fighting.",
+      tooltip = "Opens the window on Bosses & Loot with the boss you are fighting selected.",
     },
     {
       key = "openOnKill",
       type = "boolean",
       label = "Open when a boss dies",
-      tooltip = "When a boss dies inside a dungeon, opens the BiS Finder on that boss (even if you closed or "
-        .. "folded it), so you can see what it drops and who it's for while the loot is rolled.",
+      tooltip = "When a boss dies inside a dungeon, opens Bosses & Loot on that boss (even if you closed or folded "
+        .. "the window), so you can see what it drops and who it's for while the loot is rolled.",
     },
     { key = "maxHeight", type = "number", label = "Window height (200-800)", min = 200, max = 800 },
     {
@@ -97,7 +110,7 @@ local mod = {
       label = "Tab",
       tooltip = "The tab the window shows. Clicking a tab in the window changes this too.",
       values = {
-        { value = "bis", label = "BiS Finder" },
+        { value = "bis", label = "Bosses & Loot" },
         { value = "quests", label = "Quests" },
         { value = "times", label = "Clear Times" },
       },
@@ -113,7 +126,7 @@ local mod = {
       page = "bis",
       key = "showOther",
       type = "boolean",
-      label = "Show \"Other loot\" below the bosses",
+      label = "List \"Other loot\" below the bosses",
       tooltip = "Drops from the dungeon's mobs, chests and other spawns (DungeonJournal's Trash Drops and loot "
         .. "chests), and every recipe found in the dungeon. Gear in it counts for BiS and upgrades too.",
     },
@@ -162,6 +175,14 @@ local mod = {
       key = "announceRecords",
       type = "boolean",
       label = "Tell me in chat about new records",
+    },
+    {
+      page = "times",
+      key = "guildBoard",
+      type = "boolean",
+      label = "Share my records with the guild leaderboard",
+      tooltip = "Your best clear and boss splits go to the ARL members of the guild when you set a record, and "
+        .. "when someone looks at that dungeon's leaderboard. Off: you still see theirs, they don't see yours.",
     },
   },
 }
@@ -542,7 +563,7 @@ H.Members = Lib.Members
 -- shares about a dungeon; every tab answers with its own message kinds.
 -------------------------------------------------------------------------------
 
-H.tabs = {} -- filled by BiS.lua, Quests.lua, Times.lua, in that order
+H.tabs = {} -- filled by Loot.lua, Quests.lua, Times.lua, in that order
 
 -- Splits "head~<part>~<total>~<list>" messages into as many as it takes.
 function H.SendChunks(kind, head, items, sep, channel)
@@ -573,7 +594,7 @@ function H.QueueSend(dungeon, only, force)
     end
     for _, tab in ipairs(H.tabs) do
       if tab.Send and (not only or only == tab.key) then
-        tab:Send(dungeon, channel, pending.force)
+        ARLE.Debug.Call(mod, tab.Send, tab, dungeon, channel, pending.force)
       end
     end
   end)
@@ -585,11 +606,6 @@ function H.Request()
   if channel and H.shown then
     ARLE:Send("BQ", H.shown, channel)
     H.QueueSend(H.shown, nil, true)
-    for _, tab in ipairs(H.tabs) do
-      if tab.OnRequest then
-        tab:OnRequest()
-      end
-    end
   end
 end
 
@@ -607,8 +623,11 @@ function H.Render()
   -- replaced by the window (DungeonHelper.lua)
 end
 
--- Shared helpers now live in ARLE.Lib and ARLE.UI.Kit; these names stay so
--- the tab files read the same.
+-- Sets a script on one of our own frames, its errors caught (Feature:Script).
+function H.Script(frame, script, fn)
+  mod:Script(frame, script, fn)
+end
+
 H.ClassColor = Lib.ClassColor
 H.ColorName = Lib.ColorName
 H.QualityColor = Lib.QualityColor
@@ -625,4 +644,183 @@ function H.FilterButtons(bar, list, get, set)
     set(key)
     H.Render()
   end)
+end
+
+-- A tooltip on hover for one of our frames.
+function H.Tip(frame, title, text)
+  H.Script(frame, "OnEnter", function(self)
+    H.SimpleTooltip(self, type(title) == "function" and title(self) or title,
+      type(text) == "function" and text(self) or text)
+  end)
+  H.Script(frame, "OnLeave", GameTooltip_Hide)
+end
+
+-------------------------------------------------------------------------------
+-- Row widgets, the same in every tab and both panes:
+--   H.Section(parent)  a section header: accent label left, a note right
+--   H.Row(parent, h)   a clickable row: a picture (portrait or icon), a
+--                      name, a note on the right, and member marks (small
+--                      class-coloured squares: gold-edged = strong, faded =
+--                      weak). row.selected draws the accent bar on its left.
+-- Lists keep their rows in a pool and Place them top to bottom.
+-------------------------------------------------------------------------------
+
+H.MARK, H.MAX_MARKS = 8, 5
+
+function H.Section(parent)
+  local h = CreateFrame("Button", nil, parent)
+  h:SetHeight(18)
+  h.bg = h:CreateTexture(nil, "BACKGROUND")
+  h.bg:SetAllPoints()
+  h.icon = h:CreateTexture(nil, "ARTWORK")
+  h.icon:SetSize(14, 14)
+  h.icon:SetPoint("LEFT", 4, 0)
+  h.icon:Hide()
+  h.label = Kit.Text(h, "GameFontNormalSmall")
+  h.label:SetPoint("LEFT", 6, 0)
+  h.label:SetWordWrap(false)
+  h.note = Kit.Text(h, "GameFontHighlightSmall")
+  h.note:SetPoint("RIGHT", -4, 0)
+  h.note:SetJustifyH("RIGHT")
+  h.label:SetPoint("RIGHT", h.note, "LEFT", -4, 0)
+  return h
+end
+
+-- label, note, icon (texture path, atlas or nil)
+function H.PaintSection(h, label, note, icon)
+  local ar, ag, ab = ARLE.Skin:Accent()
+  h.bg:SetColorTexture(ar, ag, ab, 0.1)
+  h.label:SetText(label)
+  h.label:SetTextColor(ar, ag, ab)
+  h.note:SetText(note or "")
+  h.label:ClearAllPoints()
+  if icon then
+    h.icon:Show()
+    if not (type(icon) == "string" and icon:find("^atlas:") and h.icon.SetAtlas
+        and pcall(h.icon.SetAtlas, h.icon, icon:sub(7))) then
+      local path = type(icon) == "string" and (icon:gsub("^atlas:", "")) or icon
+      h.icon:SetTexture(path)
+    end
+    h.label:SetPoint("LEFT", h.icon, "RIGHT", 3, 0)
+  else
+    h.icon:Hide()
+    h.label:SetPoint("LEFT", 6, 0)
+  end
+  h.label:SetPoint("RIGHT", h.note, "LEFT", -4, 0)
+end
+
+function H.Row(parent, height, picture)
+  local r = CreateFrame("Button", nil, parent)
+  r:SetHeight(height)
+  r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+  r.bg = r:CreateTexture(nil, "BACKGROUND")
+  r.bg:SetAllPoints()
+  r.bg:SetColorTexture(0, 0, 0, 0)
+  r.bar = r:CreateTexture(nil, "ARTWORK")
+  r.bar:SetWidth(2)
+  r.bar:SetPoint("TOPLEFT", 0, 0)
+  r.bar:SetPoint("BOTTOMLEFT", 0, 0)
+  r.bar:Hide()
+  r.pic = r:CreateTexture(nil, "ARTWORK")
+  r.pic:SetSize(picture or (height - 2), picture or (height - 2))
+  r.pic:SetPoint("LEFT", 5, 0)
+  r.name = Kit.Text(r, "GameFontHighlightSmall")
+  r.name:SetPoint("LEFT", r.pic, "RIGHT", 4, 0)
+  r.name:SetWordWrap(false)
+  r.note = Kit.Text(r, "GameFontHighlightSmall")
+  r.note:SetJustifyH("RIGHT")
+  r.squares = {}
+  for k = 1, H.MAX_MARKS do
+    local edge = r:CreateTexture(nil, "ARTWORK")
+    edge:SetSize(H.MARK + 2, H.MARK + 2)
+    edge:SetPoint("RIGHT", -(4 + (k - 1) * (H.MARK + 4)), 0)
+    edge:SetColorTexture(1, 0.82, 0, 1)
+    local fill = r:CreateTexture(nil, "OVERLAY")
+    fill:SetSize(H.MARK, H.MARK)
+    fill:SetPoint("CENTER", edge, "CENTER")
+    r.squares[k] = { edge = edge, fill = fill }
+  end
+  r.more = Kit.Text(r, "GameFontDisableSmall")
+  r.more:SetPoint("RIGHT", -(4 + H.MAX_MARKS * (H.MARK + 4)), 0)
+  r.hl = r:CreateTexture(nil, "HIGHLIGHT")
+  r.hl:SetAllPoints()
+  r.hl:SetColorTexture(1, 1, 1, 0.07)
+  return r
+end
+
+-- marks = { {class, strong, weak}, ... }; note = right-hand text. Lays the
+-- name out between the picture and whatever is on the right.
+function H.PaintRow(r, name, note, marks, selected)
+  local ar, ag, ab = ARLE.Skin:Accent()
+  r.name:SetText(name or "")
+  marks = marks or {}
+  local n = math.min(#marks, H.MAX_MARKS)
+  for k = 1, H.MAX_MARKS do
+    local sq, mk = r.squares[k], marks[k]
+    if mk and k <= n then
+      local cr, cg, cb = H.ClassColor(mk.class)
+      sq.fill:SetColorTexture(cr, cg, cb, 1)
+      sq.fill:SetAlpha(mk.weak and 0.35 or (mk.strong and 1 or 0.6))
+      sq.fill:Show()
+      sq.edge:SetShown(mk.strong and true or false)
+    else
+      sq.fill:Hide()
+      sq.edge:Hide()
+    end
+  end
+  local extra = #marks - n
+  r.more:SetText(extra > 0 and ("+" .. extra) or "")
+  local right = 4 + n * (H.MARK + 4) + (extra > 0 and 14 or 0)
+  r.note:ClearAllPoints()
+  r.note:SetPoint("RIGHT", r, "RIGHT", -right, 0)
+  r.note:SetText(note or "")
+  r.name:ClearAllPoints()
+  r.name:SetPoint("LEFT", r.pic, "RIGHT", 4, 0)
+  r.name:SetPoint("RIGHT", r.note, "LEFT", -4, 0)
+  r.bar:SetColorTexture(ar, ag, ab, 1)
+  r.bar:SetShown(selected and true or false)
+  r.bg:SetColorTexture(ar, ag, ab, selected and 0.14 or 0)
+end
+
+-- Places frames top to bottom in a pane: y = Place(frame, y, height, gap).
+function H.Place(frame, y, height, gap)
+  frame:ClearAllPoints()
+  frame:SetPoint("TOPLEFT", 0, -y)
+  frame:SetPoint("RIGHT")
+  frame:Show()
+  return y + height + (gap or 1)
+end
+
+-- A pool of widgets made on demand: pool:Get() for the next, pool:Done()
+-- hides the ones not used since the last Done.
+function H.Pool(make)
+  local pool = { used = 0, list = {} }
+  function pool:Get()
+    self.used = self.used + 1
+    local w = self.list[self.used]
+    if not w then
+      w = make()
+      self.list[self.used] = w
+    end
+    return w
+  end
+  function pool:Done()
+    for i = self.used + 1, #self.list do
+      self.list[i]:Hide()
+    end
+    self.used = 0
+  end
+  return pool
+end
+
+-- A paragraph of text in a pane: y = Para(fs, y, width, text). The width is
+-- set outright, so the height is right before the pane is laid out.
+function H.Para(fs, y, width, text, gap)
+  fs:ClearAllPoints()
+  fs:SetPoint("TOPLEFT", 6, -y)
+  fs:SetWidth(math.max(width - 12, 20))
+  fs:SetWordWrap(true)
+  fs:SetText(text or "")
+  fs:Show()
+  return y + math.max(fs:GetStringHeight() or 12, 12) + (gap or 4)
 end

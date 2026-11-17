@@ -1,20 +1,19 @@
 ## Interface: 16001, 120105, 120107
 ## Title: ARL Extensions: DungeonJournal
-## Notes: Dungeon Helper: a dungeon window with BiS Finder, Quests and Clear Times tabs.
+## Notes: Dungeon Helper: bosses and their loot (BiS for you and your ARL partymates), quests with their chains, and clear times with a guild leaderboard.
 ## Author: aredpanda, andreg1
-## Version: 0.7.0
+## Version: 0.8.0
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
-## OptionalDeps: ForeverDungeonJournal, ForeverLevelingBiS
+## OptionalDeps: ForeverDungeonJournal, ForeverLevelingBiS, QuestieDB
 ## LoadOnDemand: 1
 ## X-ARLE-Pack: DungeonJournal
 ## X-ARLE-Group: ForeverDungeonJournal
 ## X-ARLE-Features: BiSDungeonHelper
 ## X-ARLE-Feature-BiSDungeonHelper: title=Dungeon Helper; extends=ForeverDungeonJournal; cmd=dh
 
-Estimate.lua
 Shared.lua
-BiS.lua
+Loot.lua
 Quests.lua
 Times.lua
 DungeonHelper.lua

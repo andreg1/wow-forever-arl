@@ -1,8 +1,9 @@
 -- Dungeon Helper, Clear Times tab: a run timer with a split per boss, like a
--- speedrun timer. Each boss row has the boss's portrait, its split in this
--- run (time from the start of the run to the kill) and the difference with
--- the player's best split. Hovering a split shows the records for that boss
--- (best split, best fight) and those of party members with the addon.
+-- speedrun timer. The list has each boss with its portrait, its split in
+-- this run (time from the start of the run to the kill) and the difference
+-- with the player's best split, then the clear, then the rares. The details
+-- of the selected boss (or the clear): this run, the player's records, the
+-- party's, and the guild leaderboard.
 --
 -- A run starts on the first pull inside the dungeon (or on entering, per the
 -- "Start the timer" setting) and is cleared when every required boss is dead
@@ -16,6 +17,16 @@
 -- Spire, Dire Maul, Stratholme) parks the run, and coming back resumes it.
 -- The run in progress is this character's (self.char.run); records are
 -- kept per character too: db.records["Name-Realm"][dungeon].
+--
+-- Sharing (ARL members only, through ARL's addon messages):
+--   party  "BT" with each member's records for the shown dungeon (as before)
+--   guild  the same "BT" on the guild channel, for the leaderboard: sent when
+--          the player sets a record, and in answer to "BR <dungeon>", which
+--          the Clear Times tab sends (once per dungeon per 15 min) when it
+--          shows a dungeon. Answers wait a random 1-6 s, and one per dungeon
+--          per minute at most. What comes in is kept account-wide
+--          (shared.board[dungeon][name]), 120 days. The "Share my records
+--          with the guild leaderboard" setting stops our own sends only.
 local _, ns = ...
 local ARLE = _G.ARLExtensions
 local H = ns.H
@@ -23,14 +34,24 @@ if not ARLE or not H then
   return
 end
 local mod = H.mod
-local Bosses, Members, ColorName, TooltipSide = H.Bosses, H.Members, H.ColorName, H.TooltipSide
+local Kit = ARLE.UI.Kit
+local S = H.Script
+local Bosses, Members, ColorName = H.Bosses, H.Members, H.ColorName
 local FormatTime, FormatDelta, Now = H.FormatTime, H.FormatDelta, H.Now
 
-local ROW_H, PORTRAIT = 22, 20
+local ROW_H, PORTRAIT, BIG, LINE_H = 22, 20, 36, 15
 local RESUME = 45 * 60 -- an unfinished run older than this starts over
+local CLEAR = "@clear" -- the clear's entry in the list
+local BOARD_TOP = 10
+local BOARD_KEEP = 120 * 86400
+local ASK_EVERY, ANSWER_EVERY = 15 * 60, 60
 
 local tab = { key = "times", label = "Clear Times" }
 H.tabs[#H.tabs + 1] = tab
+
+-------------------------------------------------------------------------------
+-- Runs and records
+-------------------------------------------------------------------------------
 
 -------------------------------------------------------------------------------
 -- Runs and records
@@ -232,7 +253,7 @@ function tab:OnInstanceGUID(zone, map)
   if not run.zone then
     run.zone = zone
   elseif run.zone ~= zone then
-    ARLE:Print("Clear Times: this is a new copy of " .. tostring(run.dungeon) .. " (reset): the run starts over.")
+    mod:Print("Clear Times: this is a new copy of " .. tostring(run.dungeon) .. " (reset): the run starts over.")
     NewRun(run.dungeon, mod.db.timerStart == "enter" and Now() or nil)
     Run().zone = zone
     H.Render()
@@ -386,7 +407,7 @@ end
 
 local function Announce(text)
   if mod.db.announceRecords then
-    ARLE:Print(text)
+    mod:Print(text)
   end
 end
 
@@ -454,29 +475,127 @@ function tab:OnKill(dungeon, boss)
   if improved or all then
     H.QueueSend(dungeon, "times", true)
   end
+  if improved then
+    tab:ShareGuild(dungeon)
+  end
   H.Render()
 end
 
 -------------------------------------------------------------------------------
 -- Comms: "BT <dungeon>~<best total>~<clears>~<part>~<count>~boss=split/fight;..."
+-- on the party channel (the party's records) and the guild channel (the
+-- leaderboard); "BR <dungeon>" asks the guild for theirs.
 -------------------------------------------------------------------------------
 
 local party = {} -- name -> { dungeon, total, clears, bosses = { [boss] = {split, fight} } }
 tab.data = party
 
-function tab:Send(dungeon, channel)
-  local rec = Records(dungeon) or { bosses = {} }
+local function Payload(dungeon)
+  local rec = Records(dungeon)
+  if not rec then
+    return nil
+  end
   local list = {}
-  for boss, r in pairs(rec.bosses) do
+  for boss, r in pairs(rec.bosses or {}) do
     if r.split or r.fight then
-      list[#list + 1] = boss .. "=" .. (r.split or "") .. "/" .. (r.fight or "")
+      list[#list + 1] = boss .. "=" .. (r.split and math.floor(r.split + 0.5) or "") .. "/"
+        .. (r.fight and math.floor(r.fight + 0.5) or "")
     end
   end
+  if #list == 0 and not rec.total then
+    return nil
+  end
   table.sort(list)
-  H.SendChunks("BT", dungeon .. "~" .. (rec.total or "") .. "~" .. (rec.clears or 0), list, ";", channel)
+  return dungeon .. "~" .. (rec.total and math.floor(rec.total + 0.5) or "") .. "~" .. (rec.clears or 0), list
 end
 
-ARLE:RegisterComm("BT", function(sender, payload)
+function tab:Send(dungeon, channel)
+  local head, list = Payload(dungeon)
+  if not head then
+    head, list = dungeon .. "~~0", {}
+  end
+  H.SendChunks("BT", head, list, ";", channel)
+end
+
+-- The leaderboard, account-wide: board[dungeon][name] = { total, clears,
+-- at, bosses = { [boss] = split } }.
+local function Board(dungeon)
+  local shared = mod.shared
+  if not shared then
+    return {}
+  end
+  if type(shared.board) ~= "table" then
+    shared.board = {}
+  end
+  if dungeon == nil then
+    return shared.board
+  end
+  shared.board[dungeon] = type(shared.board[dungeon]) == "table" and shared.board[dungeon] or {}
+  return shared.board[dungeon]
+end
+
+local guildSent = {} -- dungeon -> GetTime() of our last guild send
+local function SendGuild(dungeon)
+  if not mod._active or not mod.db.guildBoard or not (IsInGuild and IsInGuild()) then
+    return
+  end
+  local head, list = Payload(dungeon)
+  if head then
+    guildSent[dungeon] = GetTime()
+    H.SendChunks("BT", head, list, ";", "GUILD")
+    mod:Debug("leaderboard: sent %s to the guild", dungeon)
+  end
+end
+
+-- After a record (several can come in one kill: once, a moment later).
+function tab:ShareGuild(dungeon)
+  if mod.db.guildBoard then
+    mod:Debounce("board:" .. dungeon, 5, function()
+      SendGuild(dungeon)
+    end)
+  end
+end
+
+-- The setting turned on: the shown dungeon's records go out now.
+function tab:ShareAll()
+  if H.shown then
+    SendGuild(H.shown)
+  end
+end
+
+local asked = {} -- dungeon -> GetTime() we last asked the guild
+local function AskGuild(dungeon)
+  if not dungeon or not (IsInGuild and IsInGuild()) then
+    return
+  end
+  if asked[dungeon] and GetTime() - asked[dungeon] < ASK_EVERY then
+    return
+  end
+  asked[dungeon] = GetTime()
+  ARLE:Send("BR", dungeon, "GUILD")
+  mod:Debug("leaderboard: asked the guild about %s", dungeon)
+end
+
+ARLE:RegisterComm("BR", function(sender, dungeon, channel)
+  if not mod._active or channel ~= "GUILD" or not mod.db.guildBoard then
+    return
+  end
+  if not (H.FDJ() and H.FDJ().DB[dungeon]) or not Records(dungeon) then
+    return
+  end
+  if guildSent[dungeon] and GetTime() - guildSent[dungeon] < ANSWER_EVERY then
+    return
+  end
+  guildSent[dungeon] = GetTime() -- (claimed now: a second ask in the wait isn't answered twice)
+  mod:After(1 + math.random() * 5, function()
+    local head, list = Payload(dungeon)
+    if head then
+      H.SendChunks("BT", head, list, ";", "GUILD")
+    end
+  end)
+end)
+
+ARLE:RegisterComm("BT", function(sender, payload, channel)
   if not mod._active then
     return
   end
@@ -484,16 +603,37 @@ ARLE:RegisterComm("BT", function(sender, payload)
   if not dungeon then
     return
   end
-  local p = party[sender]
-  if not p or p.dungeon ~= dungeon or tonumber(part) == 1 then
-    p = { dungeon = dungeon, bosses = {} }
-    party[sender] = p
-  end
-  p.total, p.clears = tonumber(total), tonumber(clears) or 0
+  local bosses = {}
   for entry in list:gmatch("[^;]+") do
     local boss, split, fight = entry:match("^(.-)=(%d*)/(%d*)$")
     if boss then
-      p.bosses[boss] = { split = tonumber(split), fight = tonumber(fight) }
+      bosses[boss] = { split = tonumber(split), fight = tonumber(fight) }
+    end
+  end
+  -- The party's records for the shown dungeon.
+  if channel ~= "GUILD" then
+    local p = party[sender]
+    if not p or p.dungeon ~= dungeon or tonumber(part) == 1 then
+      p = { dungeon = dungeon, bosses = {} }
+      party[sender] = p
+    end
+    p.total, p.clears = tonumber(total), tonumber(clears) or 0
+    for boss, b in pairs(bosses) do
+      p.bosses[boss] = b
+    end
+  end
+  -- The leaderboard: guildmates only (the guild channel, or a party member
+  -- in the guild roster).
+  if (channel == "GUILD" or ARLE:IsGuildmate(sender)) and (tonumber(total) or next(bosses)) then
+    local board = Board(dungeon)
+    local e = board[sender]
+    if not e or tonumber(part) == 1 then
+      e = { bosses = {} }
+      board[sender] = e
+    end
+    e.total, e.clears, e.at = tonumber(total), tonumber(clears) or 0, Now()
+    for boss, b in pairs(bosses) do
+      e.bosses[boss] = b.split
     end
   end
   H.Render()
@@ -507,159 +647,76 @@ function tab:Prune(keep)
   end
 end
 
+function tab:OnEnable()
+  local cutoff = Now() - BOARD_KEEP
+  for _, entries in pairs(Board()) do
+    if type(entries) == "table" then
+      for name, e in pairs(entries) do
+        if type(e) ~= "table" or (e.at or 0) < cutoff then
+          entries[name] = nil
+        end
+      end
+    end
+  end
+end
+
+function tab:OnDungeon(dungeon)
+  if dungeon and mod.db.tab == "times" then
+    AskGuild(dungeon)
+  end
+end
+
 -------------------------------------------------------------------------------
--- View: [12:34] running ............ [Reset]
---       (portrait) Boss name ........ -0:12  4:05
---       ...
---       Clear ......................... 23:41
+-- Leaderboards: { {name, value, extra, at, me}, ... }, fastest first.
 -------------------------------------------------------------------------------
 
-local child, emptyText, footer
-local rows = {}
+local function Leaders(dungeon, boss)
+  local list = {}
+  local me = H.Me()
+  for name, e in pairs(Board(dungeon)) do
+    local value = boss and e.bosses and e.bosses[boss] or (not boss and e.total)
+    if name ~= me and value then
+      list[#list + 1] = { name = name, value = value, clears = e.clears, at = e.at }
+    end
+  end
+  local rec = Records(dungeon)
+  local mine = rec and (boss and rec.bosses[boss] and rec.bosses[boss].split or (not boss and rec.total))
+  if mine then
+    list[#list + 1] = { name = me, value = mine, clears = rec.clears, me = true,
+      at = boss and rec.bosses[boss].splitAt or rec.totalAt }
+  end
+  table.sort(list, function(a, b)
+    if a.value ~= b.value then
+      return a.value < b.value
+    end
+    return a.name < b.name
+  end)
+  return list
+end
+
+-------------------------------------------------------------------------------
+-- View
+--   list:    (portrait) Boss name ........ -0:12  4:05    (one per boss)
+--            Clear .......................... 23:41
+--            Rares: (portrait) Rare ......... --:--
+--   details: the selected entry: this run, your records, the party's, the
+--            guild leaderboard
+-------------------------------------------------------------------------------
+
+local selected = {} -- dungeon -> boss name or CLEAR
+local listPool, sectionPool, listEmpty
+local detail = {}
 
 local function DateText(t)
   return t and date and date("%Y-%m-%d", t) or ""
 end
 
-
--- Party members' records as { member, value, text } (value nil: no record;
--- none: no addon), with the fastest value among them and mine.
-local function PartyEntries(dungeon, get, mine)
-  local entries, fastest = {}, mine
-  for _, m in ipairs(Members()) do
-    if m.unit ~= "player" then
-      local p = party[m.name]
-      local e = { member = m, none = not (p and p.dungeon == dungeon) }
-      if not e.none then
-        e.value, e.text = get(p)
-        if e.value and (not fastest or e.value < fastest) then
-          fastest = e.value
-        end
-      end
-      entries[#entries + 1] = e
-    end
+local function Select(key)
+  if H.shown and selected[H.shown] ~= key then
+    selected[H.shown] = key
+    H.DetailToTop()
   end
-  return entries, fastest
-end
-
-local function AddPartyLines(entries, fastest)
-  if #entries == 0 then
-    return
-  end
-  GameTooltip:AddLine(" ")
-  GameTooltip:AddLine("Party records", 1, 0.82, 0)
-  for _, e in ipairs(entries) do
-    if e.none then
-      GameTooltip:AddDoubleLine(ColorName(e.member), "no addon", 1, 1, 1, 0.5, 0.5, 0.5)
-    elseif e.value then
-      GameTooltip:AddDoubleLine(ColorName(e.member), (e.value == fastest and "|cffffd100" or "|cffffffff") .. e.text .. "|r",
-        1, 1, 1, 1, 1, 1)
-    else
-      GameTooltip:AddDoubleLine(ColorName(e.member), "none yet", 1, 1, 1, 0.6, 0.6, 0.6)
-    end
-  end
-end
-
-local function RecordLine(label, value, at)
-  GameTooltip:AddDoubleLine(label, value and (FormatTime(value) .. "  |cff888888" .. DateText(at) .. "|r") or "none yet",
-    0.8, 0.8, 0.8, 1, 1, 1)
-end
-
-local function SplitTooltip(row)
-  local boss, dungeon = row.boss, H.shown
-  local run = Run()
-  local rec = Records(dungeon) or { bosses = {} }
-  local best = rec.bosses[boss.name] or {}
-  GameTooltip:SetOwner(row, TooltipSide(row))
-  GameTooltip:SetText(boss.name .. (boss.rare and "  |cffaaaaaa(rare)|r" or (boss.optional and "  |cffaaaaaa(optional)|r")
-    or ""), 1, 1, 1)
-  if run and run.dungeon == dungeon then
-    local split = run.splits[boss.name]
-    if split then
-      local prev = run.prev and run.prev[boss.name]
-      GameTooltip:AddDoubleLine("This run", FormatTime(split) .. (prev and ("  " .. FormatDelta(split - prev)) or ""),
-        0.8, 0.8, 0.8, 1, 1, 1)
-      if run.fights[boss.name] then
-        GameTooltip:AddDoubleLine("   fight", FormatTime(run.fights[boss.name]), 0.6, 0.6, 0.6, 0.8, 0.8, 0.8)
-      end
-    else
-      GameTooltip:AddLine("Not killed in this run yet", 0.6, 0.6, 0.6)
-    end
-  end
-  GameTooltip:AddLine(" ")
-  GameTooltip:AddLine("Your records", 1, 0.82, 0)
-  RecordLine("Best split", best.split, best.splitAt)
-  RecordLine("Best fight", best.fight, best.fightAt)
-  AddPartyLines(PartyEntries(dungeon, function(p)
-    local b = p.bosses[boss.name]
-    if b and b.split then
-      return b.split, FormatTime(b.split) .. (b.fight and ("  |cff888888fight " .. FormatTime(b.fight) .. "|r") or "")
-    end
-  end, best.split))
-  GameTooltip:AddLine(" ")
-  GameTooltip:AddLine("Split: from the start of the run to the kill. Fight: from the pull to the kill. "
-    .. "Gold: the party's fastest.", 0.6, 0.6, 0.6, true)
-  GameTooltip:Show()
-end
-
-local function ClearTooltip(owner)
-  local dungeon = H.shown
-  local run = Run()
-  local rec = Records(dungeon) or {}
-  GameTooltip:SetOwner(owner, TooltipSide(owner))
-  GameTooltip:SetText(dungeon or "Clear", 1, 1, 1)
-  if run and run.dungeon == dungeon and run.start then
-    local required, killed = Required(dungeon), 0
-    for _, name in ipairs(required) do
-      if run.splits[name] then
-        killed = killed + 1
-      end
-    end
-    GameTooltip:AddDoubleLine(run.done and "This run (cleared)" or "This run", FormatTime(Elapsed(run))
-      .. ((run.done and run.prevTotal) and ("  " .. FormatDelta(run.total - run.prevTotal)) or ""), 0.8, 0.8, 0.8, 1, 1, 1)
-    GameTooltip:AddDoubleLine("   bosses", killed .. "/" .. #required, 0.6, 0.6, 0.6, 0.8, 0.8, 0.8)
-  end
-  GameTooltip:AddLine(" ")
-  GameTooltip:AddLine("Your records", 1, 0.82, 0)
-  RecordLine("Best clear", rec.total, rec.totalAt)
-  GameTooltip:AddDoubleLine("Clears", tostring(rec.clears or 0), 0.8, 0.8, 0.8, 1, 1, 1)
-  AddPartyLines(PartyEntries(dungeon, function(p)
-    if p.total then
-      return p.total, FormatTime(p.total) .. "  |cff888888" .. (p.clears or 0) .. " clears|r"
-    end
-  end, rec.total))
-  GameTooltip:AddLine(" ")
-  GameTooltip:AddLine("A clear needs every boss but the rares and the optional ones (summoned, or brought by a "
-    .. "quest).", 0.6, 0.6, 0.6, true)
-  GameTooltip:Show()
-end
-
-local function Row(i)
-  local r = rows[i]
-  if r then
-    return r
-  end
-  r = CreateFrame("Button", nil, child)
-  r:SetHeight(ROW_H)
-  r.bg = r:CreateTexture(nil, "BACKGROUND")
-  r.bg:SetAllPoints()
-  r.portrait = r:CreateTexture(nil, "ARTWORK")
-  r.portrait:SetSize(PORTRAIT, PORTRAIT)
-  r.portrait:SetPoint("LEFT", 3, 0)
-  r.time = ARLE.UIKit.Text(r, "GameFontHighlightSmall")
-  r.time:SetPoint("RIGHT", -4, 0)
-  r.time:SetJustifyH("RIGHT")
-  r.name = ARLE.UIKit.Text(r, "GameFontHighlightSmall")
-  r.name:SetPoint("LEFT", r.portrait, "RIGHT", 5, 0)
-  r.name:SetPoint("RIGHT", r.time, "LEFT", -4, 0)
-  r.name:SetWordWrap(false)
-  r.hl = r:CreateTexture(nil, "HIGHLIGHT")
-  r.hl:SetAllPoints()
-  r.hl:SetColorTexture(1, 1, 1, 0.07)
-  r:SetScript("OnEnter", SplitTooltip)
-  r:SetScript("OnLeave", GameTooltip_Hide)
-  rows[i] = r
-  return r
+  H.Render()
 end
 
 local function ResetClick(self)
@@ -671,7 +728,7 @@ local function ResetClick(self)
   end
   self.armed = GetTime()
   self:SetText("Sure?")
-  C_Timer.After(3, function()
+  mod:After(3, function()
     if self.armed and GetTime() - self.armed >= 2.9 then
       self.armed = nil
       self:SetText("Reset")
@@ -679,57 +736,82 @@ local function ResetClick(self)
   end)
 end
 
--- Toolbar: 12:34  2/4 bosses ............ [Reset]
-function tab:Create(content, bar)
-  child = content
-  local kit = ARLE.UIKit
-  self.clock = kit.Text(bar, "GameFontNormal")
+-- A line of the details: label on the left, value on the right.
+local function MakeLine(parent)
+  local f = CreateFrame("Frame", nil, parent)
+  f:SetHeight(LINE_H)
+  f.left = Kit.Text(f, "GameFontHighlightSmall")
+  f.left:SetPoint("LEFT", 6, 0)
+  f.left:SetWordWrap(false)
+  f.right = Kit.Text(f, "GameFontHighlightSmall")
+  f.right:SetPoint("RIGHT", -4, 0)
+  f.right:SetJustifyH("RIGHT")
+  f.left:SetPoint("RIGHT", f.right, "LEFT", -6, 0)
+  f.bg = f:CreateTexture(nil, "BACKGROUND")
+  f.bg:SetAllPoints()
+  return f
+end
+
+function tab:Create(bar, list, detailFrame)
+  self.clock = Kit.Text(bar, "GameFontNormal")
   self.clock:SetPoint("LEFT", 2, 0)
   self.reset = H.SmallButton(bar, "Reset", 48)
   self.reset:SetPoint("RIGHT", 0, 0)
-  self.reset:SetScript("OnClick", ResetClick)
-  self.reset:SetScript("OnEnter", function(b)
-    H.SimpleTooltip(b, "Start over", "Throws away this run and waits for the next pull. Records are kept. "
-      .. "Click twice to confirm.")
-  end)
-  self.reset:SetScript("OnLeave", GameTooltip_Hide)
-  self.status = kit.Text(bar, "GameFontDisableSmall")
-  self.status:SetPoint("LEFT", self.clock, "RIGHT", 6, 0)
+  S(self.reset, "OnClick", ResetClick)
+  H.Tip(self.reset, "Start over", "Throws away this run and waits for the next pull. Records are kept. "
+    .. "Click twice to confirm.")
+  self.status = Kit.Text(bar, "GameFontDisableSmall")
+  self.status:SetPoint("LEFT", self.clock, "RIGHT", 8, 0)
   self.status:SetPoint("RIGHT", self.reset, "LEFT", -4, 0)
   self.status:SetWordWrap(false)
 
-  footer = CreateFrame("Button", nil, child)
-  footer:SetHeight(32)
-  footer.bg = footer:CreateTexture(nil, "BACKGROUND")
-  footer.bg:SetAllPoints()
-  footer.label = kit.Text(footer, "GameFontNormalSmall")
-  footer.label:SetPoint("TOPLEFT", 6, -4)
-  footer.label:SetText("Clear")
-  footer.time = kit.Text(footer, "GameFontHighlight")
-  footer.time:SetPoint("TOPRIGHT", -4, -3)
-  footer.time:SetJustifyH("RIGHT")
-  footer.best = kit.Text(footer, "GameFontDisableSmall")
-  footer.best:SetPoint("BOTTOMLEFT", 6, 4)
-  footer.best:SetPoint("BOTTOMRIGHT", -4, 4)
-  footer:SetScript("OnEnter", ClearTooltip)
-  footer:SetScript("OnLeave", GameTooltip_Hide)
-  self.footer = footer
+  listPool = H.Pool(function()
+    local r = H.Row(list, ROW_H, PORTRAIT)
+    S(r, "OnClick", function(row)
+      Select(row.key)
+    end)
+    return r
+  end)
+  sectionPool = H.Pool(function()
+    local h = H.Section(list)
+    H.Tip(h, function(self)
+      return self.label:GetText() or "Rares"
+    end, "Rare mobs may not spawn in every run, and some bosses only come with a quest or a summoning item, so "
+      .. "they are kept apart and a clear doesn't need them. When one is killed it still gets a split and records.")
+    return h
+  end)
+  listEmpty = Kit.Text(list, "GameFontDisableSmall")
 
-  emptyText = kit.Text(child, "GameFontDisableSmall")
-  emptyText:SetPoint("TOPLEFT", 6, -8)
-  emptyText:SetPoint("RIGHT", -6, 0)
+  detail.portrait = detailFrame:CreateTexture(nil, "ARTWORK")
+  detail.portrait:SetSize(BIG, BIG)
+  detail.portrait:SetPoint("TOPLEFT", 4, -4)
+  detail.title = Kit.Text(detailFrame, "GameFontNormal")
+  detail.title:SetPoint("TOPLEFT", detail.portrait, "TOPRIGHT", 8, -2)
+  detail.title:SetPoint("RIGHT", -4, 0)
+  detail.title:SetWordWrap(false)
+  detail.sub = Kit.Text(detailFrame, "GameFontDisableSmall")
+  detail.sub:SetPoint("TOPLEFT", detail.title, "BOTTOMLEFT", 0, -3)
+  detail.sub:SetPoint("RIGHT", -4, 0)
+  detail.sub:SetWordWrap(false)
+  detail.sections = H.Pool(function()
+    return H.Section(detailFrame)
+  end)
+  detail.lines = H.Pool(function()
+    return MakeLine(detailFrame)
+  end)
+  detail.paras = H.Pool(function()
+    return Kit.Text(detailFrame, "GameFontDisableSmall")
+  end)
 end
 
--- The running parts: clock, status and the clear time.
+-- The running parts: clock, status and the times in the list.
 function tab:Tick()
   if not self.clock then
     return
   end
-  local ar, ag, ab = ARLE.Skin:Accent()
   local dungeon = H.shown
   local run = Run()
   local live = run and dungeon and run.dungeon == dungeon
-  local rec = dungeon and Records(dungeon) or {}
   if live and run.start then
     self.clock:SetText(FormatTime(Elapsed(run)))
     if run.done then
@@ -760,84 +842,27 @@ function tab:Tick()
     status = killed .. "/" .. #required .. " bosses"
   end
   self.status:SetText(status)
-
-  if live and run.start then
+  -- The clear's running time.
+  if self.clearRow and self.clearRow:IsShown() and live and run.start then
     local text = FormatTime(Elapsed(run))
     if run.done and run.prevTotal then
       text = FormatDelta(run.total - run.prevTotal) .. "  " .. text
     end
-    footer.time:SetText(text)
-  else
-    footer.time:SetText("|cff888888" .. FormatTime(rec.total) .. "|r")
-  end
-  footer.label:SetTextColor(ar, ag, ab)
-  if rec.total then
-    footer.best:SetText("Best " .. FormatTime(rec.total) .. "  ·  " .. (rec.clears or 0) .. " clear(s)")
-  else
-    footer.best:SetText("No clear yet")
+    self.clearRow.note:SetText(text)
   end
 end
 
--- The rares' section header: they may not spawn, and a clear doesn't need them.
-local rareHeader
-local function RareHeader()
-  if rareHeader then
-    return rareHeader
-  end
-  local h = CreateFrame("Button", nil, child)
-  h:SetHeight(18)
-  h.bg = h:CreateTexture(nil, "BACKGROUND")
-  h.bg:SetAllPoints()
-  h.icon = h:CreateTexture(nil, "ARTWORK")
-  h.icon:SetSize(14, 14)
-  h.icon:SetPoint("LEFT", 4, 0)
-  if not (h.icon.SetAtlas and pcall(h.icon.SetAtlas, h.icon, "nameplates-icon-elite-silver")) then
-    h.icon:SetTexture("Interface\\Tooltips\\EliteNameplateIcon")
-    h.icon:SetDesaturated(true)
-  end
-  h.label = ARLE.UIKit.Text(h, "GameFontNormalSmall")
-  h.label:SetPoint("LEFT", h.icon, "RIGHT", 3, 0)
-  h.label:SetText("Rares")
-  h.count = ARLE.UIKit.Text(h, "GameFontDisableSmall")
-  h.count:SetPoint("RIGHT", -4, 0)
-  h.count:SetJustifyH("RIGHT")
-  h:SetScript("OnEnter", function(self)
-    H.SimpleTooltip(self, self.label:GetText() or "Rares", "Rare mobs may not spawn in every run, and some bosses "
-      .. "only come with a quest or a summoning item, so they are kept apart and a clear doesn't need them. When "
-      .. "one is killed it still gets a split and records.")
-  end)
-  h:SetScript("OnLeave", GameTooltip_Hide)
-  rareHeader = h
-  tab.rareHeader = h
-  return h
-end
-
-local function PaintRow(r, boss, run, live, rec, ar, ag, ab)
-  r.boss = boss
-  if r.portraitOf ~= boss then
-    r.portraitOf = boss
-    H.SetPortrait(r.portrait, boss)
-  end
+local function SplitNote(boss, run, live, rec)
   local split = live and run.splits[boss.name]
   local best = rec.bosses[boss.name]
-  r.name:SetText(boss.name)
   if split then
     local prev = run.prev and run.prev[boss.name]
-    r.name:SetTextColor(1, 1, 1)
-    r.time:SetText((prev and (FormatDelta(split - prev) .. "  ") or "") .. FormatTime(split))
-    r.bg:SetColorTexture(ar, ag, ab, 0.12)
-    r.portrait:SetAlpha(1)
-  else
-    r.name:SetTextColor(0.7, 0.7, 0.7)
-    r.time:SetText("|cff777777" .. FormatTime(best and best.split) .. "|r")
-    r.bg:SetColorTexture(0, 0, 0, 0)
-    r.portrait:SetAlpha(live and 0.6 or 1)
+    return (prev and (FormatDelta(split - prev) .. "  ") or "") .. FormatTime(split), true
   end
+  return "|cff777777" .. FormatTime(best and best.split) .. "|r", false
 end
 
--- Bosses, then the clear, then the rares in a section of their own.
-function tab:Render()
-  local ar, ag, ab = ARLE.Skin:Accent()
+function tab:RenderList(width)
   local dungeon = H.shown
   local run = Run()
   local live = run and dungeon and run.dungeon == dungeon
@@ -852,62 +877,236 @@ function tab:Render()
       bosses[#bosses + 1] = boss
     end
   end
-  local y, n = 0, 0
+  local sel = dungeon and selected[dungeon]
+  local valid = sel == CLEAR
+  for _, group in ipairs({ bosses, rares }) do
+    for _, boss in ipairs(group) do
+      valid = valid or boss.name == sel
+    end
+  end
+  if dungeon and not valid then
+    sel = #bosses > 0 and CLEAR or (rares[1] and rares[1].name)
+    selected[dungeon] = sel
+  end
+
+  local y = 0
   local function Place(boss)
-    n = n + 1
-    local r = Row(n)
-    PaintRow(r, boss, run, live, rec, ar, ag, ab)
-    r:ClearAllPoints()
-    r:SetPoint("TOPLEFT", 0, -y)
-    r:SetPoint("RIGHT")
-    r:Show()
-    y = y + ROW_H + 1
+    local r = listPool:Get()
+    r.key = boss.name
+    if r.portraitOf ~= boss then
+      r.portraitOf = boss
+      H.SetPortrait(r.pic, boss)
+    end
+    local note, killed = SplitNote(boss, run, live, rec)
+    H.PaintRow(r, boss.name, note, nil, sel == boss.name)
+    r.name:SetTextColor(killed and 1 or 0.7, killed and 1 or 0.7, killed and 1 or 0.7)
+    r.pic:SetAlpha((killed or not live) and 1 or 0.6)
+    if killed and sel ~= boss.name then
+      local ar, ag, ab = ARLE.Skin:Accent()
+      r.bg:SetColorTexture(ar, ag, ab, 0.07)
+    end
+    y = H.Place(r, y, ROW_H)
   end
   for _, boss in ipairs(bosses) do
     Place(boss)
   end
-  footer:SetShown(#bosses > 0)
+  self.clearRow = nil
   if #bosses > 0 then
-    footer:ClearAllPoints()
-    footer:SetPoint("TOPLEFT", 0, -(y + 2))
-    footer:SetPoint("RIGHT")
-    footer.bg:SetColorTexture(ar, ag, ab, 0.1)
-    y = y + 2 + 32
+    local r = listPool:Get()
+    r.key, r.portraitOf = CLEAR, nil
+    r.pic:SetTexture("Interface\\Icons\\INV_Misc_PocketWatch_01")
+    r.pic:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    r.pic:SetAlpha(1)
+    local note = live and run.start and FormatTime(Elapsed(run)) or ("|cff777777" .. FormatTime(rec.total) .. "|r")
+    H.PaintRow(r, "Clear", note, nil, sel == CLEAR)
+    local ar, ag, ab = ARLE.Skin:Accent()
+    r.name:SetTextColor(ar, ag, ab)
+    if sel ~= CLEAR then
+      r.bg:SetColorTexture(ar, ag, ab, 0.1)
+    end
+    self.clearRow = r
+    y = H.Place(r, y + 2, ROW_H)
   end
   if #rares > 0 then
-    local h = RareHeader()
+    local h = sectionPool:Get()
     local killed = 0
     for _, boss in ipairs(rares) do
       if live and run.splits[boss.name] then
         killed = killed + 1
       end
     end
-    y = y + 6
-    h:ClearAllPoints()
-    h:SetPoint("TOPLEFT", 0, -y)
-    h:SetPoint("RIGHT")
-    h.bg:SetColorTexture(ar, ag, ab, 0.1)
-    h.label:SetTextColor(ar, ag, ab)
-    h.label:SetText(allRare and "Rares" or "Rares & optional")
-    h.count:SetText(live and (killed .. "/" .. #rares .. " killed") or "may not spawn")
-    h:Show()
-    y = y + 18 + 1
+    H.PaintSection(h, allRare and "Rares" or "Rares & optional",
+      "|cff888888" .. (live and (killed .. "/" .. #rares) or "may not spawn") .. "|r",
+      "atlas:nameplates-icon-elite-silver")
+    y = H.Place(h, y + 6, 18)
     for _, boss in ipairs(rares) do
       Place(boss)
     end
-  elseif rareHeader then
-    rareHeader:Hide()
   end
-  for i = n + 1, #rows do
-    rows[i]:Hide()
-  end
-  emptyText:SetShown(n == 0)
+  listPool:Done()
+  sectionPool:Done()
   self:Tick()
-  if n == 0 then
-    emptyText:SetText(dungeon and "DungeonJournal lists no bosses here." or "Not in a dungeon. Pick one with the v button.")
-    return 40
+
+  listEmpty:SetShown(y == 0)
+  if y == 0 then
+    y = H.Para(listEmpty, 6, width, dungeon and "DungeonJournal lists no bosses here."
+      or "Not in a dungeon. Pick one with the v button.")
   end
   return y
+end
+
+-- The selected entry's boss (nil for the clear).
+local function SelectedBoss(dungeon)
+  local sel = selected[dungeon]
+  if sel == CLEAR then
+    return nil
+  end
+  for _, boss in ipairs(Entries(dungeon)) do
+    if boss.name == sel then
+      return boss
+    end
+  end
+end
+
+function tab:RenderDetail(width)
+  detail.sections:Done()
+  detail.lines:Done()
+  detail.paras:Done()
+  local dungeon = H.shown
+  if not dungeon or not selected[dungeon] then
+    detail.portrait:Hide()
+    detail.title:Hide()
+    detail.sub:Hide()
+    return 1
+  end
+  AskGuild(dungeon)
+  local run = Run()
+  local live = run and run.dungeon == dungeon
+  local rec = Records(dungeon) or { bosses = {} }
+  local boss = SelectedBoss(dungeon)
+  local ar, ag, ab = ARLE.Skin:Accent()
+
+  detail.portrait:Show()
+  detail.title:Show()
+  detail.sub:Show()
+  if boss then
+    H.SetPortrait(detail.portrait, boss)
+    detail.title:SetText(boss.name)
+    detail.sub:SetText(boss.rare and "Rare: may not spawn" or (boss.optional and "Optional: not needed for a clear")
+      or "Needed for a clear")
+  else
+    detail.portrait:SetTexture("Interface\\Icons\\INV_Misc_PocketWatch_01")
+    detail.portrait:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    detail.title:SetText(dungeon .. ": clear")
+    local required = Required(dungeon)
+    detail.sub:SetText("Every boss but the rares and the optional ones: " .. #required .. " bosses")
+  end
+  detail.title:SetTextColor(ar, ag, ab)
+
+  local y = BIG + 10
+  local function Section(label, note)
+    local h = detail.sections:Get()
+    H.PaintSection(h, label, note)
+    y = H.Place(h, y + 4, 18)
+  end
+  local function Line(left, right, highlight)
+    local f = detail.lines:Get()
+    f.left:SetText(left)
+    f.right:SetText(right or "")
+    f.bg:SetColorTexture(ar, ag, ab, highlight and 0.12 or 0)
+    y = H.Place(f, y, LINE_H, 0)
+  end
+  local function Para(text)
+    local fs = detail.paras:Get()
+    y = H.Para(fs, y + 2, width, text, 2)
+  end
+
+  -- This run.
+  if live and run.start then
+    Section("This run", run.done and "|cffffd100cleared|r" or nil)
+    if boss then
+      local split = run.splits[boss.name]
+      if split then
+        local prev = run.prev and run.prev[boss.name]
+        Line("Split", FormatTime(split) .. (prev and ("  " .. FormatDelta(split - prev)) or ""))
+        if run.fights[boss.name] then
+          Line("Fight", FormatTime(run.fights[boss.name]))
+        end
+      else
+        Line("|cff888888Not killed yet|r")
+      end
+    else
+      local required, killed = Required(dungeon), 0
+      for _, name in ipairs(required) do
+        if run.splits[name] then
+          killed = killed + 1
+        end
+      end
+      Line(run.done and "Cleared in" or "Running", FormatTime(Elapsed(run))
+        .. ((run.done and run.prevTotal) and ("  " .. FormatDelta(run.total - run.prevTotal)) or ""))
+      Line("Bosses", killed .. "/" .. #required)
+    end
+  end
+
+  -- Your records.
+  Section("Your records")
+  local function Rec(label, value, at)
+    Line(label, value and (FormatTime(value) .. "  |cff888888" .. DateText(at) .. "|r") or "|cff888888none yet|r")
+  end
+  if boss then
+    local best = rec.bosses[boss.name] or {}
+    Rec("Best split", best.split, best.splitAt)
+    Rec("Best fight", best.fight, best.fightAt)
+  else
+    Rec("Best clear", rec.total, rec.totalAt)
+    Line("Clears", tostring(rec.clears or 0))
+  end
+
+  -- The party's.
+  local others = {}
+  for _, m in ipairs(Members()) do
+    if m.unit ~= "player" then
+      others[#others + 1] = m
+    end
+  end
+  if #others > 0 then
+    Section("Party")
+    for _, m in ipairs(others) do
+      local p = party[m.name]
+      local text
+      if not (p and p.dungeon == dungeon) then
+        text = "|cff888888no ARL|r"
+      elseif boss then
+        local b = p.bosses[boss.name]
+        text = b and b.split and (FormatTime(b.split) .. (b.fight and ("  |cff888888fight " .. FormatTime(b.fight)
+          .. "|r") or "")) or "|cff888888none yet|r"
+      else
+        text = p.total and (FormatTime(p.total) .. "  |cff888888" .. (p.clears or 0) .. " clears|r")
+          or "|cff888888no clear yet|r"
+      end
+      Line(ColorName(m), text)
+    end
+  end
+
+  -- The guild leaderboard.
+  local leaders = Leaders(dungeon, boss and boss.name)
+  Section("Guild leaderboard", "|cff888888" .. (boss and "best split" or "best clear") .. "|r")
+  if #leaders == 0 then
+    Para("No ARL member of the guild has shared a record here yet.")
+  end
+  local meShown = false
+  for i, e in ipairs(leaders) do
+    if i <= BOARD_TOP or (e.me and not meShown) then
+      local medal = i == 1 and "|cffffd100" or (i == 2 and "|cffc0c0c0" or (i == 3 and "|cffcd7f32" or "|cffaaaaaa"))
+      local name = e.me and ("|cff66ff66" .. e.name .. "|r") or e.name
+      local extra = (not boss and e.clears) and ("  |cff888888" .. e.clears .. " clears|r") or ""
+      Line(medal .. i .. ".|r " .. name, FormatTime(e.value) .. extra, e.me)
+      meShown = meShown or e.me
+    end
+  end
+  Para(mod.db.guildBoard and "Records of the guild's ARL members, shared when they set one and when someone "
+    .. "looks here." or "|cffff9933You don't share yours|r (Clear Times settings); you still see the others'.")
+  return y + 4
 end
 
 function tab:Status()
