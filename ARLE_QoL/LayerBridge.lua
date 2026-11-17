@@ -37,7 +37,9 @@
 --  4. Asking LayerSwap hosts for an AutoLayer user: AutoLayer's hop button
 --     (a click, so the game answers /who) also runs the /who on the zone and
 --     sends the hidden LayerSwap ask to each name, 8 a second. "/arl layer
---     ask" and the panel button do the same by hand.
+--     ask" and the panel button do the same by hand, on their own: neither
+--     addon needs to be installed, and with LayerSwap installed our asks and
+--     their answers are still ours (we don't press LayerSwap's button).
 --  5. Leaving the host's group once the read layer changes, after an ask of
 --     ours (AutoLayer doesn't leave by itself; LayerSwap does).
 -- Never touches either addon's tables or frames; InviteUnit / LeaveParty /
@@ -540,8 +542,12 @@ function F:StartRun(via)
     heard = 0, hosts = 0, same = 0, invites = {}, line = nil, notices = {} }
   lastRun = run
   local mine = run
+  -- One result line per burst of presses: a press a newer one replaced
+  -- doesn't print its own (/arl layer last still has the latest's steps).
   self:After(RUN_SUMMARY, function(def)
-    def:Summary(mine)
+    if lastRun == mine then
+      def:Summary(mine)
+    end
   end)
   self:After(RUN_WATCH, function()
     if run == mine then
@@ -858,23 +864,10 @@ function F:Ask(via, forced)
   end
   -- As LayerSwap: the ask names the layer you leave, so hosts on it stay out.
   -- Without it they'd invite you for nothing; read it first.
-  if not layer.id and not Loaded("LayerSwap") then
+  if not layer.id then
     run.skipWho = "LayerSwap users not asked: your layer isn't read yet"
     self:Step(run.skipWho)
     self:Print("reading your layer first: target or mouse over a creature, then press again.")
-    return
-  end
-  if Loaded("LayerSwap") then
-    -- LayerSwap asks its own hosts best: press its button for the player
-    -- (still inside this click, so its /who is answered).
-    local button = rawget(_G, "LayerSwapPanelSwapButton")
-    if via ~= "LayerSwap" and type(button) == "table" and button.Click and button:IsEnabled() then
-      pcall(button.Click, button)
-      self:Step("pressed LayerSwap's own Swap layer button (its panel shows how that went)")
-    else
-      self:Step("LayerSwap's Swap layer button wasn't found or was greyed out")
-    end
-    run.skipWho = "asked through LayerSwap"
     return
   end
   local zone = ZoneMap()
@@ -895,6 +888,14 @@ function F:Ask(via, forced)
     run.skipWho = string.format("player search skipped: the last one here was %d s ago (the server refuses "
       .. "searches that come too often); asked %d known LayerSwap hosts directly", ago, n)
     self:Step(run.skipWho)
+    -- Say so now: otherwise nothing shows until the result line.
+    if n > 0 then
+      self:Print(string.format("asked %d known LayerSwap hosts; a new player search here in %d s.", n,
+        math.ceil(SEARCH_GAP - ago)))
+    else
+      self:Print(string.format("no known LayerSwap host to ask (offline or on your layer); a new player search "
+        .. "here in %d s.", math.ceil(SEARCH_GAP - ago)))
+    end
     return
   end
   local rec = { at = now, heard = 0 }
@@ -1068,6 +1069,22 @@ function F:AskKnown(zone, via)
   local n = #ask.queue
   self:Send(ask)
   return n
+end
+
+-- A known host our ask whispered is offline ("No player named 'X' is
+-- currently playing"): left out of direct asks for OFFLINE_FOR (they count
+-- again once they send us anything).
+function F:NoteOffline(msg)
+  local name = NotFoundName(msg)
+  if not name or not OurWhisper(name) then
+    return
+  end
+  local key = Short(name)
+  local e = self:Book()[key]
+  if type(e) == "table" and not (type(e.offline) == "number" and time() - e.offline < OFFLINE_FOR) then
+    e.offline = time()
+    self:Step("%s is offline: not asked directly for %d min", key, OFFLINE_FOR / 60)
+  end
 end
 
 -- Hides the game's "No player named 'X' is currently playing" when X is
@@ -1545,16 +1562,20 @@ function F:OnAddonMessage(_, prefix, text, kind, sender)
   if Secret(prefix) or prefix ~= PREFIX or not Str(text) or not Str(sender) then
     return
   end
-  if Loaded("LayerSwap") or not self.db.layerswap then
-    return -- LayerSwap answers and reads its own messages
+  if not self.db.layerswap then
+    return
   end
   if kind == "WHISPER" and text:find("^inv layer") then
     self:Remember(sender) -- a LayerSwap user (host or not: unknown)
-    if self.db.host then
+    -- LayerSwap, when loaded, answers asks to us itself.
+    if self.db.host and not Loaded("LayerSwap") then
       self:AnswerLayerSwap(text, sender, "hidden ask")
     end
     return
   end
+  -- Answers to our own asks: ours to read whether or not LayerSwap is loaded
+  -- (OnReply only takes them while an ask of ours is out, and only those
+  -- naming us).
   self:OnReply(text, sender)
 end
 
@@ -1643,25 +1664,17 @@ function F:OnEnable()
     def:Debounce("arm", 0.5, def.ArmButton)
   end)
   self:On("GROUP_JOINED", self.OnGroupJoined)
-  -- A known host our ask whispered is offline: leave them out of direct asks
-  -- for OFFLINE_FOR (they count again once they send us anything).
-  self:On("CHAT_MSG_SYSTEM", function(def, _, msg)
-    local name = NotFoundName(msg)
-    if not name or not OurWhisper(name) then
-      return
-    end
-    local key = Short(name)
-    local e = def:Book()[key]
-    if type(e) == "table" then
-      e.offline = time()
-      def:Step("%s is offline: not asked directly for %d min", key, OFFLINE_FOR / 60)
-    end
-  end)
   self:ChatFilter(true)
   -- What the game says while a swap is in progress (refusals, invites).
+  -- self:On keeps one handler per event, so CHAT_MSG_SYSTEM's offline check
+  -- lives in this same handler (0.6.2 registered it separately, and this one
+  -- replaced it: offline hosts were never left out).
   for _, e in ipairs({ "CHAT_MSG_SYSTEM", "UI_ERROR_MESSAGE", "CHAT_MSG_CHANNEL_NOTICE",
     "CHAT_MSG_CHANNEL_NOTICE_USER" }) do
     self:On(e, function(def, event, a1, a2, _, a4, _, _, _, _, a9)
+      if event == "CHAT_MSG_SYSTEM" then
+        def:NoteOffline(a1)
+      end
       if not run then
         return
       end
