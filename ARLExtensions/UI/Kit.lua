@@ -215,3 +215,134 @@ function Kit.Movable(f, def, spec)
   Place()
   return Place
 end
+
+-------------------------------------------------------------------------------
+-- Kit.Card: the one look of every feature popup (reminders, alerts, status
+-- boxes): a themed box with a thin accent edge on the left, an optional icon
+-- top-left, up to three lines (text, sub, note) and a row of small buttons at
+-- the bottom right, as tall as its text needs. Every popup is built from it,
+-- so they share size, spacing, fonts and behaviour.
+--
+--   local card = Kit.Card(def, { icon = true, width = 280, strata = "MEDIUM",
+--     move = { y = 120, secure = true, key = "position", onMoved = fn } })
+--   card:SetLines(text, sub, note)     -- any may be nil (hidden)
+--   card:AddButton("Dismiss", 52, fn)  -- right to left, in the order added
+--   card:SetAccent(r, g, b)            -- the edge (and title) colour; default the theme's
+--   card:Fit()                         -- height from the lines (SetLines calls it)
+--   card.place()                       -- re-place it (Kit.Movable's), when move was given
+-- A card holding a host secure button is protected: size and place it out of
+-- combat (move.secure = true defers its moves; call Fit through Secure:Run).
+-------------------------------------------------------------------------------
+
+Kit.CARD = { width = 280, pad = 8, icon = 32, edge = 3, button = 16 }
+
+function Kit.Card(def, spec)
+  spec = spec or {}
+  local C = Kit.CARD
+  local f = Skin:CreateTooltipWindow(nil, UIParent)
+  f:SetFrameStrata(spec.strata or "MEDIUM")
+  f:SetWidth(spec.width or C.width)
+  f:SetHeight(C.icon + 2 * C.pad)
+
+  f.edge = f:CreateTexture(nil, "OVERLAY")
+  f.edge:SetPoint("TOPLEFT", 1, -1)
+  f.edge:SetPoint("BOTTOMLEFT", 1, 1)
+  f.edge:SetWidth(C.edge)
+
+  local left = C.pad + C.edge
+  if spec.icon then
+    f.icon = f:CreateTexture(nil, "ARTWORK")
+    f.icon:SetSize(C.icon, C.icon)
+    f.icon:SetPoint("TOPLEFT", left, -C.pad)
+    f.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+  end
+
+  f.text = Kit.Text(f, spec.titleFont or "GameFontHighlight")
+  if f.icon then
+    f.text:SetPoint("TOPLEFT", f.icon, "TOPRIGHT", C.pad, 0)
+  else
+    f.text:SetPoint("TOPLEFT", left, -C.pad)
+  end
+  f.text:SetPoint("RIGHT", -C.pad, 0)
+  f.text:SetWordWrap(true)
+
+  f.sub = Kit.Text(f, "GameFontNormalSmall")
+  f.sub:SetPoint("TOPLEFT", f.text, "BOTTOMLEFT", 0, -3)
+  f.sub:SetPoint("RIGHT", -C.pad, 0)
+  f.sub:SetWordWrap(true)
+
+  f.note = Kit.Text(f, "GameFontDisableSmall")
+  f.note:SetPoint("TOPLEFT", f.sub, "BOTTOMLEFT", 0, -2)
+  f.note:SetPoint("RIGHT", -C.pad, 0)
+  f.note:SetWordWrap(true)
+
+  f.buttons = {}
+  -- extra: px a feature's own content needs below the lines (a bar)
+  f.extra = 0
+
+  function f:SetAccent(r, g, b)
+    if not r then
+      r, g, b = Skin:Accent()
+    end
+    self.edge:SetColorTexture(r, g, b, 0.9)
+  end
+
+  function f:AddButton(label, width, fn)
+    local b = Kit.SmallButton(self, label, width)
+    local prev = self.buttons[#self.buttons]
+    if prev then
+      b:SetPoint("RIGHT", prev, "LEFT", -4, 0)
+    else
+      b:SetPoint("BOTTOMRIGHT", -C.pad, C.pad)
+    end
+    if fn then
+      def:Script(b, "OnClick", fn)
+    end
+    self.buttons[#self.buttons + 1] = b
+    return b
+  end
+
+  local function H(fs)
+    return fs:IsShown() and (fs:GetText() or "") ~= "" and fs:GetStringHeight() or 0
+  end
+
+  function f:Fit()
+    local h = C.pad + H(self.text)
+    local sub, note = H(self.sub), H(self.note)
+    if sub > 0 then
+      h = h + 3 + sub
+    end
+    if note > 0 then
+      h = h + 2 + note
+    end
+    h = h + self.extra
+    local anyButton = false
+    for _, b in ipairs(self.buttons) do
+      anyButton = anyButton or b:IsShown()
+    end
+    if anyButton then
+      h = h + 6 + C.button
+    end
+    h = h + C.pad
+    if self.icon and self.icon:IsShown() then
+      h = math.max(h, C.icon + 2 * C.pad)
+    end
+    self:SetHeight(math.ceil(h))
+  end
+
+  function f:SetLines(text, sub, note)
+    self.text:SetText(text or "")
+    self.sub:SetText(sub or "")
+    self.note:SetText(note or "")
+    self.sub:SetShown(sub ~= nil and sub ~= "")
+    self.note:SetShown(note ~= nil and note ~= "")
+    self:Fit()
+  end
+
+  f:SetAccent()
+  if spec.move then
+    f.place = Kit.Movable(f, def, spec.move)
+  end
+  f:Hide()
+  return f
+end

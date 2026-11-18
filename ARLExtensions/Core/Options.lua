@@ -53,7 +53,9 @@ function O.Preset.ResetPosition(spec)
     { type = "button", label = spec.label or "Reset position", page = spec.page, nocmd = true,
       run = function(def)
         def.char.position = nil
+        def.char.alertPos = nil
         def.db.position = nil
+        ARLE.UI.Alert:Place(def)
         if def.OnResetPosition then
           def:OnResetPosition()
         end

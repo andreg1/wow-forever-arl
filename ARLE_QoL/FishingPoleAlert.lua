@@ -198,7 +198,9 @@ function F:OnEnable()
   end)
   self:On("UPDATE_BINDINGS", function()
     if Alert:IsShown(self) then
-      Alert:Frame(self).sub:SetText(SubText())
+      local bar = Alert:Frame(self)
+      bar.sub:SetText(SubText())
+      bar:Fit()
     end
   end)
   -- Repeat the sound / raid warning while the alert stays up.

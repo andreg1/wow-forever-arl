@@ -250,7 +250,8 @@ end
 
 local function AttachUseButton()
   -- Over the icon (same spot), anchored to the alert itself.
-  local use = Secure:Attach("UseItem", alert, { "LEFT", 12, 0 }, 42)
+  local C = Kit.CARD
+  local use = Secure:Attach("UseItem", alert, { "TOPLEFT", C.pad + C.edge, -C.pad }, C.icon)
   if not use then
     return
   end
@@ -265,39 +266,18 @@ local function AttachUseButton()
   F:Script(use, "OnLeave", GameTooltip_Hide)
 end
 
+-- A Kit.Card, every ARL popup's look.
 local function BuildAlert()
-  local f = Skin:CreateTooltipWindow(nil, UIParent)
-  f:SetSize(360, 74)
-  f:SetFrameStrata("MEDIUM")
-  placeAlert = Kit.Movable(f, F, { y = 200, secure = true })
-
-  f.icon = f:CreateTexture(nil, "ARTWORK")
-  f.icon:SetSize(42, 42)
-  f.icon:SetPoint("LEFT", 12, 0)
-  f.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-
-  f.text = Kit.Text(f, "GameFontHighlight")
-  f.text:SetPoint("TOPLEFT", f.icon, "TOPRIGHT", 10, 2)
-  f.text:SetPoint("RIGHT", -10, 0)
-  f.text:SetWordWrap(true)
-  f.text:SetHeight(30)
-
-  f.status = Kit.Text(f, "GameFontDisableSmall")
-  f.status:SetPoint("BOTTOMLEFT", f.icon, "BOTTOMRIGHT", 10, 0)
-
-  local dismiss = Kit.SmallButton(f, "Dismiss", 60)
-  dismiss:SetPoint("BOTTOMRIGHT", -8, 8)
-  F:Script(dismiss, "OnClick", function()
+  local f = Kit.Card(F, { icon = true, move = { y = 200, secure = true } })
+  placeAlert = f.place
+  f:AddButton("Dismiss", 52, function()
     dismissedKey = currentKey
     HideAlert()
   end)
-  local snooze = Kit.SmallButton(f, "Snooze " .. SNOOZE_MINUTES .. "m", 76)
-  snooze:SetPoint("RIGHT", dismiss, "LEFT", -4, 0)
-  F:Script(snooze, "OnClick", function()
+  f:AddButton("Snooze " .. SNOOZE_MINUTES .. "m", 64, function()
     snoozeUntil = GetTime() + SNOOZE_MINUTES * 60
     HideAlert()
   end)
-  f:Hide()
   alert = f
 end
 
@@ -310,8 +290,7 @@ local function ShowAlert(message, s)
   end
   AttachUseButton()
   alert.icon:SetTexture(BagIcon())
-  alert.text:SetText(message)
-  alert.status:SetText(StatusText(s))
+  alert:SetLines(message, nil, StatusText(s))
   alert:Show()
 end
 
@@ -321,21 +300,20 @@ local function PlaceTimeline()
   end
 end
 
+-- A Kit.Card too: its line, and the 0-3 bar under it.
 local function BuildTimeline()
-  local f = Skin:CreateTooltipWindow(nil, UIParent)
-  f:SetSize(360, 46)
-  f:SetFrameStrata("MEDIUM")
-  placeTimeline = Kit.Movable(f, F, { y = 200, onMoved = PlaceAlert })
-  f.text = Kit.Text(f, "GameFontHighlightSmall")
-  f.text:SetPoint("TOPLEFT", 10, -7)
-  f.text:SetPoint("RIGHT", -10, 0)
+  local C = Kit.CARD
+  local f = Kit.Card(F, { titleFont = "GameFontHighlightSmall",
+    move = { y = 200, key = "position", onMoved = PlaceAlert } })
+  placeTimeline = f.place
   f.bar = CreateFrame("StatusBar", nil, f)
-  f.bar:SetPoint("BOTTOMLEFT", 10, 8)
-  f.bar:SetPoint("BOTTOMRIGHT", -10, 8)
+  f.bar:SetPoint("BOTTOMLEFT", C.pad + C.edge, C.pad)
+  f.bar:SetPoint("BOTTOMRIGHT", -C.pad, C.pad)
   f.bar:SetHeight(12)
   f.bar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
   f.bar:SetStatusBarColor(0.12, 0.75, 0.62)
   f.bar:SetMinMaxValues(0, MAX_STACKS)
+  f.extra = 6 + 12 -- (the bar under the line)
   local bg = f.bar:CreateTexture(nil, "BACKGROUND")
   bg:SetAllPoints()
   bg:SetColorTexture(0, 0, 0, 0.5)
@@ -351,7 +329,6 @@ local function BuildTimeline()
       bar["mark" .. i]:SetPoint("LEFT", bar, "LEFT", width * i / MAX_STACKS - 1, 0)
     end
   end)
-  f:Hide()
   timeline = f
 end
 
@@ -378,7 +355,7 @@ local function UpdateTimeline()
   if not timeline then
     BuildTimeline()
   end
-  timeline.text:SetText(text)
+  timeline:SetLines(text)
   timeline.bar:SetValue(value)
   timeline:Show()
   if not timelineTicker then

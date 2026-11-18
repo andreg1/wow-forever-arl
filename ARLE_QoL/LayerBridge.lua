@@ -1396,18 +1396,19 @@ local function PlacePad()
   end
 end
 
+-- A Kit.Card (every ARL popup's look): two buttons on top, two lines under them.
 local function BuildPad()
-  local f = Skin:CreateTooltipWindow(nil, UIParent)
-  f:SetSize(226, 62)
-  f:SetFrameStrata("MEDIUM")
-  placePad = Kit.Movable(f, F, { y = -220, secure = true })
+  local C = Kit.CARD
+  local f = Kit.Card(F, { width = 230, move = { y = -220, secure = true } })
+  f:SetHeight(64)
+  placePad = f.place
   -- Two buttons, one per pool. LayerSwap: a plain button (its click is the
   -- hardware event /who needs). AutoLayer: the host's secure macro button,
   -- laid over the visible one.
   f.ls = Kit.Button(f, "LayerSwap", 104)
-  f.ls:SetPoint("TOPLEFT", 6, -6)
+  f.ls:SetPoint("TOPLEFT", C.pad + C.edge, -C.pad + 2)
   f.al = Kit.Button(f, "AutoLayer", 104)
-  f.al:SetPoint("TOPRIGHT", -6, -6)
+  f.al:SetPoint("TOPRIGHT", -C.pad + 2, -C.pad + 2)
   f.swap = f.al -- the secure overlay's target
   F:Script(f.ls, "OnClick", function()
     F:Ask("button", "layerswap")
@@ -1434,10 +1435,12 @@ local function BuildPad()
   F:Script(f.al, "OnEnter", AlTip)
   f.alTip = AlTip
   F:Script(f.al, "OnLeave", GameTooltip_Hide)
-  f.text = Kit.Text(f, "GameFontHighlightSmall")
-  f.text:SetPoint("BOTTOM", 0, 5)
+  -- (the card's own line, moved under the buttons and centred)
+  f.text:SetFontObject(GameFontHighlightSmall)
+  f.text:ClearAllPoints()
+  f.text:SetPoint("BOTTOMLEFT", C.pad + C.edge, C.pad - 2)
+  f.text:SetPoint("BOTTOMRIGHT", -C.pad, C.pad - 2)
   f.text:SetJustifyH("CENTER")
-  f:Hide()
   pad = f
 end
 

@@ -9,7 +9,8 @@
 --   ARLE.UI.Alert:Nag(feature, warningText)   only the sound / warning / flash
 --   ARLE.UI.Alert:Hide(feature)
 --   ARLE.UI.Alert:Frame(feature)              the bar (to add buttons to it)
--- Drag the bar to move it; its position is kept per character.
+-- Drag the bar to move it; its position is kept per character. Its look is
+-- Kit.Card's, like every other ARL popup.
 local _, ns = ...
 local ARLE = ns.ARLE
 local Skin = ARLE.Skin
@@ -37,51 +38,21 @@ function Alert:Nag(def, text)
   end
 end
 
+-- The bar is a Kit.Card (the look of every ARL popup) with the title in the
+-- alert's colour; it sits near the top of the screen until dragged, and its
+-- place is kept per character (char.alertPos, cleared by Reset position).
 function Alert:Frame(def)
   local f = frames[def.id]
   if f then
     return f
   end
-  f = Skin:CreateTooltipWindow(nil, UIParent)
-  f:SetSize(380, 56)
-  f:SetFrameStrata("HIGH")
-  f:SetClampedToScreen(true)
-  f:SetMovable(true)
-  f:EnableMouse(true)
-  f:RegisterForDrag("LeftButton")
-  f:SetScript("OnDragStart", f.StartMoving)
-  f:SetScript("OnDragStop", function(self)
-    self:StopMovingOrSizing()
-    local point, _, rel, x, y = self:GetPoint()
-    def.char.alertPos = { point, rel, x, y }
-  end)
-  function f:RestorePosition()
-    self:ClearAllPoints()
-    local pos = def.char and def.char.alertPos
-    if type(pos) == "table" and pos[1] then
-      self:SetPoint(pos[1], UIParent, pos[2], pos[3], pos[4])
-    else
-      self:SetPoint("TOP", UIParent, "TOP", 0, -150)
-    end
+  local pos = def.char and def.char.alertPos
+  if type(pos) == "table" and type(pos[1]) ~= "number" then
+    def.char.alertPos = nil -- (the old point-based format: starts over at the default place)
   end
-  f:RestorePosition()
-
-  f.icon = f:CreateTexture(nil, "ARTWORK")
-  f.icon:SetSize(40, 40)
-  f.icon:SetPoint("LEFT", 8, 0)
-  f.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-  f.text = Kit.Text(f, "GameFontNormalLarge")
-  f.text:SetPoint("TOPLEFT", f.icon, "TOPRIGHT", 10, -2)
-  f.text:SetPoint("RIGHT", -10, 0)
-  f.text:SetWordWrap(false)
-  f.sub = Kit.Text(f, "GameFontHighlightSmall")
-  f.sub:SetPoint("TOPLEFT", f.text, "BOTTOMLEFT", 0, -4)
-  f.sub:SetPoint("RIGHT", -10, 0)
-  -- A thin accent bar on the left edge: the alert reads as ours in every theme.
-  f.edge = f:CreateTexture(nil, "OVERLAY")
-  f.edge:SetPoint("TOPLEFT", 1, -1)
-  f.edge:SetPoint("BOTTOMLEFT", 1, 1)
-  f.edge:SetWidth(3)
+  f = Kit.Card(def, { icon = true, strata = "HIGH", width = 300,
+    move = { key = "alertPos", y = UIParent:GetHeight() / 2 - 180 } })
+  f.RestorePosition = f.place -- (its older name)
 
   if f.CreateAnimationGroup then
     local ag = f:CreateAnimationGroup()
@@ -92,22 +63,26 @@ function Alert:Frame(def)
     a:SetDuration(0.5)
     f.pulse = ag
   end
-  f:SetScript("OnHide", function(self)
+  def:Script(f, "OnHide", function(self)
     if self.pulse then
       self.pulse:Stop()
     end
   end)
-  f:Hide()
   frames[def.id] = f
   return f
+end
+
+function Alert:Place(def)
+  local f = frames[def.id]
+  if f and f.place then
+    f.place()
+  end
 end
 
 -- color: { r, g, b } for the line; default the theme accent (red for urgent).
 function Alert:Show(def, spec)
   local f = self:Frame(def)
   f.icon:SetTexture(spec.icon or 134400)
-  f.text:SetText(spec.text or "")
-  f.sub:SetText(spec.sub or "")
   local r, g, b
   if spec.color then
     r, g, b = spec.color[1], spec.color[2], spec.color[3]
@@ -115,7 +90,8 @@ function Alert:Show(def, spec)
     r, g, b = Skin:Accent()
   end
   f.text:SetTextColor(r, g, b)
-  f.edge:SetColorTexture(r, g, b, 0.9)
+  f:SetAccent(r, g, b)
+  f:SetLines(spec.text, spec.sub)
   local wasShown = f:IsShown()
   f:Show()
   if spec.pulse and f.pulse and not f.pulse:IsPlaying() then

@@ -236,6 +236,23 @@ Use `ARLExtensions/Lib/Util.lua` and the host, never a local copy of the same th
 - **Addon messages:** `self:Comm(kind, fn)` in `OnEnable`, never `ARLE:RegisterComm` at file load. A pack of several files collects them like Dungeon Helper's `H.Comm`. Whispers only arrive from guildmates and the group. Still check every field of a payload before storing it (type, range, length): it comes from another player's client.
 - **Commands:** `def.command` + `def.commands`, or `self:Command(c)`. A word belongs to whoever registered it first, so pick one no other feature uses (`/arl help` lists them).
 
+### Popups and alerts
+
+Every popup a feature puts on the screen is built the same way, so they look and behave alike in every theme. A popup is a reminder, an alert, a status line or a small control box, such as XP Food's reminder, Sleeping Bag's reminder and timeline, Buff Back's line, Layer Bridge's box, or the alert bar.
+
+- **Build it with `ARLE.UI.Kit.Card(def, spec)`** (`ARLExtensions/UI/Kit.lua`), never from `Skin:CreateTooltipWindow` by hand. The card gives:
+  - the themed box with a thin accent edge on the left (`card:SetAccent(r, g, b)`; the theme's accent by default, red for urgent);
+  - an optional icon at the top left (`spec.icon = true`);
+  - three lines: `card.text` (the message, `GameFontHighlight`, or `spec.titleFont`), `card.sub` (`GameFontNormalSmall`), `card.note` (`GameFontDisableSmall`), all set with `card:SetLines(text, sub, note)`;
+  - small buttons at the bottom right (`card:AddButton(label, width, fn)`, right to left in the order added);
+  - a height that fits its lines (`card:Fit()`; `SetLines` calls it). Content of your own under the lines adds its height to `card.extra` (Sleeping Bag's bar).
+- **Size:** the standard metrics are in `Kit.CARD`: width 280, padding 8, icon 32, accent edge 3, button height 16. Use them, not your own numbers. Change `width` only when the content needs it: Layer Bridge's two buttons take 230, and the alert bar 300. Popups are compact: one short sentence of message, details in `sub` / `note`, longer explanations in a tooltip.
+- **Placing:** `spec.move = { x, y, secure, key, onMoved }` makes it draggable through `Kit.Movable`, and the place is kept in `def.char.position` (or `key`). `card.place()` puts it back. The "Reset position" preset clears it (and the alert bar's `alertPos`). Strata is `MEDIUM`, `HIGH` only for the alert bar.
+- **Urgent alerts** (in combat, something wrong right now) use the host alert bar: `self:Alert({ text, sub, icon, color, warning, pulse, duration })`, plus `ARLE.UI.Alert:Nag` for the sound, raid warning and taskbar flash, following the feature's `ARLE.Options.Preset.Alert()` settings. Don't build a second alert bar.
+- **A clickable icon** (use an item or food) is the host's secure button laid exactly over the card's icon: `Secure:Attach(key, card, { "TOPLEFT", Kit.CARD.pad + Kit.CARD.edge, -Kit.CARD.pad }, Kit.CARD.icon)`. A card holding one is protected, so it's sized, shown and hidden only out of combat (`move.secure = true`, `ARLE.Secure:Run`).
+- **Every popup reminder offers a way out:** Dismiss (until the reason changes) and, where it repeats, Snooze; the feature's settings decide whether it shows at all (chat line, on-screen alert).
+- **Not popups:** full windows (Quest Search, Darkmoon Tickets, Dungeon Helper, the LFG side panel) use `ARLE.UI.Window` / their own layout, and right-click menus stay menus.
+
 ### State and chat
 
 - **Where data lives:** settings in `self.db` (per character, defaults in `options` / `defaults`), this character's data in `self.char`, data every character shares in `self.shared`. Never in another addon's tables, and never as a field written onto someone else's frame or a secure button. Per-frame state goes in a weak-keyed local table.
@@ -254,6 +271,7 @@ Use `ARLExtensions/Lib/Util.lua` and the host, never a local copy of the same th
    - `issecretvalue`, `ARLE:Print(`, `UnitName("player")`
    - `hooksecurefunc(`, `:HookScript(`
    - a `local function` named `Secret`, `Plain`, `Call` or `SpellName`
+   - `CreateTooltipWindow(` outside `ARLExtensions/UI` (a popup that isn't a `Kit.Card`; full windows are fine)
 3. Check that the feature's `GetStatus`, its `README.md` row and its AGENTS.md entry still say what it does.
 4. Bump the version with `make patch|minor|major` (see "Versioning").
 

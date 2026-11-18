@@ -927,16 +927,11 @@ end
 
 local REASON = { asked = "asked", owed = "buffed you", group = "group" }
 
+-- A one-line Kit.Card (every ARL popup's look), as wide as its line.
 local function BuildLine()
-  local f = Skin:CreateTooltipWindow(nil, UIParent)
-  f:SetSize(320, 26)
-  f:SetFrameStrata("MEDIUM")
-  placeLine = Kit.Movable(f, F, { y = -160 })
-  f.text = Kit.Text(f, "GameFontHighlightSmall")
-  f.text:SetPoint("LEFT", 8, 0)
-  f.text:SetPoint("RIGHT", -8, 0)
+  local f = Kit.Card(F, { titleFont = "GameFontHighlightSmall", width = 320, move = { y = -160 } })
+  placeLine = f.place
   f.text:SetWordWrap(false)
-  f:Hide()
   line = f
 end
 
@@ -965,10 +960,10 @@ function F:Paint()
   end
   local key = Secure:BoundKey("BuffBack")
   local more = QueueCount() - ((current.reason ~= "group") and 1 or 0)
-  line.text:SetText(string.format("%s%s |cffffffff→ %s|r |cff9d9d9d(%s)%s|r",
+  line:SetLines(string.format("%s%s |cffffffff→ %s|r |cff9d9d9d(%s)%s|r",
     key and ("|cffffd100[" .. key .. "]|r ") or "|cffff6060[no key]|r ", current.cast, current.name,
     REASON[current.reason] or current.reason, more > 0 and ("  +" .. more) or ""))
-  line:SetWidth(math.min(460, line.text:GetStringWidth() + 18))
+  line:SetWidth(math.min(460, line.text:GetStringWidth() + 2 * Kit.CARD.pad + Kit.CARD.edge + 2))
   line:Show()
 end
 

@@ -664,9 +664,14 @@ local function OpenMenu(anchor)
   menu:Show()
 end
 
+-- The popup is a Kit.Card (every ARL popup's look); the icon sits where the
+-- card puts it, and the food button is laid exactly over it.
+local CARD = Kit.CARD
+
 local function AttachUseButton()
   -- Over the icon (same spot as Layout puts it), anchored to the alert itself.
-  local use = alert and Secure:Attach("UseFood", alert, F.db.iconMode and { "CENTER" } or { "TOPLEFT", 12, -12 },
+  local use = alert and Secure:Attach("UseFood", alert,
+    F.db.iconMode and { "CENTER" } or { "TOPLEFT", CARD.pad + CARD.edge, -CARD.pad },
     alert.icon:GetWidth())
   if not use then
     return
@@ -709,32 +714,30 @@ local function Layout()
   local icon = F.db.iconMode
   alert:SetScale(math.max(0.25, math.min(1.5, (F.db.scale or 100) / 100)))
   PlaceAlert()
-  alert.text:SetShown(not icon)
-  alert.food:SetShown(not icon)
-  alert.supply:SetShown(not icon)
-  alert.dismiss:SetShown(not icon)
-  alert.snooze:SetShown(not icon)
-  alert.picker:SetShown(not icon)
+  for _, w in ipairs({ alert.text, alert.sub, alert.note, alert.edge }) do
+    w:SetShown(not icon)
+  end
+  for _, b in ipairs(alert.buttons) do
+    b:SetShown(not icon)
+  end
   alert.glow:SetShown(icon)
   alert.icon:ClearAllPoints()
   if icon then
+    -- Icon only: a 64 px square with the food, pulsing.
     alert:SetSize(64, 64)
     alert.icon:SetSize(48, 48)
     alert.icon:SetPoint("CENTER")
   else
-    alert:SetSize(400, lowLine and 106 or 92)
-    alert.icon:SetSize(42, 42)
-    alert.icon:SetPoint("TOPLEFT", 12, -12)
+    alert:SetWidth(CARD.width)
+    alert.icon:SetSize(CARD.icon, CARD.icon)
+    alert.icon:SetPoint("TOPLEFT", CARD.pad + CARD.edge, -CARD.pad)
+    alert:Fit()
   end
 end
 
 local function BuildAlert()
-  local f = Skin:CreateTooltipWindow(nil, UIParent)
-  f:SetFrameStrata("MEDIUM")
-  placeAlert = Kit.Movable(f, F, { y = 120, secure = true })
-
-  f.icon = f:CreateTexture(nil, "ARTWORK")
-  f.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+  local f = Kit.Card(F, { icon = true, move = { y = 120, secure = true } })
+  placeAlert = f.place
 
   f.glow = f:CreateTexture(nil, "OVERLAY")
   f.glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
@@ -749,32 +752,11 @@ local function BuildAlert()
     end
   end)
 
-  f.text = Kit.Text(f, "GameFontHighlight")
-  f.text:SetPoint("TOPLEFT", f.icon, "TOPRIGHT", 10, 0)
-  f.text:SetPoint("RIGHT", -10, 0)
-  f.text:SetWordWrap(true)
-
-  f.food = Kit.Text(f, "GameFontNormalSmall")
-  f.food:SetPoint("TOPLEFT", f.text, "BOTTOMLEFT", 0, -4)
-  f.food:SetPoint("RIGHT", -10, 0)
-
-  f.supply = Kit.Text(f, "GameFontDisableSmall")
-  f.supply:SetPoint("TOPLEFT", f.food, "BOTTOMLEFT", 0, -2)
-  f.supply:SetPoint("RIGHT", -10, 0)
-  f.supply:SetWordWrap(true)
-
-  f.dismiss = Kit.SmallButton(f, "Dismiss", 60)
-  f.dismiss:SetPoint("BOTTOMRIGHT", -8, 8)
-  F:Script(f.dismiss, "OnClick", Dismiss)
-  f.snooze = Kit.SmallButton(f, "Snooze", 60)
-  f.snooze:SetPoint("RIGHT", f.dismiss, "LEFT", -4, 0)
-  F:Script(f.snooze, "OnClick", Snooze)
-  f.picker = Kit.SmallButton(f, "Food", 50)
-  f.picker:SetPoint("RIGHT", f.snooze, "LEFT", -4, 0)
-  F:Script(f.picker, "OnClick", function()
+  f.dismiss = f:AddButton("Dismiss", 52, Dismiss)
+  f.snooze = f:AddButton("Snooze", 64, Snooze)
+  f.picker = f:AddButton("Food", 42, function()
     OpenMenu("picker")
   end)
-  f:Hide()
   alert = f
 end
 
@@ -792,10 +774,12 @@ local function ShowAlert(message, bags)
   SetFoodAttribute(food)
   alert.icon:SetTexture(food and Items.GetIcon(food.itemID) or FOOD_ICON)
   alert.icon:SetDesaturated(food == nil)
-  alert.text:SetText(message)
-  alert.food:SetText(FoodLine(food))
-  alert.supply:SetText(SupplyText(bags) .. (lowLine and ("\n|cffff8040" .. lowLine .. "|r") or ""))
   alert.snooze:SetText("Snooze " .. (F.db.snoozeMinutes or 1) .. "m")
+  alert:SetLines(message, FoodLine(food),
+    SupplyText(bags) .. (lowLine and ("\n|cffff8040" .. lowLine .. "|r") or ""))
+  if F.db.iconMode then
+    Layout() -- (SetLines showed the lines again)
+  end
   alert:Show()
   local x, y = alert:GetCenter()
   F:Debug("alert: visible %s, centre %s,%s, size %dx%d, scale %.2f, alpha %.2f", tostring(alert:IsVisible()),
