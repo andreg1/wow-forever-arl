@@ -1,7 +1,7 @@
 -- Dungeon Helper, Quests tab: the dungeon's quests (DungeonJournal's list,
 -- for the player's faction and character) on the left, grouped by where the
 -- player stands with each; the selected quest on the right: what it asks,
--- where it starts and ends, its rewards, the quests that unlock it, the
+-- where it starts and ends, its rewards (items, gold), the quests that unlock it, the
 -- quests that follow it, and the party's progress.
 --
 -- Chains:
@@ -200,6 +200,71 @@ local function Info(id, fallbackName)
   end
   infoCache[id] = info
   return info
+end
+
+-- A reward text split into its gold (copper, from "1g 80s"-style tokens) and
+-- everything else ("Undercity +150"), the way DungeonJournal reads it.
+local function SplitReward(text)
+  local money, kept = 0, {}
+  -- (separators: "|", a new line, or a bullet; gsub first, a byte class
+  -- would split other UTF-8 letters)
+  local raw = (Str(text) or ""):gsub("\n", "|"):gsub("\226\128\162", "|"):gsub("\194\183", "|")
+  for token in raw:gmatch("[^|]+") do
+    token = token:gsub("^%s+", ""):gsub("%s+$", "")
+    if token ~= "" and not token:find("^[%d,%.]+%s*XP$") then
+      if token:gsub("%d+%s*[gsc]", ""):gsub("%s+", "") == "" then
+        for amount, unit in token:gmatch("(%d+)%s*([gsc])") do
+          money = money + (tonumber(amount) or 0) * (unit == "g" and 10000 or unit == "s" and 100 or 1)
+        end
+      else
+        kept[#kept + 1] = token
+      end
+    end
+  end
+  return money, #kept > 0 and table.concat(kept, "  \194\183  ") or nil
+end
+
+-- The gold a quest gives, in copper (0 when unknown): DungeonJournal's reward
+-- text, its own gold table for chain steps, else the game (quest in the log
+-- or its data loaded). Only the fixed sources are cached.
+local moneyCache = {}
+local function Money(id)
+  id = tonumber(id)
+  if not id then
+    return 0
+  end
+  if moneyCache[id] then
+    return moneyCache[id]
+  end
+  local q = JournalQuest(id) or {}
+  local money = SplitReward(Str(q.rewardSummary) or q.rewards)
+  if money == 0 then
+    local fdj = H.FDJ() or {}
+    local fallback = type(fdj.PREREQ_REWARD_MONEY_FALLBACK) == "table" and fdj.PREREQ_REWARD_MONEY_FALLBACK[id]
+    money = tonumber(fallback) or 0
+  end
+  if money > 0 then
+    moneyCache[id] = money
+    return money
+  end
+  if GetQuestLogRewardMoney then
+    local ok, value = pcall(GetQuestLogRewardMoney, id)
+    if ok and not (issecretvalue and issecretvalue(value)) and type(value) == "number" and value > 0 then
+      return value
+    end
+  end
+  return 0
+end
+
+-- Copper with the game's coin icons (plain "1g 80s" if that isn't there).
+local function CoinText(copper, size)
+  if GetCoinTextureString then
+    local ok, text = pcall(GetCoinTextureString, copper, size)
+    if ok and type(text) == "string" and text ~= "" then
+      return text
+    end
+  end
+  return ARLE.Lib.FormatMoney(copper)
 end
 
 local function Objectives(id)
@@ -442,6 +507,7 @@ local LOOK = {
   d = { icon = H.ICON.ready, color = { 0.6, 0.6, 0.6 }, short = "|cff999999done|r" },
 }
 local SPEECH = "Interface\\GossipFrame\\GossipGossipIcon"
+local COIN = "Interface\\MoneyFrame\\UI-GoldIcon"
 
 local function Filter()
   return mod.db.questFilter or "all"
@@ -536,6 +602,10 @@ local function StepTooltip(row)
   end
   if info.turnin then
     GameTooltip:AddLine(H.Inline(H.ICON.active) .. " " .. info.turnin, 0.85, 0.85, 0.85, true)
+  end
+  local money = Money(row.id)
+  if money > 0 then
+    GameTooltip:AddLine("Reward: " .. CoinText(money, 12), 1, 1, 1)
   end
   if row.anyOf then
     local names = {}
@@ -1062,7 +1132,9 @@ function tab:RenderDetail(width)
 
   -- Rewards, two to a line like the game's quest frame.
   local items = type(q.rewardItems) == "table" and q.rewardItems or {}
-  if #items > 0 or Str(q.rewards) or Str(q.rewardSummary) then
+  local money = Money(id)
+  local _, otherRewards = SplitReward(Str(q.rewardSummary) or q.rewards)
+  if #items > 0 or money > 0 or otherRewards then
     Section("Rewards", q.rewardChoice and "|cffffd100choose one|r" or nil)
     local flb = H.FLB()
     local colW = math.floor((width - 16) / 2)
@@ -1102,8 +1174,11 @@ function tab:RenderDetail(width)
     if col > 0 then
       y = y + 38
     end
-    if #items == 0 then
-      Para(((Str(q.rewards) or q.rewardSummary):gsub("\n", "  ·  ")))
+    if money > 0 then
+      Line(COIN, CoinText(money, 14))
+    end
+    if #items == 0 and otherRewards then
+      Para(otherRewards)
     end
   end
 
