@@ -145,18 +145,122 @@ To add or change behavior in a third-party addon, do **not** edit it. Add an ARL
 
 Reading third-party source to find extension points is fine. For EllesmereUIBags, the overlay hook API is in `EllesmereUIBags/EUI_Bags_Slots.lua` (`RegisterItemOverlayIcon` / `UnregisterItemOverlayIcon` / `RunItemOverlays`). Check a third-party license before reusing any of its code (EllesmereUI: all rights reserved; Forever Leveling BiS: forbids copying; Forever SnackTrack: no license, so all rights reserved; Forever Loot Sparkles: GPL-3, can't go into MIT ARL; Manners: MIT, reusable with its copyright and permission notice kept, as in `BuffBackData.lua`; AutoLayer and LayerSwap: no license, so only their message formats are spoken; OpenMap: MIT, though ARL only speaks its message format and wraps its `MapStitch.AddPin`).
 
+## Feature standards
+
+Every feature follows these, so they all read the same and their failures end up in the same place (`/arl errors`, `/arl report`). They were set after the 2026-11-18 code review: each rule below replaced several local variants. A new feature, or a change to an old one, follows them; code that doesn't is brought in line when it's touched.
+
+### File skeleton
+
+```lua
+-- <Title>: <one line on what the player gets>.
+--
+-- <Design: which public surfaces of which addon it uses (and their license),
+-- what it protects, how it avoids taint; the standalone it replaces.>
+local ADDON = ...
+local ARLE = _G.ARLExtensions
+if not ARLE then
+  return
+end
+local Lib = ARLE.Lib
+
+local SOME_LIMIT = 10 -- constants first, UPPER_CASE, with their unit
+
+local F = {
+  id = "MyFeature",          -- also the SavedVariables key: never rename
+  addon = ADDON,
+  title = "My Feature",
+  group = "QualityOfLife",
+  extends = "OtherAddon",    -- only when it needs one (and the pack's OptionalDeps lists it)
+  command = "word",          -- /arl word; check no other feature or built-in has it
+  commandHelp = "what /arl word does, in player words",
+  description = "One or two sentences for the panel.",
+  options = {
+    { type = "info", text = function(def) return def:GetStatus() end },
+    { key = "thing", type = "boolean", label = "Do the thing", default = true },
+  },
+}
+
+local state = {} -- module state as file locals; per-frame state in weak-keyed tables
+
+function F:OnEnable()
+  -- reset queued flags and caches here (a wait from the last time it was on was dropped)
+  self:On("SOME_EVENT", self.OnSomething)
+end
+
+function F:OnDisable()
+  -- put back what it changed outside the feature API (frames, CVars, other addons' settings)
+end
+
+function F:GetStatus()
+  return "Active · <what it's doing right now>"
+end
+
+ARLE:RegisterModule(F)
+```
+
+- **Order:** the design comment, the requires, constants, `local F = {...}`, then helpers before their first use, then `OnEnable` / `OnDisable` / `OnOptionChanged` / `GetStatus` / `ReportDetails`, then `ARLE:RegisterModule(F)` as the last line.
+- **Fields of `F`:** in the order shown: `id, addon, title, group, extends, command, commandAliases, commandArgs, commandHelp, mainHelp, commandUsage, commands, description, pages, panePage, defaults, options`. Leave out the ones it doesn't use.
+- **The table is called `F`.** Dungeon Helper keeps `mod`, because its five files share it through `ns.mod` / `H.mod`.
+- **Status line:** every feature has `F:GetStatus()` returning `"Active · ..."`, saying what it's doing or waiting for, not just "on". A feature with steps worth checking adds `F:ReportDetails()` (lines for `/arl report`).
+
+### Shared helpers instead of local copies
+
+Use `ARLExtensions/Lib/Util.lua` and the host, never a local copy of the same thing. If a helper you need isn't there and a second file would need it, add it to `Lib`. Don't copy it into the next feature.
+
+| Need | Use |
+|---|---|
+| Is this value hidden (secret)? | `Lib.IsSecret(v)` |
+| The value, or nil when hidden | `Lib.Plain(v)` |
+| A client table that can be read | `Lib.Readable(t)` (a secret table says "table" to `type()` but throws when read) |
+| A non-empty, readable string | `Lib.Str(v)` |
+| Call an API that may be missing, throw or return hidden values | `Lib.Call(fn, ...)`. For one value only, write `(Lib.Call(fn, ...))` |
+| A spell's name | `Lib.SpellName(id)` |
+| A unit's name as chat and `/targetexact` know it ("First Surname"; Forever has surnames, not realms) | `Lib.UnitFullName(unit)` |
+| Our own name | `ARLE:MyName()`, never `UnitName("player")` alone (that's only the first name) |
+| "Name-Realm" to "Name" | `Lib.StripRealm(name)` (any realm), `ARLE:ShortName(name)` (only our own realm) |
+| Is someone in our group or guild? | `ARLE:InMyGroup(name)`, `ARLE:IsGuildmate(name)` |
+| Items, counts, links | `ARLE.Lib.Items` |
+| Questie, QuestieDB, Auctionator, FLB, EllesmereUI | `ARLE.Bridge.*` (each lookup is checked, and a missing piece is warned about) |
+| Quest objective zones | `ARLE.Lib.QuestPlaces` |
+| Group members | `Lib.Members()`, `Lib.Me()` |
+
+### Events, timers and hooks
+
+- **Events:** `self:On(event, fn)` / `self:OnUnit(event, unit, fn)`. Never a private `CreateFrame("Frame")` with `RegisterEvent`. These calls are unregistered when the feature goes off, and an event this client lacks is skipped instead of throwing.
+- **Timers:** `self:After`, `self:Ticker`, `self:Debounce`, `self:OutOfCombat`. Never `C_Timer`.
+  - **They're dropped when the feature goes off.** So a "queued" flag set before a wait (`queued = true; F:After(0, Run)`) must be reset in `OnEnable`, or it stays stuck.
+  - **The one exception** is work that must finish even if the feature goes off mid-way, such as Quest Search's sliced search. Say so in a comment.
+- **Scripts on our own frames and on the host's secure buttons:** `F:Script(frame, script, fn)`. Its errors are recorded under the feature, so the handler needs no `ARLE.Debug.Call` of its own. A plain `SetScript` only goes in a per-frame `OnUpdate` that's too hot for the wrapper, with a comment saying so (XP Food's pulse).
+- **Other addons' frames:** `F:HookScript(frame, script, fn)`. It's deferred out of combat, runs once per frame however often it's called, and does nothing while the feature is off. Never `frame:HookScript` directly.
+- **Other addons' functions:** `self:Hook(tbl, name, fn)` (hooksecurefunc) or `self:Wrap(tbl, name, fn)` (replace while on). Never hook or wrap a Blizzard function.
+- **Addon messages:** `self:Comm(kind, fn)` in `OnEnable`, never `ARLE:RegisterComm` at file load. A pack of several files collects them like Dungeon Helper's `H.Comm`. Whispers only arrive from guildmates and the group. Still check every field of a payload before storing it (type, range, length): it comes from another player's client.
+- **Commands:** `def.command` + `def.commands`, or `self:Command(c)`. A word belongs to whoever registered it first, so pick one no other feature uses (`/arl help` lists them).
+
+### State and chat
+
+- **Where data lives:** settings in `self.db` (per character, defaults in `options` / `defaults`), this character's data in `self.char`, data every character shares in `self.shared`. Never in another addon's tables, and never as a field written onto someone else's frame or a secure button. Per-frame state goes in a weak-keyed local table.
+- **New shared data:** a new `self.shared` key also goes into `SHARED_ONLY` in `Core/DB.lua`, so new characters don't copy it into their settings.
+- **Chat:**
+  - `self:Print` / `F:Print` (it adds the ARL prefix), never `ARLE:Print` or a local `Say`.
+  - A listing prints its indented lines with `print("   ...")`.
+  - What's said is in player words: what happened and what to do.
+- **Tracing:** `self:Debug(fmt, ...)` at every decision a player could ask "why didn't it...?" about (skipped, waiting, which branch was taken, what was refused). It costs nothing unless `/arl debug <feature>` is on.
+
+### Before you commit
+
+1. Compile every changed file (see "Testing and debugging").
+2. Search the changed files for the old ways. Each hit is either rewritten to the standard way or carries a comment saying why not:
+   - `SetScript(`, `C_Timer.`, `RegisterEvent(`
+   - `issecretvalue`, `ARLE:Print(`, `UnitName("player")`
+   - `hooksecurefunc(`, `:HookScript(`
+   - a `local function` named `Secret`, `Plain`, `Call` or `SpellName`
+3. Check that the feature's `GetStatus`, its `README.md` row and its AGENTS.md entry still say what it does.
+4. Bump the version with `make patch|minor|major` (see "Versioning").
+
 ## Conventions
 
 - A feature file opens with a block comment explaining the design: which public surfaces it uses, what it protects, and how it avoids taint; credits the standalone it came from when there is one.
-- **One way to do each thing** (standardized 2026-11-18):
-  - **Shape of a feature file:** the design comment, then `local F = { id, addon, title, group, extends, command, ... }` in that field order, then the code, then `ARLE:RegisterModule(F)` last. The table is `F`. Dungeon Helper keeps `mod`, shared by its five files through `ns.mod` / `H.mod`.
-  - **Status line:** every feature defines `F:GetStatus()` returning `"Active · <what it's doing>"`.
-  - **Shared helpers** (`ARLExtensions/Lib/Util.lua`), instead of a local copy in each file: `Lib.IsSecret`, `Lib.Plain(v)` (nil when hidden), `Lib.Readable(t)`, `Lib.Str(v)`, `Lib.Call(fn, ...)` (pcall that returns nothing when the API is missing or throws, and hidden values as nil), `Lib.SpellName(id)`, `Lib.UnitFullName(unit)` ("First Surname"), `Lib.StripRealm(name)`. Our own name is `ARLE:MyName()`, group membership `ARLE:InMyGroup(name)`, short names `ARLE:ShortName(name)`.
-  - **Events and timers:** `self:On` / `OnUnit`, `self:After`, `self:Ticker`, `self:Debounce`, never a private event frame or `C_Timer`. A queued-flag pattern (`queued = true; F:After(...)`) resets the flag in `OnEnable`, because the wait is dropped when the feature goes off. The exception is work that must finish even if the feature goes off mid-way (Quest Search's sliced search keeps `C_Timer.After(0, ...)`).
-  - **Scripts:** `F:Script(frame, script, fn)` on our own frames and the host's secure buttons; `F:HookScript` on other addons' frames. The handler then runs without its own `Debug.Call`.
-  - **Chat:** `F:Print` (or `self:Print`), not `ARLE:Print` or a local `Say`; plain `print("   ...")` only for the indented lines under a listing.
-- Debuggability: set scripts on a feature's own frames with `self:Script`, not `SetScript`, so their errors are caught too. Put `self:Debug(...)` at the decisions a player could ask "why didn't it...?" about (skipped, waiting, which branch).
-- Defensive API use: feature-check and `pcall` APIs that differ between clients (`C_UnitAuras.GetPlayerAuraBySpellID`, `C_Item.GetItemCount` vs `GetItemCount`, `C_Spell.PickupSpell` vs `PickupSpell`, `GetMouseFoci` vs `GetMouseFocus`, `GLOBAL_MOUSE_UP`); guard values with `issecretvalue` where the client may hide them. That includes **tables**: in combat or an instance an aura (`GetAuraDataByIndex`, `GetPlayerAuraBySpellID`), `UNIT_AURA`'s `updateInfo.addedAuras`, or tooltip data can come back as a secret table. `type()` still says "table", but indexing, `ipairs` or comparing a secret number field throws ("table expected, got secret"). Check `issecretvalue(t)` before touching a table from the client, and each field before comparing it.
+- Defensive API use (with the `Lib` helpers from "Feature standards"): feature-check and `pcall` (`Lib.Call`) APIs that differ between clients (`C_UnitAuras.GetPlayerAuraBySpellID`, `C_Item.GetItemCount` vs `GetItemCount`, `C_Spell.PickupSpell` vs `PickupSpell`, `GetMouseFoci` vs `GetMouseFocus`, `GLOBAL_MOUSE_UP`); guard values with `issecretvalue` where the client may hide them. That includes **tables**: in combat or an instance an aura (`GetAuraDataByIndex`, `GetPlayerAuraBySpellID`), `UNIT_AURA`'s `updateInfo.addedAuras`, or tooltip data can come back as a secret table. `type()` still says "table", but indexing, `ipairs` or comparing a secret number field throws ("table expected, got secret"). Check `issecretvalue(t)` before touching a table from the client, and each field before comparing it.
 - **Protected functions**: the client runs Blizzard's modern addon restrictions. Calling a Blizzard-UI-only function (seen so far: `SetRaidTarget`; pings are restricted the same way) shows a "blocked from an action only available to the Blizzard UI" popup even out of combat, and `pcall` doesn't prevent it. Do it through a secure button or macro the player clicks, or leave it out.
 - **Taint safety**: never write fields onto another addon's frames or secure buttons; keep per-frame state in weak-keyed local tables. Secure buttons: create, move, show/hide and set attributes only out of combat (`ARLE.Secure:Run` queues past combat; `self:OutOfCombat` is dropped if the feature is turned off first, so disable-time work uses `ARLE.Secure:Run`). Position overlay frames by coordinates, never by anchoring to secure frames.
 - **Frames holding a secure button are protected too**: a feature frame that a host button is parented to, or anchored onto, is protected, so in combat the game blocks its SetPoint, SetSize, SetScale, Show/Hide, Enable/Disable and StartMoving with `[ADDON_ACTION_BLOCKED] ... 'UNKNOWN()'`, even while it's hidden (seen 2026-11-17 from Layer Bridge's AutoLayer button). Put such changes in `ARLE.Secure:Run(fn, key)`: with a key, a change repeated in combat runs once afterwards, as its latest version. Lay host buttons with `ARLE.Secure:Attach(key, holder, point, w, h)` and hand them back with `ARLE.Secure:Detach(key, holder, attrs)`. Make a movable box with `ARLE.UI.Kit.Movable(frame, def, { x, y, secure, onMoved })`. It saves the centre offset in `def.char.position`, which the Reset position preset clears. It returns `place()`, and `secure = true` blocks dragging and defers moves in combat.
