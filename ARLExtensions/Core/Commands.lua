@@ -220,7 +220,15 @@ function ARLE:PrintStatus(def)
   local info = self:GetInfo(def.id)
   def:Print((info.enabled and "" or "off · ") .. info.status)
   ListSettings(def)
-  print("   " .. C_DIM .. "/arl " .. def.command .. " help for its commands, /arl open " .. def.command
+  -- (its own commands too, by name: "/arl rare" never mentioned "add" before)
+  local names = {}
+  for _, a in ipairs(def.commands or {}) do
+    names[#names + 1] = a.name .. (a.args and (" " .. a.args) or "")
+  end
+  if #names > 0 then
+    print("   " .. C_DIM .. "Commands:|r " .. C_ARG .. table.concat(names, "|r" .. C_DIM .. ", |r" .. C_ARG) .. "|r")
+  end
+  print("   " .. C_DIM .. "/arl " .. def.command .. " help explains them, /arl open " .. def.command
     .. " for the panel.|r")
 end
 
