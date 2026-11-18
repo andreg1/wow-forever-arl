@@ -93,6 +93,7 @@ function ARLE:ApplyGuild()
         self:CallEnable(def)
       end
     end
+    self:LoadBackgroundPacks()
   elseif state == "outsider" and self.unlocked and not outsiderCheck then
     outsiderCheck = true
     C_Timer.After(OUTSIDER_CONFIRM, function()
@@ -105,6 +106,27 @@ function ARLE:ApplyGuild()
         self:Changed()
       end
     end)
+  end
+end
+
+-- Packs loaded for work they do with their feature off. The Dungeon
+-- Helper's pack answers partymates' loot questions with this player's
+-- Forever Leveling BiS numbers, so a group leader gets them even from members
+-- who never turned the Dungeon Helper on (Settings can stop it).
+local BACKGROUND = {
+  BiSDungeonHelper = function()
+    return ARLE:SharesLoot() and ARLE.Bridge.FDJ() and ARLE.Bridge.FLB()
+  end,
+}
+
+function ARLE:LoadBackgroundPacks()
+  if not self.unlocked or (InCombatLockdown and InCombatLockdown()) then
+    return
+  end
+  for id, wanted in pairs(BACKGROUND) do
+    if self.catalog[id] and wanted() then
+      self:LoadModuleAddon(id)
+    end
   end
 end
 

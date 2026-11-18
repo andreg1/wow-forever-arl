@@ -73,6 +73,23 @@ local settings = {
         ARLE.db.loginMessage = value and true or false
       end,
     },
+    {
+      key = "shareLoot",
+      type = "boolean",
+      label = "Share my Leveling BiS numbers with ARL partymates",
+      tooltip = "With Forever Leveling BiS and DungeonJournal installed, ARL partymates' Dungeon Helper shows which "
+        .. "drops are BiS or an upgrade for you, even when your own Dungeon Helper is off. Only your gains for the "
+        .. "dungeon's drops and your equipped items are sent, to your group only.",
+      default = true,
+      get = function()
+        return ARLE.db.shareLoot ~= false
+      end,
+      set = function(value)
+        ARLE.db.shareLoot = value and true or false
+        ARLE:LoadBackgroundPacks()
+        ARLE:QueuePresence()
+      end,
+    },
     { type = "header", label = "About" },
     {
       type = "info",

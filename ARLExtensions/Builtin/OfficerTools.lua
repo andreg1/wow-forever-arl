@@ -129,7 +129,9 @@ ARLE.IsGuildOfficer = IsOfficer
 -- in practice an officer's client asks at login and when the pane opens.
 local function Members()
   local list = {}
-  local me = ARLE:ShortName(UnitName("player"))
+  -- (the roster names us "First Surname" on Forever; UnitName alone is the
+  -- first name, which never matched, so we read as "not running")
+  local me, myFirst = ARLE:ShortName(ARLE:MyName()), ARLE:ShortName(UnitName("player"))
   local latest = Latest()
   local waiting = queriedAt and (GetTime() - queriedAt) < ANSWER_WAIT
   local total = GetNumGuildMembers and GetNumGuildMembers() or 0
@@ -138,10 +140,11 @@ local function Members()
     if name and online then
       local short = ARLE:ShortName(name)
       local m = { name = short, rank = rank, rankIndex = rankIndex, class = classFile }
-      if short == me then
+      local heard = versions[short] or versions[short:match("^(%S+) ") or short]
+      if short == me or short == myFirst then
         m.version, m.state = Mine(), "you"
-      elseif versions[short] then
-        m.version = versions[short]
+      elseif heard then
+        m.version = heard
         m.state = Compare(m.version, latest) < 0 and "outdated" or "current"
       else
         m.state = waiting and "checking" or "missing"
@@ -394,6 +397,12 @@ function entry:OnEnable()
       ARLE:Send("H", Mine(), "GUILD")
     end
   end)
+end
+
+-- The version a guildmate's ARL last announced (its login hello, or an
+-- answer to an officer's check), or nil.
+function ARLE.KnownVersion(name)
+  return name and (versions[name] or versions[name:match("^(%S+) ") or name]) or nil
 end
 
 ARLE.OfficerRefresh = Refresh

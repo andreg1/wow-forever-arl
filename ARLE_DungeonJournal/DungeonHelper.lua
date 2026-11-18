@@ -906,10 +906,12 @@ function mod:OnEnable()
     end
   end
   ZoneChanged()
+  ARLE:QueuePresence()
 end
 
 function mod:OnDisable()
   -- (the events registered with self:On are dropped by the host)
+  ARLE:QueuePresence() -- partymates see "Dungeon Helper off" (still sharing, if set)
   comeBack = false
   if frame then
     frame:Hide()

@@ -207,8 +207,10 @@ function H.Comm(kind, fn)
 end
 function H.RegisterComms()
   for _, c in ipairs(H.comms) do
-    mod:Comm(c.kind, function(_, ...)
-      return c.fn(...)
+    mod:Comm(c.kind, function(_, sender, payload, channel)
+      mod:Debug("got %s from %s on %s (%d chars)", c.kind, tostring(sender), tostring(channel),
+        type(payload) == "string" and #payload or 0)
+      return c.fn(sender, payload, channel)
     end)
   end
 end
@@ -629,6 +631,12 @@ end
 function H.Request()
   local channel = ARLE:GroupChannel()
   if channel and H.shown then
+    local names = {}
+    for _, m in ipairs(H.Members()) do
+      names[#names + 1] = tostring(m.name)
+    end
+    mod:Debug("asking %s for %s; group: %s", channel, H.shown, table.concat(names, ", "))
+    H.askedAt = GetTime()
     ARLE:Send("BQ", H.shown, channel)
     H.QueueSend(H.shown, nil, true)
   end
@@ -637,6 +645,76 @@ end
 H.Comm("BQ", function(_, dungeon)
   if mod._active and H.FDJ() and H.FDJ().DB[dungeon] then
     H.QueueSend(dungeon, nil, true)
+  end
+end)
+
+-- With the Dungeon Helper off, the pack is still loaded for this (host's
+-- LoadBackgroundPacks: Leveling BiS and DungeonJournal installed, Settings'
+-- "Share my Leveling BiS numbers" on): a partymate's question about a
+-- dungeon is answered with this player's gains and equipped items only, so
+-- the group leader's numbers don't depend on everyone turning it on. Item
+-- data still loading is sent again as it arrives (a few tries).
+local backgroundAt = {}
+local function BackgroundSend(dungeon, tries)
+  if mod._active or not ARLE:SharesLoot() or not H.FLB() then
+    return
+  end
+  local channel = ARLE:GroupChannel()
+  local bis
+  for _, t in ipairs(H.tabs) do
+    if t.key == "bis" then
+      bis = t
+    end
+  end
+  if not channel or not bis or not bis.Send then
+    return
+  end
+  bis:Send(dungeon, channel, tries == 0)
+  if bis.Loading and bis.Loading(dungeon) and tries < 6 then
+    C_Timer.After(3, function()
+      local ok, err = pcall(BackgroundSend, dungeon, tries + 1)
+      if not ok then
+        ARLE.Debug:Record(mod, err)
+      end
+    end)
+  end
+end
+ARLE:RegisterComm("BQ", function(_, dungeon, channel)
+  if mod._active or channel == "GUILD" or channel == "WHISPER" or not ARLE:SharesLoot() then
+    return
+  end
+  if not (H.FLB() and H.FDJ() and H.FDJ().DB[dungeon]) then
+    return
+  end
+  -- (one answer per dungeon per few seconds: several members may ask at once)
+  if backgroundAt[dungeon] and GetTime() - backgroundAt[dungeon] < 5 then
+    return
+  end
+  backgroundAt[dungeon] = GetTime()
+  C_Timer.After(1 + math.random(), function()
+    local ok, err = pcall(BackgroundSend, dungeon, 0)
+    if not ok then
+      ARLE.Debug:Record(mod, err)
+    end
+  end)
+end)
+
+-- Why a partymate shares no quests or times (those need their Dungeon Helper
+-- on, unlike loot numbers): a few words for a row or tooltip.
+function H.Quiet(m)
+  local info = ARLE:PartyInfo(m.name)
+  if not info then
+    local known = ARLE.KnownVersion and ARLE.KnownVersion(m.name)
+    return known and ("ARL v" .. known .. "?") or "no ARL"
+  end
+  return info.dh and "no answer yet" or "Dungeon Helper off"
+end
+
+-- A partymate's presence (Core/Comm.lua "AP") can change why they have no
+-- numbers: redraw.
+ARLE:RegisterComm("AP", function()
+  if mod._active then
+    H.Render()
   end
 end)
 

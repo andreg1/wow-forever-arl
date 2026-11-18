@@ -568,7 +568,7 @@ local function PartyTooltip(owner)
     if m.unit == "player" or (p and p.dungeon == H.shown) then
       GameTooltip:AddDoubleLine(ColorName(m), "shares quests", 1, 1, 1, 0.45, 0.9, 0.5)
     else
-      GameTooltip:AddDoubleLine(ColorName(m), "no ARL", 1, 1, 1, 0.5, 0.5, 0.5)
+      GameTooltip:AddDoubleLine(ColorName(m), H.Quiet(m), 1, 1, 1, 0.5, 0.5, 0.5)
     end
   end
   GameTooltip:AddLine(" ")
@@ -1278,7 +1278,7 @@ function tab:RenderDetail(width)
       H.SetEdge(r.pic, 0, 0, 0, 1)
       local words, corner
       if not found then
-        words = "|cff888888no ARL|r"
+        words = "|cff888888" .. H.Quiet(m) .. "|r"
       elseif not st then
         words = "|cff888888?|r"
       else

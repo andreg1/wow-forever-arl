@@ -112,8 +112,10 @@ end
 
 -- Group -----------------------------------------------------------------------
 
+-- Our name as our addon messages carry it ("First Surname" on Forever), so
+-- that our own entry and the ones partymates keep for us use the same key.
 function L.Me()
-  return ARLE:ShortName(UnitName("player"))
+  return ARLE:ShortName(ARLE:MyName())
 end
 
 -- Group members as { {name, class, unit}, ... }, the player first.
@@ -126,7 +128,7 @@ function L.Members()
   for i = 1, count do
     local unit = prefix .. i
     if UnitExists(unit) and not UnitIsUnit(unit, "player") then
-      list[#list + 1] = { name = ARLE:ShortName(GetUnitName(unit, true)), class = select(2, UnitClass(unit)), unit = unit }
+      list[#list + 1] = { name = ARLE:UnitShortName(unit), class = select(2, UnitClass(unit)), unit = unit }
     end
   end
   return list

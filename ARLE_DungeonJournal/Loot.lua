@@ -147,6 +147,11 @@ function tab:Send(dungeon, channel, force)
   ARLE:Send("BE", table.concat(worn, ","), channel)
 end
 
+-- Whether the player's own gains for a dungeon still wait for item data.
+function tab.Loading(dungeon)
+  return MyData(dungeon).loading
+end
+
 -- Whether item data that arrives could change the player's own gains (they
 -- are sent to the party, so always wanted).
 function tab:WantsItemInfo()
@@ -205,6 +210,34 @@ H.Comm("BE", function(sender, payload)
   end
   H.Render()
 end)
+
+-- Why a member has no numbers for the shown dungeon, in a few words (the
+-- tooltip's right column, short enough not to widen it). From what their ARL
+-- said about itself (Core/Comm.lua "AP", 0.10.0+), else the version their ARL
+-- announced to the guild (older ones share only with the Dungeon Helper on).
+local NEW_SHARING = "0.10.0"
+local function NoNumbers(m)
+  if m.unit == "player" then
+    return FLB() and "loading..." or "needs Leveling BiS"
+  end
+  local info = ARLE:PartyInfo(m.name)
+  if info then
+    if not info.flb then
+      return "needs Leveling BiS"
+    elseif not info.fdj then
+      return "needs DungeonJournal"
+    elseif not info.share then
+      return "sharing off"
+    end
+    return (H.askedAt and GetTime() - H.askedAt < 10) and "asking..." or "no answer, /reload"
+  end
+  local known = ARLE.KnownVersion and ARLE.KnownVersion(m.name)
+  if known and ARLE.CompareVersions and ARLE.CompareVersions(known, NEW_SHARING) < 0 then
+    return "old ARL v" .. known
+  end
+  return "no ARL"
+end
+tab.NoNumbers = NoNumbers
 
 -- BiS/upgrade marks per item: marks[itemID] = { {member, gain, bis}, ... },
 -- biggest gain first.
@@ -315,7 +348,7 @@ local function ItemTooltip(row)
       GameTooltip:AddLine("    " .. (#wears > 0 and ("wears " .. table.concat(wears, " / ")) or "nothing in that slot"),
         0.65, 0.65, 0.65)
     else
-      GameTooltip:AddDoubleLine(ColorName(m), "no ARL (no numbers)", 1, 1, 1, 0.5, 0.5, 0.5)
+      GameTooltip:AddDoubleLine(ColorName(m), NoNumbers(m), 1, 1, 1, 0.5, 0.5, 0.5)
     end
   end
   GameTooltip:AddLine(" ")
@@ -331,16 +364,12 @@ local function PartyTooltip(owner)
     if p and p.dungeon == H.shown then
       GameTooltip:AddDoubleLine(ColorName(m), SpecLabel(p.spec) .. (p.loading and " (loading)" or ""),
         1, 1, 1, 0.45, 0.9, 0.5)
-    elseif m.unit == "player" then
-      GameTooltip:AddDoubleLine(ColorName(m), FLB() and "loading..." or "needs Forever Leveling BiS",
-        1, 1, 1, 0.6, 0.6, 0.6)
     else
-      GameTooltip:AddDoubleLine(ColorName(m), "no ARL", 1, 1, 1, 0.5, 0.5, 0.5)
+      GameTooltip:AddDoubleLine(ColorName(m), NoNumbers(m), 1, 1, 1, 0.5, 0.5, 0.5)
     end
   end
   GameTooltip:AddLine(" ")
-  GameTooltip:AddLine("ARL members score the drops with their own Forever Leveling BiS and share the numbers. "
-    .. "Others get no marks.", 0.8, 0.8, 0.8, true)
+  GameTooltip:AddLine("ARL members with Leveling BiS share their numbers.", 0.8, 0.8, 0.8)
   GameTooltip:AddLine("|cffffd100Gold-edged class icon|r: BiS from this dungeon for that slot", 0.8, 0.8, 0.8)
   GameTooltip:AddLine("Plain class icon: an upgrade", 0.8, 0.8, 0.8)
   GameTooltip:AddLine(H.Inline(H.ICON.star) .. " and |cff66ff66+12.3|r on a drop: what it gains you", 0.8, 0.8, 0.8)

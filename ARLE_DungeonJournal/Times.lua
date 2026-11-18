@@ -1152,7 +1152,7 @@ function tab:RenderDetail(width)
       local note, noteSub
       local has = p and p.dungeon == dungeon
       if not has then
-        note = "|cff888888no ARL|r"
+        note = "|cff888888" .. H.Quiet(m) .. "|r"
       elseif boss then
         local bb = p.bosses[boss.name]
         note = bb and bb.split and FormatTime(bb.split) or "|cff888888--:--|r"
