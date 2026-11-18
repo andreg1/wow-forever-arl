@@ -92,20 +92,14 @@ local F = {
 -- Small helpers
 -------------------------------------------------------------------------------
 
-local issecret = _G.issecretvalue or function()
-  return false
-end
-local function plain(v)
-  if issecret(v) then
-    return nil
-  end
-  return v
-end
+-- (the host's shared helpers: ARLExtensions/Lib/Util.lua)
+local Lib = ARLE.Lib
+local plain, Readable = Lib.Plain, Lib.Readable
+local UnitFullName, SpellName = Lib.UnitFullName, Lib.SpellName
 
--- A table from the client that can be read (a secret one says "table" to
--- type() but throws when indexed or walked).
-local function Readable(t)
-  return type(t) == "table" and not issecret(t)
+-- One value of an API call, nil when it's missing, throws or is hidden.
+local function Ask(fn, ...)
+  return (Lib.Call(fn, ...))
 end
 
 local myRealm
@@ -126,41 +120,6 @@ local function NormalName(name)
     return short
   end
   return name
-end
-
--- A unit's name as chat and /targetexact know it. On Forever UnitName's second
--- value is the surname, not a realm: "Haru" + "Pala" is "Haru Pala" (as Layer
--- Bridge's MyName measured), never "Haru-Pala".
-local function UnitFullName(unit)
-  local ok, name, surname = pcall(UnitName, unit)
-  name, surname = ok and plain(name), ok and plain(surname)
-  if type(name) ~= "string" or name == "" or name == UNKNOWNOBJECT then
-    return nil
-  end
-  if type(surname) == "string" and surname ~= "" then
-    local c = Constants and Constants.CharacterNameSeparatorConsts
-    local sep = c and plain(c.CHARACTERNAME_SURNAME_SEPARATOR)
-    if type(sep) ~= "string" or sep == "" then
-      sep = " "
-    end
-    return name .. sep .. surname
-  end
-  return name
-end
-
-local function Ask(fn, ...)
-  if not fn then
-    return nil
-  end
-  local ok, v = pcall(fn, ...)
-  return ok and plain(v) or nil
-end
-
-local SpellName = function(id)
-  if C_Spell and C_Spell.GetSpellName then
-    return Ask(C_Spell.GetSpellName, id)
-  end
-  return Ask(GetSpellInfo, id)
 end
 
 local function SpellSubtext(id)
@@ -716,14 +675,14 @@ local function SetupButton(self)
   armedText = nil
   -- Re-armed at the last moment out of combat, so the press is for whoever
   -- is best now (a target changed, somebody walked out of range).
-  b:SetScript("PreClick", function()
+  F:Script(b, "PreClick", function()
     if F._active and not InCombatLockdown() then
-      ARLE.Debug.Call(F, F.Arm, F)
+      F:Arm()
     end
   end)
-  b:SetScript("PostClick", function()
+  F:Script(b, "PostClick", function()
     if F._active then
-      ARLE.Debug.Call(F, Pressed, F)
+      Pressed(F)
     end
   end)
 end
@@ -734,8 +693,8 @@ local function ReleaseButton()
     return
   end
   b:SetAttribute("macrotext", nil)
-  b:SetScript("PreClick", nil)
-  b:SetScript("PostClick", nil)
+  F:Script(b, "PreClick", nil)
+  F:Script(b, "PostClick", nil)
   armedText = nil
 end
 

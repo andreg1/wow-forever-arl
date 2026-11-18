@@ -50,9 +50,7 @@ local last = { at = -math.huge }   -- the place last sent: map, x, y, at
 local sharing = false              -- an L1 went out since the last L0 (they're told when it stops)
 local why = "starting"             -- why nothing is sent right now, for the status line
 
-local function Secret(v)
-  return issecretvalue ~= nil and issecretvalue(v)
-end
+local Secret = ARLE.Lib.IsSecret
 
 local function OpenMapDB()
   local om = _G.OpenMap

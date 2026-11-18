@@ -106,13 +106,8 @@ local Kit = ARLE.UI.Kit
 -- Small helpers
 -------------------------------------------------------------------------------
 
-local function Secret(v)
-  return issecretvalue and issecretvalue(v)
-end
-
-local function Str(v)
-  return not Secret(v) and type(v) == "string" and v ~= "" and v or nil
-end
+-- (the host's shared helpers: ARLExtensions/Lib/Util.lua)
+local Secret, Str = ARLE.Lib.IsSecret, ARLE.Lib.Str
 
 local function Loaded(name)
   return ARLE:IsAddonLoaded(name)
@@ -134,26 +129,13 @@ local function LayerSwapHosting()
 end
 
 -- "First Surname-Realm" -> "First Surname", as LayerSwap names players.
-local function Short(name)
-  return Str(name) and name:match("^([^%-]+)") or nil
-end
+local Short = ARLE.Lib.StripRealm
 
 -- Our name as other players' messages carry it: on Forever "First Surname"
 -- (UnitName gives the two parts apart; measured 2026-11-16: LayerSwap hosts
 -- answered "heard Haru Pala" while UnitName's first part was "Haru").
 local function MyName()
-  local first, surname = UnitName("player")
-  first = Str(first)
-  if not first then
-    return nil
-  end
-  surname = Str(surname)
-  if surname then
-    local c = Constants and Constants.CharacterNameSeparatorConsts
-    local sep = c and Str(c.CHARACTERNAME_SURNAME_SEPARATOR) or " "
-    return first .. sep .. surname
-  end
-  return first
+  return ARLE.Lib.UnitFullName("player")
 end
 
 local function ZoneMap()
@@ -1483,26 +1465,26 @@ local function AttachSecure()
     sec:SetAllPoints(al)
     sec:SetFrameLevel(al:GetFrameLevel() + 5)
     sec:Show()
-    -- SetScript, as Buff Back and Rare Objectives do on their host buttons
-    -- (a hooked PreClick on this template didn't run: 2026-11-16, a second
-    -- press 20 s after a line still went to AutoLayer). Our own button, ours
-    -- to script; errors caught through Debug.Call.
-    sec:SetScript("PreClick", function()
+    -- F:Script (SetScript with errors caught), as Buff Back and Rare
+    -- Objectives do on their host buttons (a hooked PreClick on this template
+    -- didn't run: 2026-11-16, a second press 20 s after a line still went to
+    -- AutoLayer). Our own button, ours to script.
+    F:Script(sec, "PreClick", function()
       if F._active and not InCombatLockdown() then
         F.preClickAt = GetTime()
-        ARLE.Debug.Call(F, F.ArmButton, F)
+        F:ArmButton()
       end
     end)
-    sec:SetScript("PostClick", function()
+    F:Script(sec, "PostClick", function()
       if F._active then
-        ARLE.Debug.Call(F, F.Ask, F, "button", "autolayer")
+        F:Ask("button", "autolayer")
       end
     end)
-    sec:SetScript("OnEnter", function(self)
+    F:Script(sec, "OnEnter", function(self)
       al:LockHighlight()
-      ARLE.Debug.Call(F, pad.alTip, self)
+      pad.alTip(self)
     end)
-    sec:SetScript("OnLeave", function()
+    F:Script(sec, "OnLeave", function()
       al:UnlockHighlight()
       GameTooltip:Hide()
     end)

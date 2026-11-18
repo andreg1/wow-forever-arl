@@ -30,9 +30,7 @@ end
 local Skin, Kit, Secure, Items = ARLE.Skin, ARLE.UI.Kit, ARLE.Secure, ARLE.Lib.Items
 
 -- A value the client hides (secret): never index, walk or compare it.
-local function Secret(v)
-  return issecretvalue ~= nil and issecretvalue(v) == true
-end
+local Secret = ARLE.Lib.IsSecret
 
 local MAX_LEVEL = 60
 local GOURMAND = 1225499
@@ -157,7 +155,7 @@ local function LineText(line)
     return ""
   end
   local left, right = line.leftText, line.rightText
-  if issecretvalue and (issecretvalue(left) or issecretvalue(right)) then
+  if Secret(left) or Secret(right) then
     return ""
   end
   return (type(left) == "string" and left or "") .. " " .. (type(right) == "string" and right or "")
@@ -406,15 +404,7 @@ local function ScanBuff(debugOut)
   return out
 end
 
-local function Call(fn, ...)
-  if not fn then
-    return nil
-  end
-  local ok, a = pcall(fn, ...)
-  if ok then
-    return a
-  end
-end
+local Call = ARLE.Lib.Call -- (missing, throwing or hidden: nil)
 
 local function NodeIsGourmand(configID, nodeID, node)
   if nodeID == GOURMAND then

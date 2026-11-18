@@ -490,12 +490,7 @@ function H.ResolveBoss(dungeon, name)
 end
 
 -- A value the client may hand over as "secret" (newer clients): nil then.
-function H.Plain(v)
-  if issecretvalue and issecretvalue(v) then
-    return nil
-  end
-  return v
-end
+H.Plain = Lib.Plain
 
 -- Creature-0-server-map-zoneUID-npcID-spawnUID: npcID, the instance copy
 -- ("server:zoneUID", as DungeonJournal's run log reads it), the map ID.
@@ -598,6 +593,9 @@ function H.SendChunks(kind, head, items, sep, channel)
 end
 
 local sendTimers = {}
+function H.ResetSends()
+  wipe(sendTimers)
+end
 -- Sends every tab's data for a dungeon (or only one tab's), a moment from now,
 -- once per burst. Tabs may skip sending what they sent last time, unless
 -- forced (someone asked, or the group changed).
@@ -613,15 +611,15 @@ function H.QueueSend(dungeon, only, force)
   end
   pending = { force = force }
   sendTimers[key] = pending
-  C_Timer.After(1.5, function()
+  mod:After(1.5, function()
     sendTimers[key] = nil
     local channel = ARLE:GroupChannel()
-    if not mod._active or not channel then
+    if not channel then
       return
     end
     for _, tab in ipairs(H.tabs) do
       if tab.Send and (not only or only == tab.key) then
-        ARLE.Debug.Call(mod, tab.Send, tab, dungeon, channel, pending.force)
+        tab:Send(dungeon, channel, pending.force)
       end
     end
   end)

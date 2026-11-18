@@ -51,7 +51,7 @@ local SLOT_W = 24      -- width reserved right of each title (EUI caps at 64)
 local SCAN_DELAY = 0.5 -- debounce for bag and quest log bursts
 local LOGIN_GRACE = 3  -- seconds before the first missing-item check
 
-local mod = {
+local F = {
   id = "EUIQuestItems",
   addon = ADDON,
   title = "Quest Tracker",
@@ -197,10 +197,10 @@ end
 local function QuestItem(questID)
   local itemID, tex, charges, showDone = SpecialItem(questID)
   if itemID then
-    mod.char.known[questID] = itemID
+    F.char.known[questID] = itemID
     return itemID, tex, charges, showDone
   end
-  itemID = mod.char.known[questID]
+  itemID = F.char.known[questID]
   if itemID then
     return itemID, GetItemIcon(itemID), nil, false
   end
@@ -232,7 +232,7 @@ end
 
 -- Every usable QuestieDB item of the quest (a list; don't modify it).
 local function DatabaseItems(questID)
-  if mod.db.questieItems == false then
+  if F.db.questieItems == false then
     return NONE
   end
   local list = dbItems[questID]
@@ -278,7 +278,7 @@ local function DatabaseItem(questID)
   return list[1]
 end
 
-function mod:CheckQuest(questID)
+function F:CheckQuest(questID)
   if not questID then
     self:Print("usage: /arl qt check <questID>")
     return
@@ -400,10 +400,10 @@ local function GetUseButton(i)
   u:SetAttribute("useOnKeyDown", false)
   u:RegisterForClicks("AnyUp")
   u:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
-  u:SetScript("OnEnter", function(self)
+  F:Script(u, "OnEnter", function(self)
     ShowTooltip(self, useData[self], true)
   end)
-  u:SetScript("OnLeave", GameTooltip_Hide)
+  F:Script(u, "OnLeave", GameTooltip_Hide)
   u:Hide()
   useButtons[i] = u
   return u
@@ -427,7 +427,7 @@ local function SyncUseButtons()
     return
   end
   local n = 0
-  if mod._active then
+  if F._active then
     for _, b in pairs(visuals) do
       local itemID = b.itemID
       -- (not over a tracker EllesmereUI has faded out: mouseover mode, auto-hide)
@@ -532,7 +532,7 @@ local function QueueSync()
     return
   end
   syncQueued = true
-  C_Timer.After(0, SyncUseButtons)
+  F:After(0, SyncUseButtons)
 end
 
 -- Out of combat only (OnDisable runs it through ARLE.Secure in combat).
@@ -580,13 +580,13 @@ local function Visual(slot)
   b.alert:SetText("!")
   b.alert:SetTextColor(1, 0.25, 0.2)
   b:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
-  b:SetScript("OnEnter", function(self)
+  F:Script(b, "OnEnter", function(self)
     ShowTooltip(self, self, false)
   end)
-  b:SetScript("OnLeave", GameTooltip_Hide)
+  F:Script(b, "OnLeave", GameTooltip_Hide)
   -- Only reached where no use button covers the icon: a red (missing) or
   -- grey (not in bags) one, or an icon that appeared in combat.
-  b:SetScript("OnClick", function(self, button)
+  F:Script(b, "OnClick", function(self, button)
     if button == "RightButton" and self.missing then
       Forget(self.questID)
     elseif not self.missing and not self.absent and InCombatLockdown() then
@@ -594,10 +594,10 @@ local function Visual(slot)
         0.3)
     end
   end)
-  b:SetScript("OnShow", function(self)
+  F:Script(b, "OnShow", function(self)
     shown[self] = true
   end)
-  b:SetScript("OnHide", function(self)
+  F:Script(b, "OnHide", function(self)
     shown[self] = nil
   end)
   visuals[slot] = b
@@ -608,13 +608,13 @@ end
 local function OnRow(slot, questID, title)
   local b = visuals[slot]
   QueueSync() -- the use buttons follow every redraw
-  if not mod._active or type(questID) ~= "number" then
+  if not F._active or type(questID) ~= "number" then
     if b then
       b:Hide()
     end
     return
   end
-  local db = mod.db
+  local db = F.db
   local itemID, tex, charges, showDone = QuestItem(questID)
   local fromDB = false
   if not itemID then
@@ -628,7 +628,7 @@ local function OnRow(slot, questID, title)
   local absent = fromDB and count == 0
   local missing = itemID ~= nil and count == 0 and not fromDB
   local show = false
-  if itemID and not mod.char.ignored[questID] then
+  if itemID and not F.char.ignored[questID] then
     if absent then
       show = db.showButtons and db.questieAbsent and not complete
     elseif missing then
@@ -692,7 +692,6 @@ local signature     -- last scan's state, to redraw only on change
 local logReady = false
 local scanQueued = false
 local bagsChanged = false -- a BAG_UPDATE_DELAYED since the last scan
-local events = CreateFrame("Frame")
 
 local function Fulfilled(questID)
   local total = 0
@@ -706,13 +705,13 @@ local function Fulfilled(questID)
 end
 
 local function Announce(lost)
-  local db = mod.db
+  local db = F.db
   if db.alertChat then
     for _, entry in ipairs(lost) do
       local questID, itemID = entry[1], entry[2]
       local title = C_QuestLog.GetTitleForQuestID(questID) or ("quest " .. questID)
       local where = Count(itemID, true) > 0 and " It is in your bank." or ""
-      ARLE:Print(ItemLink(itemID) .. " for |cffffd100" .. title .. "|r is not in your bags." .. where)
+      F:Print(ItemLink(itemID) .. " for |cffffd100" .. title .. "|r is not in your bags." .. where)
     end
   end
   if db.alertScreen and RaidNotice_AddMessage and RaidWarningFrame then
@@ -727,11 +726,11 @@ end
 
 local function Scan()
   scanQueued = false
-  if not mod._active then
+  if not F._active then
     return
   end
-  local db = mod.db
-  local known, ignored = mod.char.known, mod.char.ignored
+  local db = F.db
+  local known, ignored = F.char.known, F.char.ignored
   local bags = bagsChanged
   bagsChanged = false
 
@@ -795,16 +794,16 @@ local function Queue()
     return
   end
   scanQueued = true
-  C_Timer.After(SCAN_DELAY, Scan)
+  F:After(SCAN_DELAY, Scan)
 end
 
 function Forget(questID)
-  mod.char.ignored[questID] = mod.char.known[questID] or true
+  F.char.ignored[questID] = F.char.known[questID] or true
   signature = nil
   Queue()
 end
 
-events:SetScript("OnEvent", function(_, event, arg1)
+local function OnEvent(_, event, arg1)
   if event == "BAG_UPDATE_COOLDOWN" then
     for b in pairs(shown) do
       UpdateCooldown(b)
@@ -818,7 +817,7 @@ events:SetScript("OnEvent", function(_, event, arg1)
     bagsChanged = true
   end
   Queue()
-end)
+end
 
 -------------------------------------------------------------------------------
 -- Zone focus
@@ -913,7 +912,7 @@ end
 
 -- Counts as here through Questie: open world only, the option on, data loaded.
 local function HereByQuestie(questID)
-  return mod._active and mod.db.objectivesHere and type(questID) == "number"
+  return F._active and F.db.objectivesHere and type(questID) == "number"
     and not (IsInInstance and IsInInstance()) and Places and Places.IsHere(questID) or false
 end
 
@@ -984,9 +983,9 @@ local function ApplyZoneOnly()
   if not (eqt and type(eqt.Set) == "function" and type(eqt.Cfg) == "function") then
     return
   end
-  local char = mod.char
+  local char = F.char
   local before = char and char.euiBefore
-  if mod._active and mod.db.zoneOnly then
+  if F._active and F.db.zoneOnly then
     if type(before) ~= "table" then
       before = {}
       for _, k in ipairs(ZONE_KEYS) do
@@ -1010,7 +1009,7 @@ local function ApplyZoneOnly()
   Rebuild()
 end
 
-function mod:PrintHere()
+function F:PrintHere()
   if not Places or not ARLE.Bridge.QuestieDB.Ready() then
     self:Print("needs QuestieDB.")
     return
@@ -1038,14 +1037,14 @@ end
 -- onlyNew: from a zone change or loading screen; a /reload or a loading
 -- screen back into the zone last focused leaves your own folds alone.
 local function FocusZone(onlyNew)
-  local db = mod.db
-  if not mod._active or not db.zoneFocus or not _G.EUI_CustomQuestTracker then
+  local db = F.db
+  if not F._active or not db.zoneFocus or not _G.EUI_CustomQuestTracker then
     return
   end
   local here = (GetRealZoneText and GetRealZoneText()) or ""
-  local char = mod.char or {}
+  local char = F.char or {}
   if onlyNew == true and here ~= "" and char.focusedZone == here then
-    mod:Debug("zone focus: still in %s, folds left as they are", here)
+    F:Debug("zone focus: still in %s, folds left as they are", here)
     return
   end
   char.focusedZone = here ~= "" and here or nil
@@ -1080,7 +1079,7 @@ local function FocusZone(onlyNew)
   for questID, header in pairs(byQuest) do
     if not wanted[header] and HereByQuestie(questID) then
       hereHeaders[header], hereQuests[questID] = true, true
-      mod:Debug("zone focus: %s (%s) has objectives here", tostring(questID), tostring(header))
+      F:Debug("zone focus: %s (%s) has objectives here", tostring(questID), tostring(header))
     end
   end
   local present, hit = {}, false
@@ -1105,7 +1104,7 @@ local function FocusZone(onlyNew)
   end
   RefreshRows()
 end
-mod.FocusZone = FocusZone
+F.FocusZone = FocusZone
 
 
 -------------------------------------------------------------------------------
@@ -1122,7 +1121,7 @@ local EVENTS = {
   "UNIT_QUEST_LOG_CHANGED",
 }
 
-function mod:OnEnable()
+function F:OnEnable()
   local db, char = self.db, self.char
   -- Remembered and ignored quest items are per character (they are pruned
   -- against this character's quest log). Older versions kept them account
@@ -1137,8 +1136,9 @@ function mod:OnEnable()
   if not registered and EllesmereUI and EllesmereUI.RegisterQuestTrackerRow then
     registered = EllesmereUI.RegisterQuestTrackerRow(ADDON, OnRow, SLOT_W)
   end
+  scanQueued, syncQueued = false, false -- (a wait dropped when it was last turned off)
   for _, event in ipairs(EVENTS) do
-    events:RegisterEvent(event)
+    self:On(event, OnEvent)
   end
   -- Lists built while an item's data was loading weren't cached: redraw.
   self:On("ITEM_DATA_LOAD_RESULT", function(_, _, itemID)
@@ -1165,7 +1165,7 @@ function mod:OnEnable()
   end)
   -- Bags and the quest log settle a moment after login: no pruning or
   -- warnings until then.
-  C_Timer.After(LOGIN_GRACE, function()
+  self:After(LOGIN_GRACE, function()
     logReady = true
     Queue()
   end)
@@ -1192,12 +1192,11 @@ function mod:OnEnable()
   end)
 end
 
-function mod:OnDisable()
-  events:UnregisterAllEvents()
+function F:OnDisable()
   -- Secure buttons can't hide in combat: then once it ends (OutOfCombat
   -- would be dropped now that the feature is off), unless it's back on.
   ARLE.Secure:Run(function()
-    if not mod._active then
+    if not F._active then
       ClearUseButtons()
     end
   end)
@@ -1214,7 +1213,7 @@ end
 
 -- The standalone EllesmereUIQuestTracker_QuestItems' settings (account wide
 -- EUIQuestItemsDB: enabled, showMissing = the greyed icon when not in bags).
-function mod:Import()
+function F:Import()
   local old = _G.EUIQuestItemsDB
   if type(old) ~= "table" then
     return
@@ -1228,7 +1227,7 @@ function mod:Import()
   end
 end
 
-function mod:OnOptionChanged(key, value)
+function F:OnOptionChanged(key, value)
   signature = nil
   RefreshRows()
   -- Turning zone focus (or the city extras) on applies it right away.
@@ -1243,7 +1242,7 @@ function mod:OnOptionChanged(key, value)
   end
 end
 
-function mod:GetStatus()
+function F:GetStatus()
   local total, missing = 0, 0
   local known = type(self.char.known) == "table" and self.char.known or {}
   local ignored = type(self.char.ignored) == "table" and self.char.ignored or {}
@@ -1265,4 +1264,4 @@ function mod:GetStatus()
   return status
 end
 
-ARLE:RegisterModule(mod)
+ARLE:RegisterModule(F)

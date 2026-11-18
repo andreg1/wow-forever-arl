@@ -637,4 +637,13 @@ F.commands = {
   { name = "searchall", help = "searches all 21 items in Auctionator (AH open)", run = function() SearchAll() end },
 }
 
+function F:GetStatus()
+  local n = 0
+  for _ in pairs(Learned()) do
+    n = n + 1
+  end
+  return ("Active · %s · %d turn-in count%s learned from the quest window"):format(
+    AH.API() and "Auctionator prices in use" or "waiting for Auctionator", n, n == 1 and "" or "s")
+end
+
 ARLE:RegisterModule(F)

@@ -74,7 +74,6 @@ local categoryRegistered = false
 local categoryRefreshPending = false
 local slots = setmetatable({}, { __mode = "k" })  -- slot button -> { bag, slot, itemID }
 local marks = setmetatable({}, { __mode = "k" })  -- slot button -> padlock texture
-local hooked = setmetatable({}, { __mode = "k" })
 local hovered
 local merchantOpen = false
 local blocker
@@ -249,7 +248,7 @@ local function BuildBlocker()
   local tint = blocker:CreateTexture(nil, "OVERLAY")
   tint:SetAllPoints()
   tint:SetColorTexture(1, 0.25, 0.25, 0.15)
-  blocker:SetScript("OnClick", function(_, button)
+  F:Script(blocker, "OnClick", function(_, button)
     local s = BlockerSlot()
     if not s then
       return
@@ -270,9 +269,9 @@ local function BuildBlocker()
       BlockerPickup()
     end
   end)
-  blocker:SetScript("OnDragStart", BlockerPickup)
-  blocker:SetScript("OnReceiveDrag", BlockerPickup)
-  blocker:SetScript("OnEnter", function(self)
+  F:Script(blocker, "OnDragStart", BlockerPickup)
+  F:Script(blocker, "OnReceiveDrag", BlockerPickup)
+  F:Script(blocker, "OnEnter", function(self)
     local s = BlockerSlot()
     if not s then
       return
@@ -281,7 +280,7 @@ local function BuildBlocker()
     GameTooltip:SetBagItem(s.bag, s.slot)
     GameTooltip:Show()
   end)
-  blocker:SetScript("OnLeave", function()
+  F:Script(blocker, "OnLeave", function()
     HideBlocker()
     if hovered and not hovered:IsMouseOver() then
       hovered = nil
@@ -344,11 +343,9 @@ local function Paint(btn, data)
     local s = slots[btn] or {}
     s.bag, s.slot, s.itemID = data.bag, data.slot, itemID
     slots[btn] = s
-    if not hooked[btn] and not InCombatLockdown() then
-      hooked[btn] = true
-      btn:HookScript("OnEnter", OnSlotEnter)
-      btn:HookScript("OnLeave", OnSlotLeave)
-    end
+    -- (once per button, deferred past combat, inert while the feature is off)
+    F:HookScript(btn, "OnEnter", OnSlotEnter)
+    F:HookScript(btn, "OnLeave", OnSlotLeave)
   else
     slots[btn] = nil
   end

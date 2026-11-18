@@ -798,4 +798,9 @@ function F:OnOptionChanged(key)
   end
 end
 
+function F:GetStatus()
+  return ARLE.Bridge.QuestieDB.Ready() and "Active · /arl qs opens the search"
+    or "Active · waiting for QuestieDB's quest data"
+end
+
 ARLE:RegisterModule(F)

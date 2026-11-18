@@ -323,4 +323,14 @@ F.commands = {
   end },
 }
 
+function F:GetStatus()
+  local n = 0
+  for frame, holder in pairs(badges) do
+    if holder:IsShown() and frame:IsShown() then
+      n = n + 1
+    end
+  end
+  return ("Active · %d star%s on Questie's icons right now"):format(n, n == 1 and "" or "s")
+end
+
 ARLE:RegisterModule(F)

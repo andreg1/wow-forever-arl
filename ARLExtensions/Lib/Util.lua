@@ -136,3 +136,80 @@ end
 function L.IsSecret(v)
   return issecretvalue ~= nil and issecretvalue(v) and true or false
 end
+
+-- The value, or nil when the client hides it.
+function L.Plain(v)
+  if issecretvalue ~= nil and issecretvalue(v) then
+    return nil
+  end
+  return v
+end
+
+-- A table from the client that can be read: a secret one says "table" to
+-- type() but throws when indexed or walked.
+function L.Readable(t)
+  return type(t) == "table" and not L.IsSecret(t)
+end
+
+-- A non-empty string the client doesn't hide, or nil.
+function L.Str(v)
+  return not L.IsSecret(v) and type(v) == "string" and v ~= "" and v or nil
+end
+
+local function PlainAll(n, ...)
+  if n <= 0 then
+    return
+  end
+  return L.Plain((...)), PlainAll(n - 1, select(2, ...))
+end
+
+local function Results(ok, ...)
+  if not ok then
+    return nil
+  end
+  return PlainAll(select("#", ...), ...)
+end
+
+-- Calls an API that may be missing, throw, or differ between clients:
+-- nothing when it's missing or throws, and hidden values come back as nil.
+function L.Call(fn, ...)
+  if type(fn) ~= "function" then
+    return nil
+  end
+  return Results(pcall(fn, ...))
+end
+
+-- A spell's name on this client (C_Spell or the old GetSpellInfo), or nil.
+function L.SpellName(id)
+  local name
+  if C_Spell and C_Spell.GetSpellName then
+    name = L.Call(C_Spell.GetSpellName, id)
+  end
+  if type(name) ~= "string" then
+    name = L.Call(_G.GetSpellInfo, id)
+  end
+  return L.Str(name)
+end
+
+-- A unit's name as chat, addon messages and /targetexact know it. On Forever
+-- UnitName gives the first name and the surname apart ("Haru", "Pala"), and
+-- players are named "Haru Pala"; there are no realms.
+function L.UnitFullName(unit)
+  local first, surname = L.Call(UnitName, unit)
+  first, surname = L.Str(first), L.Str(surname)
+  if not first or first == UNKNOWNOBJECT then
+    return nil
+  end
+  if surname then
+    local c = Constants and Constants.CharacterNameSeparatorConsts
+    local sep = c and L.Str(c.CHARACTERNAME_SURNAME_SEPARATOR) or " "
+    return first .. sep .. surname
+  end
+  return first
+end
+
+-- "Name-Realm" -> "Name" (any realm), as other addons' messages name players.
+function L.StripRealm(name)
+  name = L.Str(name)
+  return name and (name:match("^([^%-]+)") or name) or nil
+end

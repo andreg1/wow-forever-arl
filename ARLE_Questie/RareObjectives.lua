@@ -226,12 +226,7 @@ end
 local WalkToZone = Lib.QuestPlaces.WalkToZone
 
 -- (values the client may hide in an instance: never tested or indexed)
-local function Plain(v)
-  if Lib.IsSecret(v) then
-    return nil
-  end
-  return v
-end
+local Plain = Lib.Plain
 
 local function UpdatePlayerMaps()
   wipe(playerMaps)
@@ -544,7 +539,7 @@ local function SetupScanButton()
   b:SetAttribute("useOnKeyDown", false)
   b:RegisterForClicks("AnyUp", "AnyDown")
   local lastPress = 0
-  b:SetScript("PreClick", function(self, _, down)
+  F:Script(b, "PreClick", function(self, _, down)
     if InCombatLockdown() then
       return
     end
@@ -557,7 +552,7 @@ local function SetupScanButton()
       self:SetAttribute("useOnKeyDown", down and true or false)
     end
   end)
-  b:SetScript("PostClick", function(self)
+  F:Script(b, "PostClick", function(self)
     if not InCombatLockdown() then
       self:SetAttribute("type", "macro")
     end

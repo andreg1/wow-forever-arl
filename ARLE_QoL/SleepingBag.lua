@@ -69,24 +69,7 @@ local CONFIRM_MISSING = 3
 -- a buff that can't be read. Never indexed or compared as the real one.
 local HIDDEN = { applications = 3, expirationTime = 0 }
 
-local function Secret(v)
-  return issecretvalue ~= nil and issecretvalue(v) == true
-end
-
-local function SpellName(spellID)
-  if C_Spell and C_Spell.GetSpellName then
-    local ok, name = pcall(C_Spell.GetSpellName, spellID)
-    if ok and type(name) == "string" and not Secret(name) then
-      return name
-    end
-  end
-  if _G.GetSpellInfo then
-    local ok, name = pcall(_G.GetSpellInfo, spellID)
-    if ok and type(name) == "string" and not Secret(name) then
-      return name
-    end
-  end
-end
+local Secret, SpellName = ARLE.Lib.IsSecret, ARLE.Lib.SpellName
 
 -- The direct lookup first; then every buff on you, by spell id or by the
 -- spell's name (the direct lookup has been seen missing a Well-Rested that was
@@ -273,13 +256,13 @@ local function AttachUseButton()
   end
   use:SetAttribute("type", "item")
   use:SetAttribute("item", "item:" .. ITEM)
-  use:SetScript("OnEnter", function(self)
+  F:Script(use, "OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     GameTooltip:SetItemByID(ITEM)
     GameTooltip:AddLine("Click to use", 0.5, 0.84, 1)
     GameTooltip:Show()
   end)
-  use:SetScript("OnLeave", GameTooltip_Hide)
+  F:Script(use, "OnLeave", GameTooltip_Hide)
 end
 
 local function BuildAlert()

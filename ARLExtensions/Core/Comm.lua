@@ -148,13 +148,7 @@ end
 -- Our own name as senders carry it: on Forever UnitName gives the first name
 -- and the surname apart, and messages come from "First Surname".
 function ARLE:MyName()
-  local first, surname = UnitName("player")
-  if type(surname) == "string" and surname ~= "" then
-    local c = Constants and Constants.CharacterNameSeparatorConsts
-    local sep = c and c.CHARACTERNAME_SURNAME_SEPARATOR
-    return first .. (type(sep) == "string" and sep ~= "" and sep or " ") .. surname
-  end
-  return first
+  return ARLE.Lib.UnitFullName("player") or UnitName("player")
 end
 
 -- A sender in our party or raid (short name).
@@ -166,8 +160,8 @@ function ARLE:InMyGroup(name)
   for i = 1, raid and 40 or 4 do
     local unit = (raid and "raid" or "party") .. i
     if UnitExists(unit) then
-      local first, surname = UnitName(unit)
-      local full = (type(surname) == "string" and surname ~= "") and (first .. " " .. surname) or first
+      local first = UnitName(unit)
+      local full = ARLE.Lib.UnitFullName(unit) or first
       local named = GetUnitName and GetUnitName(unit, true)
       if full == name or first == name or self:ShortName(full) == name
         or (type(named) == "string" and self:ShortName(named) == name) then

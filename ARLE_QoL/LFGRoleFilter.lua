@@ -64,10 +64,6 @@ local invited = {} -- name -> time we invited them (never invited twice per sess
 local pending = {} -- role -> { name, t }: our invite still waiting for an answer
 local noListingWarned = false
 
-local function Say(msg)
-  F:Print(msg)
-end
-
 -------------------------------------------------------------------------------
 -- Safe reads
 -------------------------------------------------------------------------------
@@ -542,12 +538,12 @@ end
 -------------------------------------------------------------------------------
 
 local function Short(name)
-  return (Ambiguate and Ambiguate(name, "none")) or name
+  return ARLE:ShortName(name) or name
 end
 
 local function InGroupWith(name)
   local n = Short(name)
-  if n == UnitName("player") then
+  if n == ARLE:ShortName(ARLE:MyName()) or ARLE:InMyGroup(n) then
     return true
   end
   local ok, r = pcall(UnitInParty, n)
@@ -613,7 +609,7 @@ end
 local function RoleFilled(role, who)
   auto[role] = false
   pending[role] = nil
-  Say(("%s joined as %s. Auto-invite %s is now off."):format(who or "Someone", ROLE_LABEL[role],
+  F:Print(("%s joined as %s. Auto-invite %s is now off."):format(who or "Someone", ROLE_LABEL[role],
     ROLE_LABEL[role]:lower()))
   Redraw()
 end
@@ -637,7 +633,7 @@ local function AutoInvite()
   if not set then
     if not noListingWarned then
       noListingWarned = true
-      Say("auto-invite is waiting: list your group in the Looking For Group window first.")
+      F:Print("auto-invite is waiting: list your group in the Looking For Group window first.")
     end
     return
   end
@@ -657,7 +653,7 @@ local function AutoInvite()
       if UninviteUnit then
         pcall(UninviteUnit, p.name)
       end
-      Say(("no answer from %s: invite withdrawn."):format(Short(p.name)))
+      F:Print(("no answer from %s: invite withdrawn."):format(Short(p.name)))
     else
       waiting = waiting + 1
     end
@@ -681,7 +677,7 @@ local function AutoInvite()
               pending[role] = { name = e.leader, t = now }
               waiting = waiting + 1
               Invite(e.leader)
-              Say(("auto-invited %s (%s%s)."):format(Short(e.leader), ROLE_LABEL[role],
+              F:Print(("auto-invited %s (%s%s)."):format(Short(e.leader), ROLE_LABEL[role],
                 e.level and (", level " .. e.level) or ""))
               break
             end
@@ -719,12 +715,12 @@ function F:SetAuto(role, on)
   auto[role] = on and true or false
   if auto[role] then
     noListingWarned = false
-    Say(("auto-invite %s on: solo %ss listed for your activity are invited when search results come in. Refresh "
+    F:Print(("auto-invite %s on: solo %ss listed for your activity are invited when search results come in. Refresh "
       .. "the search yourself."):format(ROLE_LABEL[role]:lower(), ROLE_LABEL[role]:lower()))
     AutoInvite()
   else
     pending[role] = nil
-    Say("auto-invite " .. ROLE_LABEL[role]:lower() .. " off.")
+    F:Print("auto-invite " .. ROLE_LABEL[role]:lower() .. " off.")
   end
   Redraw()
 end
@@ -893,7 +889,7 @@ end
 
 local function Probe()
   local ids = ResultIDs()
-  Say(("%d result(s). APIs: PlayerInfo=%s LeaderInfo=%s MemberInfo=%s MemberCounts=%s Filtered=%s"):format(#ids,
+  F:Print(("%d result(s). APIs: PlayerInfo=%s LeaderInfo=%s MemberInfo=%s MemberCounts=%s Filtered=%s"):format(#ids,
     tostring(LFG("GetSearchResultPlayerInfo") ~= nil), tostring(LFG("GetSearchResultLeaderInfo") ~= nil),
     tostring(LFG("GetSearchResultMemberInfo") ~= nil), tostring(LFG("GetSearchResultMemberCounts") ~= nil),
     tostring(LFG("GetFilteredSearchResults") ~= nil)))
@@ -920,7 +916,7 @@ local function Probe()
     end
   end
   local _, first = MyListing()
-  Say("your listing: " .. (first and ("activity " .. tostring(first)) or "none found"))
+  F:Print("your listing: " .. (first and ("activity " .. tostring(first)) or "none found"))
 end
 
 -------------------------------------------------------------------------------

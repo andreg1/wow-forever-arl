@@ -80,10 +80,6 @@ local swapPending = false
 local pendingSave = false
 local saveToken = 0
 
-local function Say(msg)
-  F:Print(msg)
-end
-
 local function Links()
   F.char.links = type(F.char.links) == "table" and F.char.links or {}
   return F.char.links
@@ -235,20 +231,20 @@ local function EquipForGroup(group, quiet)
   local id, name = SetForGroup(group)
   if not id then
     if not quiet then
-      Say(SpecLabel(group) .. " has no gear set. Link one: /arl gear link (equips nothing until then).")
+      F:Print(SpecLabel(group) .. " has no gear set. Link one: /arl gear link (equips nothing until then).")
     end
     return
   end
   local _, _, isEquipped, numLost = SetInfo(id)
   if isEquipped then
     if not quiet then
-      Say(string.format("%s: |cffffffff%s|r is already on.", SpecLabel(group), name))
+      F:Print(string.format("%s: |cffffffff%s|r is already on.", SpecLabel(group), name))
     end
     return
   end
   if InCombatLockdown() or UnitAffectingCombat("player") then
     pendingEquip = group
-    Say(string.format("in combat: |cffffffff%s|r goes on when combat ends.", name))
+    F:Print(string.format("in combat: |cffffffff%s|r goes on when combat ends.", name))
     return
   end
   selfSwap = GetTime()
@@ -259,13 +255,13 @@ local function EquipForGroup(group, quiet)
     ok, err = pcall(C_EquipmentSet.UseEquipmentSet, id)
   end
   if ok then
-    Say(string.format("%s: equipping |cffffffff%s|r.", SpecLabel(group), name))
+    F:Print(string.format("%s: equipping |cffffffff%s|r.", SpecLabel(group), name))
     if numLost and numLost > 0 then
-      Say(string.format("|cffff8080%d item%s of %s %s not in your bags.|r", numLost, numLost == 1 and "" or "s", name,
+      F:Print(string.format("|cffff8080%d item%s of %s %s not in your bags.|r", numLost, numLost == 1 and "" or "s", name,
         numLost == 1 and "is" or "are"))
     end
   else
-    Say("couldn't equip " .. name .. ": " .. tostring(err))
+    F:Print("couldn't equip " .. name .. ": " .. tostring(err))
   end
 end
 
@@ -275,7 +271,7 @@ local function Link(group, id)
     return
   end
   Links()[group] = { name = name, id = id }
-  Say(string.format("%s now uses |cffffffff%s|r.", SpecLabel(group), name))
+  F:Print(string.format("%s now uses |cffffffff%s|r.", SpecLabel(group), name))
   ARLE:Changed()
 end
 
@@ -378,15 +374,15 @@ local function SaveWorn(force)
   local changes, why = GearChanges(wornSet, force)
   if not changes then
     if force then
-      Say("not saved: " .. why .. ".")
+      F:Print("not saved: " .. why .. ".")
     elseif why:find("slots changed") then
-      Say(name .. " not updated: " .. why .. ".")
+      F:Print(name .. " not updated: " .. why .. ".")
     end
     return
   end
   local ok, err = pcall(C_EquipmentSet.SaveEquipmentSet, wornSet)
   if not ok then
-    Say("couldn't update " .. name .. ": " .. tostring(err))
+    F:Print("couldn't update " .. name .. ": " .. tostring(err))
     return
   end
   if force then
@@ -404,7 +400,7 @@ local function SaveWorn(force)
         .. (changes[slot] and Items.Link(changes[slot]) or "|cff808080empty|r")
     end
   end
-  Say(string.format("updated |cffffffff%s|r: %s.", name, table.concat(parts, ", ")))
+  F:Print(string.format("updated |cffffffff%s|r: %s.", name, table.concat(parts, ", ")))
 end
 
 local function CheckGearSave()
@@ -556,10 +552,10 @@ local function RestoreBars(onlySlots, quiet)
     end
   end
   if restored > 0 then
-    Say(string.format("restored %d action bar slot%s.", restored, restored == 1 and "" or "s"))
+    F:Print(string.format("restored %d action bar slot%s.", restored, restored == 1 and "" or "s"))
   end
   if #failed > 0 and not quiet then
-    Say("couldn't restore: " .. table.concat(failed, ", ") .. ".")
+    F:Print("couldn't restore: " .. table.concat(failed, ", ") .. ".")
   end
   return restored, #failed
 end
@@ -581,7 +577,7 @@ local function JudgeCleared()
     return
   end
   if n >= WIPE_COUNT and F.db.barRestore ~= false and GetTime() - lastSpecSwitch < WIPE_AFTER_SWITCH then
-    Say(string.format("%d action slots emptied at once; putting them back.", n))
+    F:Print(string.format("%d action slots emptied at once; putting them back.", n))
     RestoreBars(slots)
   else
     for slot in pairs(slots) do
@@ -721,7 +717,7 @@ end
 function F:LinkWorn(group)
   local id = EquippedSet()
   if not id then
-    Say("you aren't wearing a complete gear set. Equip one first, or use /arl gear assign <spec> <set name>.")
+    F:Print("you aren't wearing a complete gear set. Equip one first, or use /arl gear assign <spec> <set name>.")
     return
   end
   Link(group or ActiveGroup(), id)
@@ -734,13 +730,13 @@ end
 function F:RestoreNow()
   local r, f = RestoreBars()
   if r == 0 and f == 0 and not InCombatLockdown() then
-    Say("no empty slots to fill from the backup.")
+    F:Print("no empty slots to fill from the backup.")
   end
 end
 
 function F:SnapshotNow()
   SnapshotAll(ActiveGroup(), false)
-  Say(SpecLabel(ActiveGroup()) .. ": action bars backed up as they are now.")
+  F:Print(SpecLabel(ActiveGroup()) .. ": action bars backed up as they are now.")
   ARLE:Changed()
 end
 
@@ -782,7 +778,7 @@ function F:OnEnable()
   local okA = self:On("ACTIVE_TALENT_GROUP_CHANGED", SpecEvent)
   local okT = self:On("PLAYER_TALENT_UPDATE", SpecEvent)
   if not (okA or okT) then
-    Say("no talent group events on this client; spec changes won't be seen.")
+    F:Print("no talent group events on this client; spec changes won't be seen.")
   end
   self:On("PLAYER_REGEN_ENABLED", function()
     if restorePending then

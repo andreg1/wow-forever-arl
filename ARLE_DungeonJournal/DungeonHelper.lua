@@ -227,8 +227,8 @@ function H.Render()
     return
   end
   renderQueued = true
-  C_Timer.After(0, function()
-    ARLE.Debug.Call(mod, DoRender)
+  mod:After(0, function()
+    DoRender()
   end)
 end
 
@@ -843,6 +843,9 @@ end
 
 local flbHooked = false
 function mod:OnEnable()
+  -- (waits dropped when it was last turned off)
+  renderQueued = false
+  H.ResetSends()
   H.RegisterComms()
   local fdj = H.FDJ()
   if not fdj then

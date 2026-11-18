@@ -62,30 +62,16 @@ local BANK_PLAYER = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank
 local BANK_PET = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Pet
 local TYPE_SPELL = Enum and Enum.SpellBookItemType and Enum.SpellBookItemType.Spell
 
+-- (the host's shared helpers: ARLExtensions/Lib/Util.lua)
+local Lib = ARLE.Lib
+local Call, SpellName = Lib.Call, Lib.SpellName
+
+-- v when the client doesn't hide it and it's of that type (number by default).
 local function Readable(v, kind)
-  if issecretvalue and issecretvalue(v) then
-    return nil
-  end
+  v = Lib.Plain(v)
   if type(v) == (kind or "number") then
     return v
   end
-end
-
-local function Call(fn, ...)
-  if type(fn) ~= "function" then
-    return nil
-  end
-  local ok, a, b = pcall(fn, ...)
-  if ok then
-    return a, b
-  end
-end
-
-local function SpellName(id)
-  if C_Spell and C_Spell.GetSpellName then
-    return Call(C_Spell.GetSpellName, id)
-  end
-  return (Call(GetSpellInfo, id))
 end
 
 local function IsPlayerSpellKnown(id)
