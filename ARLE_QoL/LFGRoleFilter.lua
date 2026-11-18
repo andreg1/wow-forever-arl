@@ -89,7 +89,8 @@ local function Call(fn, ...)
   if not ok then
     return nil
   end
-  return a, b
+  -- (a hidden table says "table" to type() but throws when read)
+  return P(a), P(b)
 end
 
 local function LFG(name)
@@ -266,7 +267,8 @@ local function BuildEntry(id)
       end
     end
     e.filled = filled
-    local max = e.maxPlayers or 5
+    -- (an activity can report 0 or nothing: a 5-player group then)
+    local max = type(e.maxPlayers) == "number" and e.maxPlayers > 0 and e.maxPlayers or 5
     e.maxPlayers = max
     local need = {}
     if e.members < max then
@@ -420,8 +422,8 @@ local function CreateRow(i)
   row:SetSize(PANEL_W - 30, ROW_H)
   row:SetPoint("TOPLEFT", 0, -(i - 1) * ROW_H)
   row:EnableMouse(true)
-  row:SetScript("OnEnter", RowTooltip)
-  row:SetScript("OnLeave", GameTooltip_Hide)
+  F:Script(row, "OnEnter", RowTooltip)
+  F:Script(row, "OnLeave", GameTooltip_Hide)
   row.bg = row:CreateTexture(nil, "BACKGROUND")
   row.bg:SetAllPoints()
   row.bg:SetColorTexture(1, 1, 1, (i % 2 == 0) and 0.04 or 0.0)
@@ -442,13 +444,13 @@ local function CreateRow(i)
   end
   row.whisper = Kit.SmallButton(row, "W", 22)
   row.whisper:SetPoint("RIGHT", -2, 0)
-  row.whisper:SetScript("OnClick", function()
+  F:Script(row.whisper, "OnClick", function()
     Whisper(row.entry and row.entry.leader)
   end)
   Kit.Tip(row.whisper, "Whisper")
   row.invite = Kit.SmallButton(row, "+", 22)
   row.invite:SetPoint("RIGHT", row.whisper, "LEFT", -2, 0)
-  row.invite:SetScript("OnClick", function()
+  F:Script(row.invite, "OnClick", function()
     Invite(row.entry and row.entry.leader)
   end)
   Kit.Tip(row.invite, "Invite to group")
@@ -643,12 +645,19 @@ local function AutoInvite()
   CheckJoined()
   local now = GetTime()
   local act = ActivityInfo(first)
-  local max = (act and P(act.maxNumPlayers)) or 5
+  local max = act and P(act.maxNumPlayers)
+  max = type(max) == "number" and max > 0 and max or 5
   local members = math.max(1, GetNumGroupMembers() or 0)
   local waiting = 0
   for role, p in pairs(pending) do
     if now - p.t > INVITE_WAIT then
+      -- Unanswered: the invite is taken back before the next one goes out,
+      -- so a late accept can't bring a second tank or healer.
       pending[role] = nil
+      if UninviteUnit then
+        pcall(UninviteUnit, p.name)
+      end
+      Say(("no answer from %s: invite withdrawn."):format(Short(p.name)))
     else
       waiting = waiting + 1
     end
@@ -748,7 +757,7 @@ local function CreatePanel()
     local hl = b:CreateTexture(nil, "HIGHLIGHT")
     hl:SetAllPoints()
     hl:SetColorTexture(1, 1, 1, 0.12)
-    b:SetScript("OnClick", function()
+    F:Script(b, "OnClick", function()
       ARLE:SetOption(F.id, ROLE_KEY[r], not RoleOn(r))
     end)
     Kit.Tip(b, ROLE_LABEL[r], "Players listed as " .. ROLE_LABEL[r] .. ", and groups that still need one.")
@@ -761,7 +770,7 @@ local function CreatePanel()
     local fs = Kit.Text(panel, "GameFontHighlightSmall")
     fs:SetPoint("LEFT", cb, "RIGHT", 2, 1)
     fs:SetText(label)
-    cb:SetScript("OnClick", function(self)
+    F:Script(cb, "OnClick", function(self)
       onClick(self:GetChecked() and true or false)
     end)
     if tip then
@@ -798,7 +807,7 @@ local function CreatePanel()
   content = CreateFrame("Frame", nil, scroll)
   content:SetSize(PANEL_W - 16, 1)
   scroll:SetScrollChild(content)
-  scroll:SetScript("OnMouseWheel", function(self, delta)
+  F:Script(scroll, "OnMouseWheel", function(self, delta)
     local max = math.max(0, content:GetHeight() - self:GetHeight())
     local v = math.min(max, math.max(0, self:GetVerticalScroll() - delta * ROW_H * 2))
     self:SetVerticalScroll(v)

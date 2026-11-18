@@ -681,7 +681,7 @@ local function AttachUseButton()
   if not use then
     return
   end
-  use:SetScript("OnEnter", function(self)
+  F:Script(use, "OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     local food = SelectedFood(lastBags)
     if food then
@@ -700,8 +700,8 @@ local function AttachUseButton()
     GameTooltip:AddLine("Click to eat · Right-click for more", 0.5, 0.84, 1)
     GameTooltip:Show()
   end)
-  use:SetScript("OnLeave", GameTooltip_Hide)
-  use:SetScript("PostClick", function(_, button)
+  F:Script(use, "OnLeave", GameTooltip_Hide)
+  F:Script(use, "PostClick", function(_, button)
     if button == "RightButton" then
       OpenMenu("icon")
     end
@@ -957,11 +957,13 @@ function F:Evaluate()
   end
 
   local key, message
-  local best = bags.foods[1]
+  -- (the food the icon eats: your pick while you carry it, else the best)
+  local best = SelectedFood(bags)
   if best then
     if buff.unknown and buff.percent < best.percent then
       self:Debug("waiting: a buff isn't readable yet and might be the food's")
-      return -- an unreadable buff might be the food's: wait
+      HideAlert() -- (you may have just eaten: no "Eat it!" left up meanwhile)
+      return
     end
     if buff.percent < best.percent then
       key = "missing:" .. best.percent
@@ -1066,7 +1068,7 @@ function F:OnEnable()
   wipe(auraCache)
   gourmandKnown = false
   for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "PLAYER_LEVEL_UP", "PLAYER_UPDATE_RESTING", "PLAYER_REGEN_ENABLED",
-    "PLAYER_ALIVE", "PLAYER_UNGHOST", "BAG_UPDATE_DELAYED", "BAG_UPDATE_COOLDOWN" }) do
+    "PLAYER_ALIVE", "PLAYER_UNGHOST", "BAG_UPDATE_DELAYED" }) do
     self:On(e, Schedule)
   end
   self:On("GET_ITEM_INFO_RECEIVED", function(def, _, itemID)
@@ -1088,10 +1090,9 @@ function F:OnEnable()
     end
   end)
   self:On("PLAYER_DEAD", HideAlert)
-  self:OnUnit("UNIT_AURA", "player", function(def)
-    wipe(auraCache)
-    Schedule(def)
-  end)
+  -- (a spell's XP percent never changes, and unreadable tooltips aren't
+  -- cached: the aura cache needn't be emptied on every aura change)
+  self:OnUnit("UNIT_AURA", "player", Schedule)
   self:Ticker(60, self.Evaluate)
   -- Landing or leaving a flight path brings the alert back.
   wasFlying = Flying()

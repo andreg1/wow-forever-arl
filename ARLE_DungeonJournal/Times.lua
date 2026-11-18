@@ -44,6 +44,8 @@ local RESUME = 45 * 60 -- an unfinished run older than this starts over
 local CLEAR = "@clear" -- the clear's entry in the list
 local BOARD_TOP = 10
 local BOARD_KEEP = 120 * 86400
+local MIN_SPLIT = 10 -- a boss or clear time under this isn't real (the clock started at the kill)
+local MIN_FIGHT = 1
 local ASK_EVERY, ANSWER_EVERY = 15 * 60, 60
 
 local tab = { key = "times", label = "Clear Times" }
@@ -85,8 +87,20 @@ function tab:AllRecords()
 end
 
 function tab:ClearRecords()
+  local had = {}
   if type(mod.db.records) == "table" then
+    for dungeon in pairs(mod.db.records[CharKey()] or {}) do
+      had[#had + 1] = dungeon
+    end
     mod.db.records[CharKey()] = nil
+  end
+  -- (an empty list on the guild channel takes us off guildmates' leaderboards)
+  if IsInGuild and IsInGuild() then
+    for i, dungeon in ipairs(had) do
+      mod:After(i * 1.5, function()
+        tab:Send(dungeon, "GUILD")
+      end)
+    end
   end
   H.QueueSend(H.shown, "times", true)
   H.Render()
@@ -309,7 +323,7 @@ tab.Elapsed = Elapsed
 -- dungeon (or any run when nothing else is shown).
 function tab:Clock()
   local run = Run()
-  if run and run.start and run.inside then
+  if run and run.start and run.inside and (not H.shown or H.shown == run.dungeon) then
     return FormatTime(Elapsed(run)), run.done
   end
 end
@@ -417,7 +431,14 @@ function tab:OnKill(dungeon, boss)
   end
   local now = Now()
   if not run.start then
-    run.start = pulls[boss] or now
+    if pulls[boss] then
+      run.start = pulls[boss]
+    else
+      -- The pull wasn't seen (the run was reset mid-fight, or a reload): the
+      -- clock starts at the kill, so this run's times aren't records.
+      run.start, run.noRecord = now, true
+      mod:Debug("%s: the pull wasn't seen, this run makes no time records", boss)
+    end
   end
   if run.splits[boss] then
     return
@@ -433,13 +454,14 @@ function tab:OnKill(dungeon, boss)
   run.prev = run.prev or {}
   run.prev[boss] = best.split -- what this kill is compared with
   local improved = false
-  if not best.split or split < best.split then
+  local real = not run.noRecord and split >= MIN_SPLIT
+  if real and (not best.split or split < best.split) then
     if best.split then
       Announce(string.format("New record: %s at %s (%s).", boss, FormatTime(split), FormatDelta(split - best.split)))
     end
     best.split, best.splitAt, improved = split, now, true
   end
-  if fight and (not best.fight or fight < best.fight) then
+  if fight and fight >= MIN_FIGHT and (not best.fight or fight < best.fight) then
     best.fight, best.fightAt, improved = fight, now, true
   end
 
@@ -456,7 +478,9 @@ function tab:OnKill(dungeon, boss)
   if all then
     run.done, run.total, run.prevTotal = true, split, rec.total
     rec.clears = (rec.clears or 0) + 1
-    if not rec.total or split < rec.total then
+    if run.noRecord then
+      Announce(string.format("%s cleared (the start wasn't seen: no time record).", dungeon))
+    elseif not rec.total or split < rec.total then
       if rec.total then
         Announce(string.format("New record: %s cleared in %s (%s).", dungeon, FormatTime(split),
           FormatDelta(split - rec.total)))
@@ -572,7 +596,7 @@ local function AskGuild(dungeon)
   mod:Debug("leaderboard: asked the guild about %s", dungeon)
 end
 
-ARLE:RegisterComm("BR", function(sender, dungeon, channel)
+H.Comm("BR", function(sender, dungeon, channel)
   if not mod._active or channel ~= "GUILD" or not mod.db.guildBoard then
     return
   end
@@ -591,7 +615,7 @@ ARLE:RegisterComm("BR", function(sender, dungeon, channel)
   end)
 end)
 
-ARLE:RegisterComm("BT", function(sender, payload, channel)
+H.Comm("BT", function(sender, payload, channel)
   if not mod._active then
     return
   end
@@ -599,11 +623,29 @@ ARLE:RegisterComm("BT", function(sender, payload, channel)
   if not dungeon then
     return
   end
+  if channel == "GUILD" and total == "" and list == "" and tonumber(part) == 1 then
+    -- They cleared their records.
+    local board = Board(dungeon)
+    if board[sender] then
+      board[sender] = nil
+      H.Render()
+    end
+    return
+  end
+  -- (only times that can be real: a 0:00 or a day-long "record" is dropped)
+  local function Time(v, least)
+    v = tonumber(v)
+    return v and v >= least and v < 86400 and v or nil
+  end
+  total = Time(total, MIN_SPLIT)
   local bosses = {}
+  local n = 0
   for entry in list:gmatch("[^;]+") do
     local boss, split, fight = entry:match("^(.-)=(%d*)/(%d*)$")
-    if boss then
-      bosses[boss] = { split = tonumber(split), fight = tonumber(fight) }
+    split, fight = Time(split, MIN_SPLIT), Time(fight, MIN_FIGHT)
+    if boss and boss ~= "" and #boss <= 80 and (split or fight) and n < 60 then
+      n = n + 1
+      bosses[boss] = { split = split, fight = fight }
     end
   end
   -- The party's records for the shown dungeon.
@@ -613,23 +655,27 @@ ARLE:RegisterComm("BT", function(sender, payload, channel)
       p = { dungeon = dungeon, bosses = {} }
       party[sender] = p
     end
-    p.total, p.clears = tonumber(total), tonumber(clears) or 0
+    p.total, p.clears = total, tonumber(clears) or 0
     for boss, b in pairs(bosses) do
       p.bosses[boss] = b
     end
   end
-  -- The leaderboard: guildmates only (the guild channel, or a party member
-  -- in the guild roster).
-  if (channel == "GUILD" or ARLE:IsGuildmate(sender)) and (tonumber(total) or next(bosses)) then
+  -- The leaderboard: from the guild channel only. A party member's records
+  -- stay in the party view: someone who turned "Share my records" off still
+  -- sends them to the party, and they mustn't reach the board that way.
+  if channel == "GUILD" and (total or next(bosses)) and #dungeon <= 80
+    and H.FDJ() and type(H.FDJ().DB) == "table" and H.FDJ().DB[dungeon] then
     local board = Board(dungeon)
     local e = board[sender]
     if not e or tonumber(part) == 1 then
       e = { bosses = {} }
       board[sender] = e
     end
-    e.total, e.clears, e.at = tonumber(total), tonumber(clears) or 0, Now()
+    e.total, e.clears, e.at = total, tonumber(clears) or 0, Now()
     for boss, b in pairs(bosses) do
-      e.bosses[boss] = b.split
+      if b.split then
+        e.bosses[boss] = b.split
+      end
     end
   end
   H.Render()

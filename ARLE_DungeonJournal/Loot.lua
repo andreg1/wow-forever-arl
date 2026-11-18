@@ -172,7 +172,7 @@ function tab:Prune(keep)
   end
 end
 
-ARLE:RegisterComm("BG", function(sender, payload)
+H.Comm("BG", function(sender, payload)
   if not mod._active then
     return
   end
@@ -193,7 +193,7 @@ ARLE:RegisterComm("BG", function(sender, payload)
   H.Render()
 end)
 
-ARLE:RegisterComm("BE", function(sender, payload)
+H.Comm("BE", function(sender, payload)
   if not mod._active then
     return
   end

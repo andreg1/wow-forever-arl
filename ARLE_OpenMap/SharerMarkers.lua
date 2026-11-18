@@ -48,7 +48,6 @@ local F = {
 
 local labels = setmetatable({}, { __mode = "k" })   -- pin -> our FontString
 local looks = {}                                    -- "r,g,b" -> our look
-local drawn = 0                                     -- diamonds drawn in the last redraw
 
 local function Module()
   local om = _G.OpenMap
@@ -103,7 +102,6 @@ function F:AddPin(orig, set, u, v, look, data)
     return orig(set, u, v, look, data)
   end
   local pin = orig(set, u, v, DiamondLook(look), data)
-  drawn = drawn + 1
   if type(pin) == "table" and pin.CreateFontString then
     local fs = Label(pin)
     if self.db.names then
@@ -129,10 +127,6 @@ function F:OnEnable()
     return
   end
   self:Wrap(S, "AddPin", function(orig, set, u, v, look, data)
-    -- (counted per redraw: Friends.lua clears the set, then adds every dot)
-    if IsSharer(data) and type(set) == "table" and type(set.pins) == "table" and #set.pins == 0 then
-      drawn = 0
-    end
     return self:AddPin(orig, set, u, v, look, data)
   end)
   Redraw()
@@ -142,7 +136,6 @@ function F:OnDisable()
   for _, fs in pairs(labels) do
     fs:Hide()
   end
-  drawn = 0
   -- (the wrapper already passes straight through: the dots come back as OpenMap's own)
   Redraw()
 end
@@ -160,7 +153,14 @@ function F:GetStatus()
   if db.friends == false and db.guild == false then
     return "OpenMap shows no friends or guild members (its Friends / Guild members on the map are off)"
   end
-  return ("Active · %d guildmate%s or friend%s marked on the map last time it drew"):format(drawn,
+  -- (the sharer pins out now: OpenMap hides the ones it takes back)
+  local drawn = 0
+  for pin in pairs(labels) do
+    if pin:IsShown() then
+      drawn = drawn + 1
+    end
+  end
+  return ("Active · %d guildmate%s or friend%s marked on the map"):format(drawn,
     drawn == 1 and "" or "s", drawn == 1 and "" or "s")
 end
 

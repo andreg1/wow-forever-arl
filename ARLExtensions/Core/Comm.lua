@@ -145,17 +145,55 @@ function ARLE:ShortName(name)
   return (name:gsub("%-" .. (GetRealmName and GetRealmName():gsub("[%s%-]", "") or "") .. "$", ""))
 end
 
+-- Our own name as senders carry it: on Forever UnitName gives the first name
+-- and the surname apart, and messages come from "First Surname".
+function ARLE:MyName()
+  local first, surname = UnitName("player")
+  if type(surname) == "string" and surname ~= "" then
+    local c = Constants and Constants.CharacterNameSeparatorConsts
+    local sep = c and c.CHARACTERNAME_SURNAME_SEPARATOR
+    return first .. (type(sep) == "string" and sep ~= "" and sep or " ") .. surname
+  end
+  return first
+end
+
+-- A sender in our party or raid (short name).
+function ARLE:InMyGroup(name)
+  if not name then
+    return false
+  end
+  local raid = IsInRaid and IsInRaid()
+  for i = 1, raid and 40 or 4 do
+    local unit = (raid and "raid" or "party") .. i
+    if UnitExists(unit) then
+      local first, surname = UnitName(unit)
+      local full = (type(surname) == "string" and surname ~= "") and (first .. " " .. surname) or first
+      local named = GetUnitName and GetUnitName(unit, true)
+      if full == name or first == name or self:ShortName(full) == name
+        or (type(named) == "string" and self:ShortName(named) == name) then
+        return true
+      end
+    end
+  end
+  return false
+end
+
 local comms = CreateFrame("Frame")
 comms:RegisterEvent("CHAT_MSG_ADDON")
 comms:SetScript("OnEvent", function(_, _, prefix, message, channel, sender)
   if prefix ~= PREFIX or not ARLE:IsMember() then
     return
   end
-  local from = ARLE:ShortName(sender)
-  if from == ARLE:ShortName(UnitName("player")) then
+  if type(message) ~= "string" or type(sender) ~= "string" then
     return
   end
-  if type(message) ~= "string" then
+  local from = ARLE:ShortName(sender)
+  if from == ARLE:ShortName(ARLE:MyName()) or from == ARLE:ShortName(UnitName("player")) then
+    return
+  end
+  -- Whispers can come from anyone on the realm: only guildmates and the
+  -- group are heard (GUILD, PARTY and RAID messages already are just them).
+  if channel == "WHISPER" and not (ARLE:InMyGroup(from) or ARLE:IsGuildmate(from)) then
     return
   end
   local kind, payload = message:match("^(%w+)\t(.*)$")

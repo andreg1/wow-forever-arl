@@ -18,7 +18,8 @@ local ANSWER_WAIT = 6     -- seconds before silence means "not running"
 local REFRESH_COOLDOWN = 10
 local STALE_AFTER = 60    -- re-ask when Officer Tools opens after this long
 local WARN_COOLDOWN = 60
-local LINE_GAP = 0.5     -- seconds between guild chat lines when warning
+local LINE_GAP = 1.2     -- seconds between guild chat lines when warning (the game drops quicker ones)
+local LINE_MAX = 240     -- characters per guild chat line (the game's limit is 255)
 
 local versions = {} -- short name -> version string
 local queriedAt     -- GetTime() of the last query
@@ -181,24 +182,32 @@ end
 
 local SendChat = (C_ChatInfo and C_ChatInfo.SendChatMessage) or _G.SendChatMessage
 
--- One header line, then one line per member who isn't up to date:
+-- One header line, then the members who aren't up to date, as many to a
+-- line as fit (few lines: the game drops guild chat sent in a quick burst):
 --   [ARL Extensions] Version check (v0.2.3)
---   - Old (has v0.2.0)
---   - Jaina (not installed)
+--   Old (has v0.2.0); Jaina (not installed)
 local function WarnLines(list, latest)
-  local lines = {}
+  local entries = {}
   for _, m in ipairs(list) do
     if m.state == "outdated" then
-      lines[#lines + 1] = "- " .. m.name .. " (has v" .. m.version .. ")"
+      entries[#entries + 1] = m.name .. " (has v" .. m.version .. ")"
     elseif m.state == "missing" then
-      lines[#lines + 1] = "- " .. m.name .. " (not installed)"
+      entries[#entries + 1] = m.name .. " (not installed)"
     end
   end
-  local count = #lines
+  local count = #entries
   if count == 0 then
     return {}, 0
   end
-  table.insert(lines, 1, "[ARL Extensions] Version check (v" .. latest .. ")")
+  local lines, line = { "[ARL Extensions] Version check (v" .. latest .. ")" }, ""
+  for _, e in ipairs(entries) do
+    if line ~= "" and #line + 2 + #e > LINE_MAX then
+      lines[#lines + 1] = line
+      line = ""
+    end
+    line = line == "" and e or (line .. "; " .. e)
+  end
+  lines[#lines + 1] = line
   return lines, count
 end
 ARLE.GuildWarnLines = WarnLines
@@ -227,7 +236,7 @@ local function Warn()
   if not WarnArmed() then
     armedUntil = GetTime() + ARM_TIME
     ARLE:Print("Click Warn again within " .. ARM_TIME .. " seconds to post " .. count
-      .. " name(s) in guild chat (one line each).")
+      .. " name(s) in guild chat.")
     ARLE:Changed()
     C_Timer.After(ARM_TIME + 0.1, function()
       ARLE:Changed()

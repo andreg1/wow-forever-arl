@@ -198,6 +198,21 @@ local mod = {
 ns.mod = mod
 H.mod = mod
 
+-- Addon messages: each file names its handlers here, and they're registered
+-- through the feature (mod:Comm) when it's turned on, so their errors are
+-- caught and listed under it, and they go away when it's turned off.
+H.comms = {}
+function H.Comm(kind, fn)
+  H.comms[#H.comms + 1] = { kind = kind, fn = fn }
+end
+function H.RegisterComms()
+  for _, c in ipairs(H.comms) do
+    mod:Comm(c.kind, function(_, ...)
+      return c.fn(...)
+    end)
+  end
+end
+
 -------------------------------------------------------------------------------
 -- Sources
 -------------------------------------------------------------------------------
@@ -242,7 +257,7 @@ function H.Bosses(dungeon)
   end
   local fdj = H.FDJ()
   local d = fdj and fdj.DB[dungeon]
-  local list, rares = { parent = {}, group = {}, npc = {} }, {}
+  local list, rares = { parent = {}, group = {}, npc = {}, kids = {} }, {}
   if not d then
     return list
   end
@@ -254,6 +269,8 @@ function H.Bosses(dungeon)
       end
       if tonumber(boss.npcID) then
         list.npc[tonumber(boss.npcID)] = boss.childOf
+        -- (how many must die before the group counts: the Altar's six guardians)
+        list.kids[boss.childOf] = (list.kids[boss.childOf] or 0) + 1
       end
     elseif type(boss) == "table" and boss.name and not boss.trash and not boss.recipeTab and not boss.lootChest then
       local group = type(boss.fightGroup) == "string" and boss.fightGroup ~= "" and boss.fightGroup or nil
@@ -619,7 +636,7 @@ function H.Request()
   end
 end
 
-ARLE:RegisterComm("BQ", function(_, dungeon)
+H.Comm("BQ", function(_, dungeon)
   if mod._active and H.FDJ() and H.FDJ().DB[dungeon] then
     H.QueueSend(dungeon, nil, true)
   end

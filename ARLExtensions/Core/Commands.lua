@@ -20,22 +20,42 @@ ARLE.commands = {}  -- name -> command
 local aliases = {}  -- alias -> name
 local order = 0
 
+-- A word belongs to whoever registered it first: a feature can't take
+-- another feature's (or a built-in's) command or alias, nor remove it.
+local function Owner(c)
+  return c and (c.module or (c.builtin and "builtin") or "")
+end
+
 function ARLE:RegisterCommand(name, fn, help)
   local c = type(name) == "table" and name or { name = name, fn = fn, help = help }
   c.name = c.name:lower()
+  local had = self.commands[c.name] or (aliases[c.name] and self.commands[aliases[c.name]])
+  if had and Owner(had) ~= Owner(c) then
+    print("|cff7fd4ffARL|r: /arl " .. c.name .. " already belongs to " .. tostring(had.module or had.name)
+      .. "; " .. tostring(c.module or "a command") .. " doesn't get it.")
+    return nil
+  end
   order = order + 1
   c.order = c.order or order
   self:UnregisterCommand(c.name)
   self.commands[c.name] = c
   for _, alias in ipairs(c.aliases or {}) do
-    aliases[alias:lower()] = c.name
+    local a = alias:lower()
+    local other = self.commands[a] or (aliases[a] and self.commands[aliases[a]])
+    if not other or Owner(other) == Owner(c) then
+      aliases[a] = c.name
+    end
   end
   return c
 end
 
-function ARLE:UnregisterCommand(name)
+-- module: only removes the command when it's that module's.
+function ARLE:UnregisterCommand(name, module)
   name = name:lower()
   local c = self.commands[name]
+  if c and module and c.module ~= module then
+    return
+  end
   self.commands[name] = nil
   if c then
     for _, alias in ipairs(c.aliases or {}) do

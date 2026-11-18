@@ -735,6 +735,11 @@ function F:ArmButton()
   -- whenever "Work with AutoLayer users" is on and we're in the channel.
   local id = self.db.autolayer and LayerChannelId() or nil
   local text = id and ("/" .. id .. " inv layer") or nil
+  -- A line went out a moment ago: the next click says nothing (no spamming
+  -- the channel by clicking fast), PostClick says how long to wait.
+  if text and GetTime() - boxAt < ASK_GAP then
+    text = nil
+  end
   self.armedText = text
   self.armedPool = "autolayer"
   if InCombatLockdown() then
@@ -800,7 +805,6 @@ function F:Ask(via, forced)
     self:Print(string.format("wait %d s before asking again.", ASK_GAP - (now - ask.at)))
     return
   end
-  self:Asked()
   self:StartRun(via)
   self:ScanUnits()
   self:Step("press (%s): zone %s, your layer %s, in a group: %s, AutoLayer %s, LayerSwap %s", via,
@@ -838,6 +842,12 @@ function F:Ask(via, forced)
       self:Step("AutoLayer button: macro %s, armed %s", tostring(self.armedMacro or self.armedText or "none"),
         fresh and "at the click" or "EARLIER (PreClick didn't run)")
     end
+    if GetTime() - boxAt < ASK_GAP then
+      run.skipWho = "AutoLayer hosts: a line went out a moment ago"
+      self:Step(run.skipWho)
+      self:Print(string.format("wait %d s before asking again.", math.ceil(ASK_GAP - (GetTime() - boxAt))))
+      return
+    end
     self:Step("pool: AutoLayer hosts (the inv layer line)")
     if not LayerChannelId() then
       self:Print("you're not in the \"layer\" channel, so AutoLayer hosts can't hear you (ARL doesn't join it "
@@ -847,6 +857,7 @@ function F:Ask(via, forced)
     if via ~= "AutoLayer" or Restricted() then
       self:BoxLine(via)
     end
+    self:Asked()
     run.skipWho = "LayerSwap hosts: not this press"
     return
   end
@@ -885,6 +896,9 @@ function F:Ask(via, forced)
     -- No search (the server would refuse it), but the LayerSwap hosts we
     -- already know can still be asked directly.
     local n = self:AskKnown(zone, via)
+    if n > 0 then
+      self:Asked()
+    end
     run.skipWho = string.format("player search skipped: the last one here was %d s ago (the server refuses "
       .. "searches that come too often); asked %d known LayerSwap hosts directly", ago, n)
     self:Step(run.skipWho)
@@ -935,16 +949,20 @@ function F:Ask(via, forced)
     return
   end
   ask.whoAt = now
+  self:Asked()
   self:Step("search sent (%s): %s; ask line %s", how, text, ask.line)
   Log("ask", via, zoneName, layer.id and ("leaving " .. Key(layer.id)) or "layer unknown")
   local mine = ask
   self:After(WHO_WAIT, function(def)
-    if ask == mine and mine.whoAt then
+    if mine.whoAt then
+      -- (the who windows get the event back even if a newer press took over)
       mine.whoAt = nil
       mine.rec.noAnswer = true
       Unhush()
-      def:Step("search: no answer within %d s", WHO_WAIT)
-      def:Print("the player search got no answer; try again in a moment.")
+      if ask == mine then
+        def:Step("search: no answer within %d s", WHO_WAIT)
+        def:Print("the player search got no answer; try again in a moment.")
+      end
     end
   end)
 end
@@ -952,6 +970,7 @@ end
 function F:OnWho()
   local p = ask
   if not p or not p.whoAt then
+    Unhush()
     if run then
       local okN, n = pcall(C_FriendList.GetNumWhoResults)
       self:Step("a player search answer came with nothing of ours waiting (%s players)", tostring(okN and n))
@@ -1275,6 +1294,13 @@ function F:OnReply(text, sender)
   end
   local name = Short(sender)
   if text == "same" then
+    -- Only from someone our ask whispered: anyone else's "same" would let a
+    -- stranger keep real hosts out and land in the book as a host.
+    local at = name and whisperedAt[name]
+    if not (at and at >= p.at - 1) then
+      self:Step("%s: \"same\" but we didn't ask them: ignored", tostring(name))
+      return
+    end
     self:Remember(sender, true)
     self:Avoid(sender, layer.id)
     stats.same = stats.same + 1
@@ -1424,23 +1450,39 @@ local function BuildPad()
     F:Ask("plain button", "autolayer")
   end)
   F:Script(f.al, "OnEnter", AlTip)
+  f.alTip = AlTip
   F:Script(f.al, "OnLeave", GameTooltip_Hide)
   f.text = Kit.Text(f, "GameFontHighlightSmall")
   f.text:SetPoint("BOTTOM", 0, 5)
   f.text:SetJustifyH("CENTER")
   f:Hide()
   pad = f
-  -- The host's secure macro button laid over the AutoLayer one (out of
-  -- combat): its macro says "inv layer" as the player; PostClick runs the rest.
+end
+
+-- The host's secure macro button laid over the AutoLayer one (out of combat):
+-- its macro says "inv layer" as the player; PostClick runs the rest. Handed
+-- back with Secure:Detach when the feature goes off, laid again when it's on.
+local secAttached = false
+local function AttachSecure()
+  if secAttached or not pad then
+    return
+  end
   local sec = ARLE.Secure:Button("LayerSwap")
-  if sec then
-    ARLE.Secure:Run(function()
-      sec:SetParent(f)
-      sec:ClearAllPoints()
-      sec:SetAllPoints(f.al)
-      sec:SetFrameLevel(f.al:GetFrameLevel() + 5)
-      sec:Show()
-    end)
+  if not sec then
+    F:Step("the secure AutoLayer button is missing: restart the game")
+    return
+  end
+  secAttached = true
+  local al = pad.al
+  ARLE.Secure:Run(function()
+    if not (F._active and secAttached) then
+      return
+    end
+    sec:SetParent(pad)
+    sec:ClearAllPoints()
+    sec:SetAllPoints(al)
+    sec:SetFrameLevel(al:GetFrameLevel() + 5)
+    sec:Show()
     -- SetScript, as Buff Back and Rare Objectives do on their host buttons
     -- (a hooked PreClick on this template didn't run: 2026-11-16, a second
     -- press 20 s after a line still went to AutoLayer). Our own button, ours
@@ -1456,18 +1498,28 @@ local function BuildPad()
         ARLE.Debug.Call(F, F.Ask, F, "button", "autolayer")
       end
     end)
-    F:HookScript(sec, "OnEnter", function(self)
-      f.al:LockHighlight()
-      AlTip(self)
+    sec:SetScript("OnEnter", function(self)
+      al:LockHighlight()
+      ARLE.Debug.Call(F, pad.alTip, self)
     end)
-    F:HookScript(sec, "OnLeave", function()
-      f.al:UnlockHighlight()
+    sec:SetScript("OnLeave", function()
+      al:UnlockHighlight()
       GameTooltip:Hide()
     end)
-    F:ArmButton()
-  else
-    F:Step("the secure AutoLayer button is missing: restart the game")
+  end, "LayerBridge.sec")
+  F:ArmButton()
+end
+
+local function DetachSecure()
+  if not secAttached then
+    return
   end
+  secAttached = false
+  ARLE.Secure:Run(function()
+    if not secAttached and pad then
+      ARLE.Secure:Detach("LayerSwap", pad, { "macro", "macrotext" })
+    end
+  end, "LayerBridge.sec")
 end
 
 -- How the layer is shown. The real id is the creature GUID's server number
@@ -1535,6 +1587,7 @@ function F:Paint()
   if not pad then
     BuildPad()
   end
+  AttachSecure()
   self:PadText()
   ARLE.Secure:Run(SyncPad, "LayerBridge.pad")
 end
@@ -1747,6 +1800,7 @@ function F:OnDisable()
   if pad then
     ARLE.Secure:Run(SyncPad, "LayerBridge.pad")
   end
+  DetachSecure()
 end
 
 -- For /arl report: settings, channel, the last swap step by step, recent log.

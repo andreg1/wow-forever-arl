@@ -194,6 +194,13 @@ local function Report(counts)
   end
 end
 
+-- The pickup worked: PlaceAction with an empty cursor would lift the old
+-- spell off the bar instead, and ClearCursor would then drop it.
+local function Holding()
+  local kind = GetCursorInfo()
+  return kind == "spell" or kind == "petaction"
+end
+
 -- Swaps the queued names on all bars. Out of combat, empty cursor.
 local function SwapQueued()
   local wantPlayer, wantPet = next(queued.player) ~= nil, next(queued.pet) ~= nil
@@ -215,15 +222,19 @@ local function SwapQueued()
       local newPet = petTop and queued.pet[name] and petTop[name]
       if newPlayer and newPlayer ~= id and IsPlayerSpellKnown(id) then
         PickupSpellByID(newPlayer)
-        PlaceAction(slot)
+        if Holding() then
+          PlaceAction(slot)
+          counts[newPlayer] = (counts[newPlayer] or 0) + 1
+        end
         ClearCursor()
-        counts[newPlayer] = (counts[newPlayer] or 0) + 1
       elseif newPet and newPet ~= id and not IsPlayerSpellKnown(id) and petSlots[newPet]
         and SB.PickupSpellBookItem then
         SB.PickupSpellBookItem(petSlots[newPet], BANK_PET)
-        PlaceAction(slot)
+        if Holding() then
+          PlaceAction(slot)
+          counts[newPet] = (counts[newPet] or 0) + 1
+        end
         ClearCursor()
-        counts[newPet] = (counts[newPet] or 0) + 1
       end
     end
   end

@@ -126,6 +126,17 @@ function Q.UiMapForArea(areaId)
   end
 end
 
+-- Questie's zone table answers (it's filled a moment after login): until
+-- then every area lookup fails, which isn't "no map".
+local zoneReady = false
+function Q.ZoneReady()
+  if not zoneReady then
+    -- (12 = Elwynn Forest, 14 = Durotar: in every client's zone table)
+    zoneReady = (Q.UiMapForArea(12) or Q.UiMapForArea(14)) ~= nil
+  end
+  return zoneReady
+end
+
 function Q.AreaIdByName(name)
   local zoneDB = Q.Module("ZoneDB")
   if zoneDB and type(zoneDB.GetAreaIdByName) == "function" then

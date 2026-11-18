@@ -367,7 +367,7 @@ local function RefreshList(groups)
   end
   listChild:SetWidth(math.max(list:GetWidth(), 10))
   listChild:SetHeight(math.max(y, 1))
-  emptyText:SetText(q ~= "" and "Nothing matches the search." or "No features installed. Run ./bin/arle publish, then /reload.")
+  emptyText:SetText(q ~= "" and "Nothing matches the search." or "No features installed. Put the ARLE_* folders into AddOns (make publish-local), then restart the game.")
   emptyText:SetShown(nr == 0)
 end
 
@@ -567,7 +567,7 @@ local function Field(index)
       ARLE:Print("Key bindings can't change in combat.")
       return
     end
-    capture.field = f
+    capture.field, capture.opt = f, f.opt
     capture:EnableKeyboard(true)
     if capture.SetPropagateKeyboardInput then
       capture:SetPropagateKeyboardInput(false)
@@ -596,15 +596,28 @@ local MODIFIER_KEYS = { LSHIFT = true, RSHIFT = true, LCTRL = true, RCTRL = true
 local function CreateCapture()
   capture = CreateFrame("Frame", nil, UIParent)
   capture:Hide()
-  capture:SetScript("OnKeyDown", function(self, key)
+  local function Stop(self)
+    self.field, self.opt = nil, nil
+    self:EnableKeyboard(false)
+    self:Hide()
+  end
+  -- Disarmed as soon as its button is gone: the panel closed, another feature
+  -- picked (the field now shows another option), or combat.
+  capture:SetScript("OnUpdate", function(self)
     local f = self.field
+    if not (f and f:IsVisible() and f.opt == self.opt) or InCombatLockdown() then
+      Stop(self)
+      ARLE:RefreshUI()
+    end
+  end)
+  capture:SetScript("OnKeyDown", function(self, key)
+    local f, opt = self.field, self.opt
     if MODIFIER_KEYS[key] then
       return
     end
-    self.field = nil
-    self:EnableKeyboard(false)
-    self:Hide()
-    if key ~= "ESCAPE" and f and f.opt and not InCombatLockdown() then
+    Stop(self)
+    local live = f and f:IsVisible() and f.opt == opt and opt and type(opt.binding) == "string"
+    if key ~= "ESCAPE" and live and not InCombatLockdown() then
       local combo = key
       if IsShiftKeyDown() then
         combo = "SHIFT-" .. combo
@@ -615,7 +628,7 @@ local function CreateCapture()
       if IsAltKeyDown() then
         combo = "ALT-" .. combo
       end
-      SetBinding(combo, f.opt.binding)
+      SetBinding(combo, opt.binding)
       if SaveBindings and GetCurrentBindingSet then
         SaveBindings(GetCurrentBindingSet())
       end
@@ -1230,7 +1243,7 @@ function ARLE:CreatePanel()
   emptyText = Text(listChild, "GameFontDisable")
   emptyText:SetPoint("TOPLEFT", 8, -8)
   emptyText:SetWidth(LIST_W - 46)
-  emptyText:SetText("No features installed. Run ./bin/arle publish, then /reload.")
+  emptyText:SetText("No features installed. Put the ARLE_* folders into AddOns (make publish-local), then restart the game.")
   CreateCapture()
 
   details = CreateFrame("Frame", nil, main)

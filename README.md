@@ -31,7 +31,7 @@ Copy every folder of this repo (`ARLExtensions` and the `ARLE_*` packs) into `Wo
 | EllesmereUI | Quest Tracker: clickable quest item buttons, missing-item warnings, zone focus, and "only the quests for where I am", including quests from other zones whose objectives or turn-in are here | `/arl qt` | EllesmereUI Quest Tracker (QuestieDB for "objectives here") |
 | EllesmereUI | Item Lock: Alt+Right-click locks a bag item so it can't be sold or destroyed | `/arl lock` | EllesmereUI Bags |
 | Auctionator | Darkmoon Tickets: Darkmoon Faire turn-ins ranked by gold per Prize Ticket | `/arl dmf` | Auctionator |
-| DungeonJournal | Dungeon Helper: two-pane dungeon window. Bosses & Loot (BiS and upgrades for you and your ARL partymates), Quests (prerequisites and follow-up chains, party progress), Clear Times (splits, records, guild leaderboard) | `/arl dh` | DungeonJournal (Forever Leveling BiS and QuestieDB optional) |
+| DungeonJournal | Dungeon Helper: two-pane dungeon window. Bosses & Loot (BiS and upgrades for you and your ARL partymates), Quests (prerequisites and follow-up chains, party progress), Clear Times (splits, records, guild leaderboard) | `/arl dh` (`/arl bis`, `/arl quests`, `/arl timers`) | DungeonJournal (Forever Leveling BiS and QuestieDB optional) |
 | OpenMap | Sharer Markers: guildmates and friends who share where they are show as class-coloured diamonds with their names, so your party (round dots with a gold ring) stands apart | `/arl markers` | OpenMap |
 
 Officers and the Guild Master also get **Officer Tools**: who in the guild runs the addon, and which version.

@@ -25,6 +25,10 @@ local function DeepCopy(value)
   return out
 end
 
+-- self.shared keys (Layer Bridge's book and asked, Darkmoon's learned counts,
+-- Dungeon Helper's board): data, not settings.
+local SHARED_ONLY = { book = true, asked = true, learned = true, board = true }
+
 local function CharSV()
   local sv = _G.ARLExtensionsCharDB
   if type(sv) ~= "table" then
@@ -42,6 +46,15 @@ function ARLE:CharModules()
   if type(sv.modules) ~= "table" then
     local account = self.db and self.db.modules
     sv.modules = type(account) == "table" and DeepCopy(account) or {}
+    -- The same account table also holds data all characters share (self.shared):
+    -- that stays there, not copied into every new character's settings.
+    for _, t in pairs(sv.modules) do
+      if type(t) == "table" then
+        for key in pairs(SHARED_ONLY) do
+          t[key] = nil
+        end
+      end
+    end
   end
   return sv.modules
 end

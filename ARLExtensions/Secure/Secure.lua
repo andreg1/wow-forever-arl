@@ -161,7 +161,7 @@ function S:SetAttributes(key, attrs)
         b:SetAttribute(k, v)
       end
     end
-  end)
+  end, "attrs:" .. key) -- (one queued job per button, however many calls in a fight)
 end
 
 -- Lays a host button on a feature's frame (holder), out of combat only:

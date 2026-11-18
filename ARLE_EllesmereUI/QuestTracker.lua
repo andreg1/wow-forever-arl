@@ -430,7 +430,9 @@ local function SyncUseButtons()
   if mod._active then
     for _, b in pairs(visuals) do
       local itemID = b.itemID
-      local ok = itemID and not b.missing and not b.absent and b:IsVisible() and Count(itemID) > 0
+      -- (not over a tracker EllesmereUI has faded out: mouseover mode, auto-hide)
+      local ok = itemID and not b.missing and not b.absent and b:IsVisible() and b:GetEffectiveAlpha() > 0.05
+        and Count(itemID) > 0
       local left, bottom, w, h
       if ok then
         left, bottom, w, h = b:GetLeft(), b:GetBottom(), b:GetWidth(), b:GetHeight()
@@ -478,6 +480,51 @@ local function SyncUseButtons()
       u:Hide()
     end
   end
+end
+
+local function HideUseButtons()
+  for _, u in ipairs(useButtons) do
+    if u:IsShown() then
+      if GameTooltip:IsOwned(u) then
+        GameTooltip:Hide()
+      end
+      u:Hide()
+    end
+  end
+  for _, b in pairs(visuals) do
+    b:EnableMouse(true)
+  end
+end
+
+-- EllesmereUI's tracker may hide mid-fight: a raid, or any visibility rule
+-- (combat, group, target, mounted...), read through EllesmereUI's public
+-- visibility helpers. Unknown counts as "may".
+local function TrackerMayHideInCombat()
+  local EUI, eqt = _G.EllesmereUI, _G.EllesmereUIQuestTracker
+  if type(EUI) ~= "table" or type(eqt) ~= "table" or type(eqt.DB) ~= "function" then
+    return true
+  end
+  local _, kind = IsInInstance()
+  if kind == "raid" then
+    return true
+  end
+  local ok, db = pcall(eqt.DB)
+  if not ok or type(db) ~= "table" then
+    return true
+  end
+  if type(EUI.VisDependsOnCombat) == "function" then
+    local ok2, v = pcall(EUI.VisDependsOnCombat, db, "visibility")
+    if not ok2 or v then
+      return true
+    end
+  end
+  if type(EUI.GetVisibilitySelection) == "function" then
+    local ok3, sel = pcall(EUI.GetVisibilitySelection, db, "visibility")
+    if not ok3 or (type(sel) == "table" and (sel.in_raid or sel.in_party or sel.solo)) then
+      return true
+    end
+  end
+  return false
 end
 
 local function QueueSync()
@@ -988,11 +1035,20 @@ end
 -- Folds every zone category but the wanted ones and unfolds those (and their
 -- quests). Leaves the tracker alone when none of the wanted categories has a
 -- quest, so walking through a zone without quests folds nothing.
-local function FocusZone()
+-- onlyNew: from a zone change or loading screen; a /reload or a loading
+-- screen back into the zone last focused leaves your own folds alone.
+local function FocusZone(onlyNew)
   local db = mod.db
   if not mod._active or not db.zoneFocus or not _G.EUI_CustomQuestTracker then
     return
   end
+  local here = (GetRealZoneText and GetRealZoneText()) or ""
+  local char = mod.char or {}
+  if onlyNew == true and here ~= "" and char.focusedZone == here then
+    mod:Debug("zone focus: still in %s, folds left as they are", here)
+    return
+  end
+  char.focusedZone = here ~= "" and here or nil
   local charData = EllesmereUI and EllesmereUI.CharData and EllesmereUI.CharData("questTracker", true)
   if type(charData) ~= "table" then
     return
@@ -1051,11 +1107,6 @@ local function FocusZone()
 end
 mod.FocusZone = FocusZone
 
-local zoneEvents = CreateFrame("Frame")
-zoneEvents:SetScript("OnEvent", function()
-  -- The zone text and the quest log settle a moment after a loading screen.
-  C_Timer.After(1, FocusZone)
-end)
 
 -------------------------------------------------------------------------------
 -- Module lifecycle
@@ -1097,6 +1148,14 @@ function mod:OnEnable()
     end
   end)
   self:On("PLAYER_REGEN_ENABLED", QueueSync)
+  -- Last moment to hide secure buttons: if EllesmereUI may hide or fade the
+  -- tracker in this fight, ours go now rather than stay clickable on nothing.
+  self:On("PLAYER_REGEN_DISABLED", function(def)
+    if TrackerMayHideInCombat() then
+      def:Debug("combat: use buttons hidden (the tracker may hide in this fight)")
+      HideUseButtons()
+    end
+  end)
   -- Follows scrolling and dragging of the tracker (no redraw happens then);
   -- SyncUseButtons does nothing in combat.
   self:Ticker(0.25, function()
@@ -1112,9 +1171,17 @@ function mod:OnEnable()
   end)
   signature = nil
   Queue()
-  zoneEvents:RegisterEvent("ZONE_CHANGED_NEW_AREA")
-  zoneEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
-  C_Timer.After(LOGIN_GRACE, FocusZone)
+  -- (the zone text and the quest log settle a moment after a loading screen)
+  for _, e in ipairs({ "ZONE_CHANGED_NEW_AREA", "PLAYER_ENTERING_WORLD" }) do
+    self:On(e, function(def)
+      def:After(1, function()
+        FocusZone(true)
+      end)
+    end)
+  end
+  self:After(LOGIN_GRACE, function()
+    FocusZone(true)
+  end)
   -- Objectives here: EUI's area check and filter, widened while on (the
   -- wrappers read the option at each call, so the switch applies live).
   InstallWraps(self)
@@ -1127,7 +1194,6 @@ end
 
 function mod:OnDisable()
   events:UnregisterAllEvents()
-  zoneEvents:UnregisterAllEvents()
   -- Secure buttons can't hide in combat: then once it ends (OutOfCombat
   -- would be dropped now that the feature is off), unless it's back on.
   ARLE.Secure:Run(function()

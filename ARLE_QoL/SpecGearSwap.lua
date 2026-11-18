@@ -285,6 +285,10 @@ end
 
 local SKIP_SLOTS = { [4] = true, [19] = true } -- shirt, tabard
 local MAX_AT_ONCE = 4
+-- Slots auto-save has changed in a set since it was last put on from the set
+-- (setID -> { [slot] = true }): one piece at a time adds up, so a slow switch
+-- to other gear can't get around MAX_AT_ONCE either.
+local drift = {}
 local SLOT_LABEL = {
   [1] = "head", [2] = "neck", [3] = "shoulder", [5] = "chest", [6] = "waist", [7] = "legs",
   [8] = "feet", [9] = "wrist", [10] = "hands", [11] = "ring", [12] = "ring", [13] = "trinket",
@@ -334,6 +338,11 @@ local function GearChanges(setID, force)
         if not have and want and not (slot == 17 and mainIs2H) then
           return nil, "your " .. (SLOT_LABEL[slot] or ("slot " .. slot)) .. " slot is empty"
         end
+        -- The set's piece isn't with you (in the bank, mailed): the swap
+        -- couldn't put it on, which isn't you choosing another piece.
+        if want and Items.Count(want) == 0 then
+          return nil, "the set's " .. (SLOT_LABEL[slot] or ("slot " .. slot)) .. " piece isn't in your bags"
+        end
         changes[slot] = have or false
         n = n + 1
       end
@@ -346,6 +355,21 @@ local function GearChanges(setID, force)
     return nil, string.format("%d slots changed at once (looks like different gear, not an upgrade; "
       .. "/arl gear save saves it anyway)", n)
   end
+  if not force then
+    local total, seen = 0, {}
+    for slot in pairs(drift[setID] or {}) do
+      seen[slot], total = true, total + 1
+    end
+    for slot in pairs(changes) do
+      if not seen[slot] then
+        total = total + 1
+      end
+    end
+    if total > MAX_AT_ONCE then
+      return nil, string.format("%d slots changed since you last put the set on (looks like different gear; "
+        .. "/arl gear save saves it anyway)", total)
+    end
+  end
   return changes, n
 end
 
@@ -355,7 +379,7 @@ local function SaveWorn(force)
   if not changes then
     if force then
       Say("not saved: " .. why .. ".")
-    elseif why:find("slots changed at once") then
+    elseif why:find("slots changed") then
       Say(name .. " not updated: " .. why .. ".")
     end
     return
@@ -364,6 +388,14 @@ local function SaveWorn(force)
   if not ok then
     Say("couldn't update " .. name .. ": " .. tostring(err))
     return
+  end
+  if force then
+    drift[wornSet] = nil
+  else
+    drift[wornSet] = drift[wornSet] or {}
+    for slot in pairs(changes) do
+      drift[wornSet][slot] = true
+    end
   end
   local parts = {}
   for slot = 1, 18 do
@@ -498,14 +530,14 @@ local function PickupEntry(e)
 end
 
 -- Fills the empty slots the backup has something for. Returns restored, failed.
-local function RestoreBars(onlySlots)
+local function RestoreBars(onlySlots, quiet)
   if InCombatLockdown() then
     restorePending = true
     return 0, 0
   end
   if GetCursorInfo() then -- you're holding something: try again shortly
     F:After(1, function()
-      RestoreBars(onlySlots)
+      RestoreBars(onlySlots, quiet)
     end)
     return 0, 0
   end
@@ -526,7 +558,7 @@ local function RestoreBars(onlySlots)
   if restored > 0 then
     Say(string.format("restored %d action bar slot%s.", restored, restored == 1 and "" or "s"))
   end
-  if #failed > 0 then
+  if #failed > 0 and not quiet then
     Say("couldn't restore: " .. table.concat(failed, ", ") .. ".")
   end
   return restored, #failed
@@ -591,7 +623,7 @@ local function BarsAfterSpecChange(group)
   -- Two passes: bars can arrive a little after the switch.
   F:After(1.0, function()
     if ActiveGroup() == group then
-      RestoreBars()
+      RestoreBars(nil, true) -- (what fails here is tried again, and told, at 3 s)
     end
   end)
   F:After(3.0, function()
@@ -607,9 +639,18 @@ end
 local function BarsAtLogin()
   F:After(3, function()
     local g = ActiveGroup()
-    local first = next(Bars(g)) == nil
-    -- First time: full backup; later: add what's set, keep the rest.
-    SnapshotAll(g, not first)
+    local bars = Bars(g)
+    local first = next(bars) == nil
+    -- First time: full backup. Later: a few slots emptied since (while this
+    -- was off) are yours and stay empty; a whole bar's worth looks like the
+    -- client's wipe, and the backup is kept for them.
+    local emptied = 0
+    for slot = 1, MAX_SLOTS do
+      if bars[slot] and not GetActionInfo(slot) then
+        emptied = emptied + 1
+      end
+    end
+    SnapshotAll(g, not first and emptied >= WIPE_COUNT)
     barsReady = true
   end)
 end
@@ -766,6 +807,7 @@ function F:OnEnable()
     swapPending = false
     if ok and setID then
       wornSet = setID
+      drift[setID] = nil -- (put on from the set: a fresh start)
     end
     if not (ok and setID and self.db.learn ~= false) or GetTime() - selfSwap < 3 then
       return

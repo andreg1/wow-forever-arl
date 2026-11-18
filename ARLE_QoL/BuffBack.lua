@@ -128,14 +128,22 @@ local function NormalName(name)
   return name
 end
 
+-- A unit's name as chat and /targetexact know it. On Forever UnitName's second
+-- value is the surname, not a realm: "Haru" + "Pala" is "Haru Pala" (as Layer
+-- Bridge's MyName measured), never "Haru-Pala".
 local function UnitFullName(unit)
-  local ok, name, realm = pcall(UnitName, unit)
-  name, realm = ok and plain(name), ok and plain(realm)
+  local ok, name, surname = pcall(UnitName, unit)
+  name, surname = ok and plain(name), ok and plain(surname)
   if type(name) ~= "string" or name == "" or name == UNKNOWNOBJECT then
     return nil
   end
-  if type(realm) == "string" and realm ~= "" then
-    return NormalName(name .. "-" .. realm)
+  if type(surname) == "string" and surname ~= "" then
+    local c = Constants and Constants.CharacterNameSeparatorConsts
+    local sep = c and plain(c.CHARACTERNAME_SURNAME_SEPARATOR)
+    if type(sep) ~= "string" or sep == "" then
+      sep = " "
+    end
+    return name .. sep .. surname
   end
   return name
 end
@@ -592,10 +600,15 @@ local function Macro(who)
   if who.buff.selfCast then
     return "/cast " .. who.cast
   end
-  local lines = { "/targetexact " .. who.name, "/cast " .. who.cast }
+  -- [help,nodead]: if /targetexact didn't find them, the cast doesn't fall
+  -- on your own target (or on you by self-cast) instead.
+  local lines = { "/targetexact " .. who.name, "/cast [help,nodead] " .. who.cast }
   if F.db.restoreTarget then
     if not Ask(UnitExists, "target") then
-      lines[#lines + 1] = "/cleartarget"
+      -- (armed out of combat: if you've since picked a target, it comes back;
+      -- only a friendly target, the one we buffed, is cleared)
+      lines[#lines + 1] = "/targetlasttarget [help]"
+      lines[#lines + 1] = "/cleartarget [help]"
     elseif UnitFullName("target") ~= who.name then
       -- Only when the /targetexact found them (a friendly target now): if it
       -- didn't, your own target is still there and stays.
@@ -627,6 +640,15 @@ function F:Arm()
   self:Paint()
 end
 
+-- The target name of the player's last sent cast (UNIT_SPELLCAST_SENT).
+local sent = {}
+
+-- "Haru" or "Haru Pala" (-Realm) names the entry "Haru Pala"?
+local function SameName(target, name)
+  target = target:match("^([^%-]+)") or target
+  return target == name or name:sub(1, #target + 1) == target .. " "
+end
+
 local function Settle(self, spellID)
   local p = pending
   if not p or GetTime() - p.at > 5 then
@@ -634,6 +656,13 @@ local function Settle(self, spellID)
   end
   for _, id in ipairs(p.buff.ranks) do
     if id == spellID then
+      if not p.buff.selfCast and sent.spell == spellID and type(sent.target) == "string" and sent.target ~= ""
+        and GetTime() - (sent.at or 0) < 10 and not SameName(sent.target, p.name) then
+        -- It went to someone else (they weren't found): not returned.
+        self:Debug("cast went to %s, not %s: still owed", sent.target, p.name)
+        pending = nil
+        return
+      end
       pending = nil
       self:Debug("landed: %s on %s", p.cast, p.name)
       tries[p.name] = nil
@@ -788,6 +817,11 @@ function F:OnOwnAura(_, _, info)
     for _, aura in ipairs(added) do
       if Readable(aura) and not plain(aura.isHarmful) then
         Noticed(self, aura)
+      end
+      -- (kept in the walk's list too, so a later walk doesn't take it for new)
+      local inst = Readable(aura) and plain(aura.auraInstanceID)
+      if inst and baselined then
+        seenIds[inst] = true
       end
     end
   elseif Readable(info) and plain(info.isFullUpdate) then
@@ -1121,6 +1155,9 @@ function F:OnEnable()
   end
   SetupButton(self)
   self:OnUnit("UNIT_AURA", "player", self.OnOwnAura)
+  self:OnUnit("UNIT_SPELLCAST_SENT", "player", function(_, _, _, target, _, spellID)
+    sent.target, sent.spell, sent.at = plain(target), plain(spellID), GetTime()
+  end)
   self:OnUnit("UNIT_SPELLCAST_SUCCEEDED", "player", function(def, _, _, _, spellID)
     Settle(def, plain(spellID))
   end)

@@ -21,6 +21,7 @@ if not ARLE then
   return
 end
 local AH, Kit, Skin, Items = ARLE.Bridge.Auctionator, ARLE.UI.Kit, ARLE.Skin, ARLE.Lib.Items
+local Lib = ARLE.Lib
 
 local TICKET_ID = 19182
 local FACTION_ID = 909 -- Darkmoon Faire
@@ -288,7 +289,7 @@ local function CreateWindow()
     r.item:ClearAllPoints()
     r.item:SetPoint("LEFT", r.icon, "RIGHT", 4, 0)
     r.item:SetWidth(COLS.item[2] - ROW_H)
-    r:SetScript("OnEnter", function(self)
+    F:Script(r, "OnEnter", function(self)
       local e = self.entry
       if not e then
         return
@@ -312,8 +313,8 @@ local function CreateWindow()
       GameTooltip:AddLine("Shift-click: link in chat", 0.5, 0.5, 0.5)
       GameTooltip:Show()
     end)
-    r:SetScript("OnLeave", GameTooltip_Hide)
-    r:SetScript("OnClick", function(self)
+    F:Script(r, "OnLeave", GameTooltip_Hide)
+    F:Script(r, "OnClick", function(self)
       if self.entry and IsModifiedClick("CHATLINK") then
         local _, link = ItemInfo(self.entry.t.id)
         if link and ChatEdit_InsertLink then
@@ -326,7 +327,7 @@ local function CreateWindow()
 
   local search = Kit.Button(c, "Search all on AH", 150)
   search:SetPoint("BOTTOMLEFT", 0, 0)
-  search:SetScript("OnClick", SearchAll)
+  F:Script(search, "OnClick", SearchAll)
 
   local function Toggle(key, label, anchor)
     local cb = Kit.Check(c)
@@ -334,7 +335,7 @@ local function CreateWindow()
     local text = Kit.Text(c, "GameFontHighlightSmall")
     text:SetPoint("LEFT", cb, "RIGHT", 2, 0)
     text:SetText(label)
-    cb:SetScript("OnClick", function(self)
+    F:Script(cb, "OnClick", function(self)
       ARLE:SetOption(F.id, key, self:GetChecked() and true or false)
     end)
     return cb, text
@@ -343,7 +344,7 @@ local function CreateWindow()
   f.cappedCheck, capLabel = Toggle("hideCapped", "Hide tiers past my reputation", search)
   f.bankCheck = Toggle("includeBank", "Count bank items", capLabel)
 
-  f:SetScript("OnShow", function()
+  F:Script(f, "OnShow", function()
     Refresh()
   end)
   frame = f
@@ -491,16 +492,30 @@ local function InstallTooltip()
   end
   tooltipInstalled = true
   if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType then
+    -- (registered for the session: off, it returns at once; a hidden tooltip
+    -- table or id, in combat or an instance, is never read; errors caught)
     TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tt, data)
-      if tt ~= GameTooltip and tt ~= ItemRefTooltip then
+      if not F._active or (tt ~= GameTooltip and tt ~= ItemRefTooltip) then
         return
       end
-      AddTooltipLine(tt, data and data.id)
+      if type(data) ~= "table" or Lib.IsSecret(data) then
+        return
+      end
+      local id = data.id
+      if type(id) ~= "number" or Lib.IsSecret(id) then
+        return
+      end
+      ARLE.Debug.Call(F, AddTooltipLine, tt, id)
     end)
   elseif GameTooltip.HasScript and GameTooltip:HasScript("OnTooltipSetItem") then
     GameTooltip:HookScript("OnTooltipSetItem", function(tt)
+      if not F._active then
+        return
+      end
       local _, link = tt:GetItem()
-      AddTooltipLine(tt, Items.IDFromLink(link))
+      if type(link) == "string" and not Lib.IsSecret(link) then
+        ARLE.Debug.Call(F, AddTooltipLine, tt, Items.IDFromLink(link))
+      end
     end)
   end
 end

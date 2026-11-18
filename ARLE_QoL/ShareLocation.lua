@@ -11,7 +11,8 @@
 -- move, every 60 s while you stand still, never from inside a dungeon, raid
 -- or battleground (an "L0" goes out instead, once), guild only.
 --
--- With OpenMap loaded and its own "Share where you are" on, OpenMap already
+-- With OpenMap loaded and its own "Share where you are" turned off by you,
+-- nothing is shared either. With it on, OpenMap already
 -- sends the same messages: this stands aside (and sends no "L0", which would
 -- take OpenMap's dot away). Party members get the most out of it too:
 -- OpenMap places a group member the game keeps secret from this message.
@@ -53,12 +54,28 @@ local function Secret(v)
   return issecretvalue ~= nil and issecretvalue(v)
 end
 
+local function OpenMapDB()
+  local om = _G.OpenMap
+  local ok, mod = false, nil
+  if type(om) == "table" and type(om.GetModule) == "function" then
+    ok, mod = pcall(om.GetModule, om, "worldmap")
+  end
+  if ok and type(mod) == "table" and type(mod.db) == "table" then
+    return mod.db, mod
+  end
+end
+
 -- OpenMap's own sharing, when it's loaded and turned on
 local function OpenMapShares()
-  local om = _G.OpenMap
-  local mod = type(om) == "table" and type(om.GetModule) == "function" and om:GetModule("worldmap")
-  return type(mod) == "table" and type(mod.db) == "table" and mod.db.friendsShare == true and mod.enabled and true
-    or false
+  local db, mod = OpenMapDB()
+  return db and db.friendsShare == true and mod.enabled and true or false
+end
+
+-- You told OpenMap not to share where you are (its "Share where you are"
+-- off after its question was answered): ARL doesn't share behind its back.
+local function OpenMapDeclined()
+  local db = OpenMapDB()
+  return db and db.shareAsked == true and db.friendsShare == false or false
 end
 
 local function MapInfo(id)
@@ -147,6 +164,10 @@ function F:Tick(force)
   if OpenMapShares() then
     -- (OpenMap's own L1 replaces ours: no L0, it would remove OpenMap's dot)
     sharing, why, last.at = false, "OpenMap's own sharing is on", -math.huge
+    return
+  end
+  if OpenMapDeclined() then
+    self:Stop("OpenMap's \"Share where you are\" is off: turn it on there to be seen")
     return
   end
   local map, x, y = Here()

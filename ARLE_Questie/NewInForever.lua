@@ -89,6 +89,24 @@ end
 -- Badge
 -------------------------------------------------------------------------------
 
+local starTex = setmetatable({}, { __mode = "k" }) -- badge holder -> its star texture
+
+-- Questie fades an icon (near the player, or a quest it greys) through its
+-- texture's alpha, which a child frame doesn't inherit: the star follows the
+-- icon's own "faded" mark (read only) and Questie's fade level.
+local function FadeLevel()
+  local db = _G.Questie and _G.Questie.db and _G.Questie.db.profile
+  local v = type(db) == "table" and tonumber(db.iconFadeLevel)
+  return v or 0.3
+end
+
+local function SyncFade(frame, holder)
+  local tex = starTex[holder]
+  if tex then
+    tex:SetAlpha(rawget(frame, "faded") and FadeLevel() or 1)
+  end
+end
+
 local function RaiseBadge(holder)
   -- Above neighbouring icons stacked on the same spot.
   local parent = holder:GetParent()
@@ -110,7 +128,8 @@ local function GetBadge(frame)
   local tex = holder:CreateTexture(nil, "OVERLAY")
   tex:SetAllPoints(holder)
   tex:SetTexture(STAR)
-  holder:SetScript("OnShow", RaiseBadge)
+  starTex[holder] = tex
+  F:Script(holder, "OnShow", RaiseBadge)
   holder:Hide()
   badges[frame] = holder
   return holder
@@ -131,6 +150,7 @@ local function Apply(frame)
     local holder = GetBadge(frame)
     holder:Show()
     RaiseBadge(holder)
+    SyncFade(frame, holder)
   else
     HideBadge(frame)
   end
@@ -229,6 +249,14 @@ function F:OnEnable()
       HideBadge(frame)
     end
     return frame
+  end)
+  -- (fading has no event: shown stars follow their icon four times a second)
+  self:Ticker(0.25, function()
+    for frame, holder in pairs(badges) do
+      if holder:IsShown() then
+        SyncFade(frame, holder)
+      end
+    end
   end)
   self:Wrap(QuestieMap, "DrawWorldIcon", function(orig, ...)
     local iconMap, iconMinimap = orig(...)

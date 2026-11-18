@@ -164,8 +164,12 @@ end
 
 function F:Summary()
   local n = 0
-  for _ in pairs(blocked) do
-    n = n + 1
+  for questId in pairs(blocked) do
+    if IsSubQuest(questId) then
+      n = n + 1
+    else
+      blocked[questId] = nil -- (its parent left the log)
+    end
   end
   if not hooked then
     return "Not active yet (turn it on; needs Questie)."
@@ -198,6 +202,9 @@ function F:OnEnable()
     return orig(quest, ...)
   end)
   self:Wrap(AvailableQuests, "CalculateAndDrawAll", function(orig, callback, ...)
+    -- A full pass judges every candidate again: a sub-quest whose parent was
+    -- abandoned since isn't one any more, and mustn't stay counted as hidden.
+    wipe(blocked)
     local function after()
       local ok, err = pcall(Sweep)
       if not ok then
@@ -232,6 +239,7 @@ function F:OnDisable()
   wipe(blocked)
   -- The wrappers pass everything through now: redraw so hidden quests come back.
   self:Redraw()
+  hooked = false
 end
 
 function F:GetStatus()

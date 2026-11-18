@@ -42,6 +42,7 @@ local F = {
 local SPACING = 0.05
 local lootGen = 0
 local stopped = false  -- this window hit "inventory full"
+local lootOpen = false -- a loot window is open (a bags-full error elsewhere isn't this window's)
 local toldFull = false -- this window's bags-full line was said
 
 -- EllesmereUI's own Quick Loot is on.
@@ -163,6 +164,7 @@ end
 -- takes the slots faster than the client does; a slot already taken is a
 -- no-op.
 function F:OnLootReady(_, autoLoot)
+  lootOpen = true
   if IsShiftKeyDown() or Paused() then
     self:Debug("skipped: %s", Paused() and "EllesmereUI's Quick Loot is on" or "Shift held")
     return
@@ -226,13 +228,13 @@ end
 
 function F:OnLootClosed()
   lootGen = lootGen + 1
-  stopped, toldFull = false, false
+  stopped, toldFull, lootOpen = false, false, false
 end
 
 local FULL = {}
 
 function F:OnUIError(_, _, message)
-  if FULL[message] and not stopped then
+  if lootOpen and FULL[message] and not stopped then
     stopped = true
     self:TellFull("bags full: the rest stays in the loot window.")
   end
@@ -240,7 +242,8 @@ end
 
 function F:OnEnable()
   FULL = {}
-  for _, key in ipairs({ "ERR_INV_FULL", "ERR_BAG_FULL", "ERR_ITEM_MAX_COUNT" }) do
+  -- (not ERR_ITEM_MAX_COUNT: a unique item you already carry isn't full bags)
+  for _, key in ipairs({ "ERR_INV_FULL", "ERR_BAG_FULL" }) do
     if type(_G[key]) == "string" then
       FULL[_G[key]] = true
     end
@@ -252,7 +255,7 @@ end
 
 function F:OnDisable()
   lootGen = lootGen + 1
-  stopped, toldFull = false, false
+  stopped, toldFull, lootOpen = false, false, false
 end
 
 function F:GetStatus()

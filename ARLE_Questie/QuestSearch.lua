@@ -570,17 +570,17 @@ local function BuildUI()
   ui.edit = Kit.EditBox(c, 260, "ARLEQuestSearchEditBox")
   ui.edit:SetPoint("TOPLEFT", 6, -4)
   ui.edit:SetText(F.char.lastQuery or "")
-  ui.edit:SetScript("OnEnterPressed", function()
+  F:Script(ui.edit, "OnEnterPressed", function()
     RunSearch()
   end)
   local textButton = Kit.Button(c, "Search text", 100)
   textButton:SetPoint("LEFT", ui.edit, "RIGHT", 8, 0)
-  textButton:SetScript("OnClick", function()
+  F:Script(textButton, "OnClick", function()
     RunSearch("text")
   end)
   local zoneButton = Kit.Button(c, "Leads into zone", 120)
   zoneButton:SetPoint("LEFT", textButton, "RIGHT", 4, 0)
-  zoneButton:SetScript("OnClick", function()
+  F:Script(zoneButton, "OnClick", function()
     RunSearch("zone")
   end)
 
@@ -645,9 +645,9 @@ local function BuildUI()
       fs:SetWordWrap(false)
       row[col.key] = fs
     end
-    row:SetScript("OnEnter", ShowRowTooltip)
-    row:SetScript("OnLeave", GameTooltip_Hide)
-    row:SetScript("OnClick", OnRowClick)
+    F:Script(row, "OnEnter", ShowRowTooltip)
+    F:Script(row, "OnLeave", GameTooltip_Hide)
+    F:Script(row, "OnClick", OnRowClick)
     row:Hide()
     ui.rows[i] = row
   end
@@ -672,14 +672,14 @@ local function BuildUI()
   if scroll.SetObeyStepOnDrag then
     scroll:SetObeyStepOnDrag(true)
   end
-  scroll:SetScript("OnValueChanged", function(_, value)
+  F:Script(scroll, "OnValueChanged", function(_, value)
     local v = math.floor(value + 0.5)
     if v ~= offset then
       offset = v
       RenderRows()
     end
   end)
-  list:SetScript("OnMouseWheel", function(_, delta)
+  F:Script(list, "OnMouseWheel", function(_, delta)
     local minV, maxV = scroll:GetMinMaxValues()
     scroll:SetValue(math.max(minV, math.min(maxV, offset - delta * 3)))
   end)

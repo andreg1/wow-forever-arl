@@ -122,7 +122,7 @@ D.ASK_NAMES = {
 -- "buff pls" asks for every buff you'd give them (English and Portuguese).
 D.GENERIC = { buff = true, buffs = true, buffa = true, bufa = true }
 -- Words that make it a request.
-D.PLEASE = { pls = true, plz = true, please = true, pleas = true, plox = true, ty = true, need = true,
+D.PLEASE = { pls = true, plz = true, please = true, pleas = true, plox = true, need = true,
   pf = true, pfv = true, pfvr = true, porfa = true, ["por favor"] = true, preciso = true, quero = true,
   can = true, could = true, any = true, anyone = true, someone = true, alguem = true, ["alguém"] = true,
   pode = true, podes = true, da = true, ["dá"] = true }

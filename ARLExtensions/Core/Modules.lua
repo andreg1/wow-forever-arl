@@ -253,17 +253,27 @@ function Feature:Wrap(tbl, name, wrapper)
       -- A failing wrapper must not break the other addon: the error is
       -- recorded, and the call still gets the original's results (from the
       -- original run the wrapper already made, or from running it now).
-      local origResults
+      -- An error in the original itself is the other addon's: it isn't
+      -- counted against the feature, and the original isn't run again.
+      local origResults, origErr
       local function orig(...)
-        origResults = Pack(new.orig(...))
-        return unpack(origResults, 1, origResults.n)
+        local r = Pack(pcall(new.orig, ...))
+        if not r[1] then
+          origErr = r[2]
+          error({ pass = ARLE.Debug.PASS }, 0)
+        end
+        origResults = r
+        return unpack(r, 2, r.n)
       end
       local results = Pack(Call(self, new.wrapper, orig, ...))
       if results[1] then
         return unpack(results, 2, results.n)
       end
       if origResults then
-        return unpack(origResults, 1, origResults.n)
+        return unpack(origResults, 2, origResults.n)
+      end
+      if origErr ~= nil then
+        error(origErr, 0)
       end
     end
     return new.orig(...)
@@ -277,7 +287,9 @@ end
 function Feature:Command(c)
   c.section = c.section or self.commandSection or ARLE:GroupLabel(ARLE:GroupOf(self.id))
   c.module = c.module or self.id
-  ARLE:RegisterCommand(c)
+  if not ARLE:RegisterCommand(c) then
+    return
+  end
   self._commands = self._commands or {}
   self._commands[#self._commands + 1] = c.name
 end
@@ -337,7 +349,7 @@ local function Cleanup(def)
   def._events = nil
   def._debounce = nil
   for _, name in ipairs(def._commands or {}) do
-    ARLE:UnregisterCommand(name)
+    ARLE:UnregisterCommand(name, def.id)
   end
   def._commands = nil
   for kind, handler in pairs(def._comms or {}) do
@@ -464,6 +476,10 @@ function ARLE:CallEnable(def)
     if not ok then
       def._active = false
       def._error = tostring(err)
+      -- (what it made before the error, frames and buttons, is put away too)
+      if def.OnDisable then
+        Safe(def, def.OnDisable, def)
+      end
       Cleanup(def)
     end
   end

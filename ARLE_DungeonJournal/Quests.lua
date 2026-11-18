@@ -381,7 +381,7 @@ function tab:Send(dungeon, channel, force)
   H.SendChunks("QS", dungeon, list, ",", channel)
 end
 
-ARLE:RegisterComm("QS", function(sender, payload)
+H.Comm("QS", function(sender, payload)
   if not mod._active then
     return
   end

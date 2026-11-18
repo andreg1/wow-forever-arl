@@ -65,7 +65,14 @@ local function Title(id, def)
 end
 D.Title = Title
 
+-- Marks an error that only passes through ARL (a wrapped addon's own): not recorded.
+local PASS = {}
+D.PASS = PASS
+
 local function Handler(err)
+  if type(err) == "table" and err.pass == PASS then
+    return err
+  end
   return { msg = tostring(err), stack = debugstack and debugstack(2) or "" }
 end
 
@@ -131,6 +138,16 @@ function D:Record(owner, e)
       C_Timer.After(0, function()
         if def._active then
           ARLE:SetModuleEnabled(id, false)
+          if def._active then
+            -- (refused, e.g. during the guild check after a loading screen: off all the same)
+            if type(def.db) == "table" then
+              def.db.enabled = false
+            end
+            ARLE:CallDisable(def)
+            if ARLE.Changed then
+              ARLE:Changed()
+            end
+          end
           def._tripped = msg
           ARLE:Print("|cffff6060" .. Title(id, def) .. " was turned off|r after " .. BREAK_COUNT
             .. " errors in " .. BREAK_WINDOW .. " seconds. /arl errors shows them; /arl "
@@ -156,7 +173,11 @@ local function Finish(owner, ok, ...)
   if ok then
     return true, ...
   end
-  return false, D:Record(owner, (...))
+  local e = (...)
+  if type(e) == "table" and e.pass == PASS then
+    return false, "passed on"
+  end
+  return false, D:Record(owner, e)
 end
 
 -- Runs fn(...); returns true, results... or false, message (recorded).

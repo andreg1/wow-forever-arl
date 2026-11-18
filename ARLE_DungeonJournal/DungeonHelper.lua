@@ -521,6 +521,11 @@ local function FocusBoss(dungeon, bossName, pulling)
   if dungeon ~= H.shown then
     return
   end
+  if not H.FLB() then
+    -- (Bosses & Loot needs Forever Leveling BiS: no jump to an empty tab)
+    mod:Debug("%s: no jump to Bosses & Loot, Forever Leveling BiS isn't loaded", tostring(bossName))
+    return
+  end
   tabs.bis:Focus(bossName, pulling)
   mod.db.listCollapsed = nil
   mod.db.tab = "bis"
@@ -611,6 +616,8 @@ end
 -- A death told by GUID (PARTY_KILL, UNIT_DIED): bosses with no encounter
 -- (all of Scholomance, most rares) are known by their NPC ID. Forever hides
 -- the GUIDs of some deaths (secret values): those are skipped.
+local kidDeaths = {} -- "dungeon|group" -> { [guid] = true }: a group's guardians down so far
+
 local function GUIDDied(guid)
   if not InInstance() then
     return
@@ -619,6 +626,23 @@ local function GUIDDied(guid)
   if npc then
     local dungeon, boss = H.BossForNPC(npc)
     if boss then
+      -- A group of guardians (the Altar) is killed with its last guardian.
+      local need = H.Bosses(dungeon).kids[boss]
+      if need and need > 1 and type(guid) == "string" then
+        local key = dungeon .. "|" .. boss
+        local down = kidDeaths[key] or {}
+        kidDeaths[key] = down
+        down[guid] = true
+        local n = 0
+        for _ in pairs(down) do
+          n = n + 1
+        end
+        if n < need then
+          mod:Debug("%s: %d of %d down", boss, n, need)
+          return
+        end
+        kidDeaths[key] = nil
+      end
       Killed(dungeon, boss)
     end
   end
@@ -761,7 +785,8 @@ end
 
 local SHORTCUTS = {
   {
-    name = "loot", aliases = { "bis" },
+    -- (not "loot": that's Quick Loot's command)
+    name = "bis", aliases = { "bosses" },
     help = "opens or closes it on Bosses & Loot",
     fn = function()
       Command("loot")
@@ -818,6 +843,7 @@ end
 
 local flbHooked = false
 function mod:OnEnable()
+  H.RegisterComms()
   local fdj = H.FDJ()
   if not fdj then
     error("DungeonJournal (ForeverDungeonJournal) is not loaded; it provides the bosses, loot and quests", 0)

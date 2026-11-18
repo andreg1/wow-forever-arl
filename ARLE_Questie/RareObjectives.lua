@@ -225,9 +225,18 @@ end
 -- Up to zone level, never a continent (shared with Quest Tracker).
 local WalkToZone = Lib.QuestPlaces.WalkToZone
 
+-- (values the client may hide in an instance: never tested or indexed)
+local function Plain(v)
+  if Lib.IsSecret(v) then
+    return nil
+  end
+  return v
+end
+
 local function UpdatePlayerMaps()
   wipe(playerMaps)
-  WalkToZone(C_Map.GetBestMapForUnit("player"), function(m)
+  local best = Plain(C_Map.GetBestMapForUnit("player"))
+  WalkToZone(type(best) == "number" and best or nil, function(m)
     playerMaps[m] = true
   end)
 end
@@ -326,7 +335,7 @@ local function Found(entry, guid, unit, pos)
 end
 
 local function EntryForUnit(unit)
-  if not UnitExists(unit) or UnitIsDead(unit) or UnitIsPlayer(unit) then
+  if not Plain(UnitExists(unit)) or Plain(UnitIsDead(unit)) or Plain(UnitIsPlayer(unit)) then
     return
   end
   local npcId = NpcIdFromGuid(UnitGUID(unit))
@@ -350,20 +359,29 @@ local function CheckVignettes()
   if not (C_VignetteInfo and C_VignetteInfo.GetVignettes) then
     return
   end
-  local uiMap = C_Map.GetBestMapForUnit("player")
-  for _, vignetteGUID in ipairs(C_VignetteInfo.GetVignettes() or {}) do
-    local info = C_VignetteInfo.GetVignetteInfo(vignetteGUID)
-    local npcId = info and NpcIdFromGuid(info.objectGUID)
-    local entry = npcId and active[npcId] or (info and info.name and activeByName[info.name:lower()])
-    if entry and not info.isDead then
+  local uiMap = Plain(C_Map.GetBestMapForUnit("player"))
+  local list = Plain(C_VignetteInfo.GetVignettes())
+  if type(list) ~= "table" then
+    return
+  end
+  for _, vignetteGUID in ipairs(list) do
+    local info = Plain(C_VignetteInfo.GetVignetteInfo(vignetteGUID))
+    if type(info) ~= "table" then
+      info = nil
+    end
+    local npcId = info and NpcIdFromGuid(Plain(info.objectGUID))
+    local name = info and Plain(info.name)
+    local entry = npcId and active[npcId] or (type(name) == "string" and activeByName[name:lower()])
+    if entry and not Plain(info.isDead) then
       local pos
-      if uiMap and C_VignetteInfo.GetVignettePosition then
-        local v = C_VignetteInfo.GetVignettePosition(vignetteGUID, uiMap)
-        if v then
-          pos = { uiMap, v.x, v.y }
+      if type(uiMap) == "number" and C_VignetteInfo.GetVignettePosition then
+        local v = Plain(C_VignetteInfo.GetVignettePosition(vignetteGUID, uiMap))
+        local x, y = v and Plain(v.x), v and Plain(v.y)
+        if type(x) == "number" and type(y) == "number" then
+          pos = { uiMap, x, y }
         end
       end
-      Found(entry, info.objectGUID or vignetteGUID, nil, pos)
+      Found(entry, Plain(info.objectGUID) or vignetteGUID, nil, pos)
     end
   end
 end
@@ -515,12 +533,13 @@ end
 -- callers differ (/click in chat sends the up edge, a key binding both). Out
 -- of combat, PreClick points useOnKeyDown at whichever edge arrives first and
 -- swallows the other edge of the same press; in combat the last setting stays.
+local scanSetup = false
 local function SetupScanButton()
   local b = Secure:Button("RareScan")
-  if not b or b.arleSetup then
+  if not b or scanSetup then
     return
   end
-  b.arleSetup = true
+  scanSetup = true -- (kept here: no fields of ours on a secure button)
   b:SetAttribute("type", "macro")
   b:SetAttribute("useOnKeyDown", false)
   b:RegisterForClicks("AnyUp", "AnyDown")

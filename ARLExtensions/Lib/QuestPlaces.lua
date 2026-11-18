@@ -32,9 +32,13 @@ local ZONE_TYPE = Enum and Enum.UIMapType and Enum.UIMapType.Zone or 3
 
 function P.WalkToZone(m, fn)
   local guard = 0
-  while m and m > 0 and guard < 10 do
+  if issecretvalue and issecretvalue(m) then
+    return
+  end
+  while type(m) == "number" and m > 0 and guard < 10 do
     local info = C_Map.GetMapInfo(m)
-    if not info or (info.mapType and info.mapType < ZONE_TYPE) then
+    if type(info) ~= "table" or (issecretvalue and issecretvalue(info))
+      or (info.mapType and info.mapType < ZONE_TYPE) then
       return
     end
     if fn(m) then
@@ -89,6 +93,9 @@ local function EntityMaps(kind, id)
   local cache = entityMaps[kind]
   local v = cache[id]
   if v == nil then
+    if not Q.ZoneReady() then
+      return nil -- (not cached: asked again once Questie's zones are loaded)
+    end
     local maps, any = {}, false
     local get = kind == "npc" and DB.Npc or DB.Object
     for _, field in ipairs({ "spawns", "waypoints" }) do
@@ -236,7 +243,7 @@ local function Compute(questID, logObjectives)
 end
 
 local function Entry(questID)
-  if type(questID) ~= "number" or not DB.Ready() then
+  if type(questID) ~= "number" or not DB.Ready() or not Q.ZoneReady() then
     return nil
   end
   local logObjectives = C_QuestLog.GetQuestObjectives(questID)
