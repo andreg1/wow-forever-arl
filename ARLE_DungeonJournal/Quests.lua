@@ -938,16 +938,22 @@ end
 
 function tab:RenderDetail(width)
   local e = view and H.shown and view.byID[selected[H.shown]]
-  detail.paras:Done()
-  detail.lines:Done()
-  detail.sections:Done()
-  detail.steps:Done()
-  detail.cells:Done()
-  detail.members:Done()
+  -- Pools are finished at the end: Done hides what this render didn't use.
+  -- (Done at the start only hid what the render before last left over, so a
+  -- shorter quest kept the previous one's extra lines on screen.)
+  local function Finish(y)
+    detail.paras:Done()
+    detail.lines:Done()
+    detail.sections:Done()
+    detail.steps:Done()
+    detail.cells:Done()
+    detail.members:Done()
+    return y
+  end
   if not e then
     detail.banner:Hide()
     detail.strip:Hide()
-    return 1
+    return Finish(1)
   end
   local q, id = e.q, e.id
   detail.id = id
@@ -1213,7 +1219,7 @@ function tab:RenderDetail(width)
       y = H.Place(r, y, 28, 1)
     end
   end
-  return y + 6
+  return Finish(y + 6)
 end
 
 function tab:Status()

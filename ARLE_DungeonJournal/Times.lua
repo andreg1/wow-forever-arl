@@ -1038,15 +1038,19 @@ local function DeltaTile(delta, label)
 end
 
 function tab:RenderDetail(width)
-  detail.sections:Done()
-  detail.tiles:Done()
-  detail.rows:Done()
-  detail.paras:Done()
+  -- Pools are finished at the end: Done hides what this render didn't use.
+  local function Finish(y)
+    detail.sections:Done()
+    detail.tiles:Done()
+    detail.rows:Done()
+    detail.paras:Done()
+    return y
+  end
   local dungeon = H.shown
   if not dungeon or not selected[dungeon] then
     detail.banner:Hide()
     detail.empty:Hide()
-    return 1
+    return Finish(1)
   end
   detail.empty:Hide()
   AskGuild(dungeon)
@@ -1206,7 +1210,7 @@ function tab:RenderDetail(width)
     local fs = detail.paras:Get()
     y = H.Para(fs, y + 4, width, "|cffff9933You don't share yours|r (Clear Times settings)")
   end
-  return y + 6
+  return Finish(y + 6)
 end
 
 function tab:Status()
