@@ -43,10 +43,12 @@ local MACRO_LIMIT = 255
 local PLACEHOLDER = "/arl rare macro"
 local OLD_ADDON_MACRO = "QRareScan"        -- Questie_RareObjectives' macro (Import)
 local OLD_PLACEHOLDER = "/qrare macro"     -- its placeholder body
--- A living hostile target (harm implies it exists). /tm acts on the target
--- already; /ping is told explicitly.
-local FOUND = "[harm,nodead]"
-local FOUND_PING = "[@target,harm,nodead]"
+-- A living target, hostile or friendly (names added with /arl rare add can
+-- be friendly NPCs; the scan clears the target first, so one that exists is
+-- a match). /tm acts on the target already; /ping is told explicitly (on a
+-- friendly one the contextual ping is "assist" instead of "attack").
+local FOUND = "[exists,nodead]"
+local FOUND_PING = "[@target,exists,nodead]"
 
 local markerValues = { { value = 0, label = "None" } }
 for i, name in ipairs(RAID_MARKS) do
