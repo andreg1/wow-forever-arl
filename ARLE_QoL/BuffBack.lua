@@ -36,11 +36,23 @@ local Kit, Secure = ARLE.UI.Kit, ARLE.Secure
 local MY_CLASS = select(2, UnitClass("player"))
 local MY_BUFFS = Data.BUFFS[MY_CLASS] or {}
 local EXCLUSIVE = MY_BUFFS.exclusive == true
+-- What "My own buffs" watches on you: your self-only buffs, then the buffs
+-- for others you can put on yourself (not the ones only given back).
+local SELF_BUFFS = {}
+for _, buff in ipairs(Data.SELF[MY_CLASS] or {}) do
+  SELF_BUFFS[#SELF_BUFFS + 1] = buff
+end
+for _, buff in ipairs(MY_BUFFS) do
+  if not buff.returnOnly then
+    SELF_BUFFS[#SELF_BUFFS + 1] = buff
+  end
+end
 
 local OWED_SECONDS = 180      -- a favour is returned by name for this long
 local ASK_SECONDS = 60        -- an ask stands this long
 local MAX_TRIES = 3           -- presses at one person that don't land
 local GROUP_COOLDOWN = 60     -- a group member whose buff failed waits this long
+local SELF_ACCENT = { 0.35, 0.75, 1 } -- the card's edge for your own buffs
 
 local F = {
   id = "BuffBack",
@@ -53,6 +65,9 @@ local F = {
     .. "your target back. Which buffs each class gets is set on Buffs by class.",
   pages = {
     { key = "who", label = "Who to buff" },
+    { key = "self", label = "My own buffs",
+      notes = "A reminder on the card (and the key casts it) when one of your own buffs is about to end or is "
+        .. "missing. Only buffs you know are listed." },
     { key = "classes", label = "Buffs by class",
       notes = "Tick the buffs each class gets from you. Paladins: one blessing per person, the first ticked "
         .. "one they don't already have." },
@@ -77,6 +92,16 @@ local F = {
       disabled = function(def) return not def.db.rebuff end },
     { key = "pvpSafe", type = "boolean", label = "Skip PvP-flagged players unless I'm flagged",
       default = true, page = "who", cmd = "pvp" },
+
+    { key = "selfOn", type = "boolean", label = "Remind me about my own buffs", default = true, page = "self",
+      cmd = "self" },
+    { key = "selfMinutes", type = "range", label = "...when one has less than (minutes, 0 = only missing)",
+      min = 0, max = 10, step = 1, default = 2, page = "self", cmd = "selfminutes",
+      disabled = function(def) return not def.db.selfOn end },
+    { key = "selfMissing", type = "boolean", label = "...and when one is missing", default = true, page = "self",
+      cmd = "selfmissing", disabled = function(def) return not def.db.selfOn end },
+    { key = "selfChat", type = "boolean", label = "...also say it in chat (once each time)", default = false,
+      page = "self", cmd = "selfchat", disabled = function(def) return not def.db.selfOn end },
 
     { type = "info", page = "classes", text = function(def) return def:GridNote() end },
     { type = "button", label = "Reset to defaults", page = "classes", nocmd = true, confirm = "Click again to reset",
@@ -191,7 +216,7 @@ local function KnownBuffs()
 end
 
 local function BuffLabel(buff)
-  return SpellName(buff.ranks[#buff.ranks]) or SpellName(buff.ranks[1]) or buff.key
+  return SpellName(buff.ranks[#buff.ranks]) or SpellName(buff.ranks[1]) or buff.label or buff.key
 end
 
 -- The rank that lands on somebody of `level` (within ten levels), and the
@@ -531,6 +556,10 @@ function F:Next()
       self:Debug("%s (%s): skipped, %s", who.name, who.reason, tostring(why))
     end
   end
+  local mine = self:SelfDue()
+  if mine then
+    return mine
+  end
   if self.db.rebuff then
     for _, unit in ipairs(GroupUnits()) do
       local name = UnitFullName(unit)
@@ -552,11 +581,102 @@ function F:Next()
 end
 
 -------------------------------------------------------------------------------
+-- My own buffs
+-------------------------------------------------------------------------------
+
+local selfSaid = {} -- [buff key] = what the chat line was last said for
+
+-- Seconds left on your own cast of it, false when it's on you from somebody
+-- else (or never ends), nil when it isn't on you at all.
+local function SelfLeft(auras, buff)
+  local wears, id = Wears(auras, buff)
+  if not wears then
+    return nil
+  end
+  local exp = auras.mine[id]
+  if exp and exp > 0 then
+    return exp - GetTime(), id
+  end
+  return false, id
+end
+
+local function OwnRank(buff, id)
+  for _, r in ipairs(buff.ranks) do
+    if r == id then
+      return true
+    end
+  end
+  return false
+end
+
+local function Clock(seconds)
+  seconds = math.max(0, math.floor(seconds + 0.5))
+  return string.format("%d:%02d", math.floor(seconds / 60), seconds % 60)
+end
+
+-- The first of your own buffs that's due: ending within selfMinutes, or
+-- missing (selfMissing). Not while dead, mounted or on a flight.
+function F:SelfDue()
+  if not self.db.selfOn or #SELF_BUFFS == 0 then
+    return nil
+  end
+  if Ask(UnitIsDeadOrGhost, "player") or Ask(UnitOnTaxi, "player") or (IsMounted and Ask(IsMounted)) then
+    return nil
+  end
+  local me = ARLE:MyName()
+  if resting[me] and GetTime() < resting[me] then
+    return nil
+  end
+  local auras = ReadAuras("player")
+  if auras.unreadable then
+    return nil
+  end
+  local lead = (self.db.selfMinutes or 0) * 60
+  local level = Ask(UnitLevel, "player")
+  for _, buff in ipairs(SELF_BUFFS) do
+    if self.db["self_" .. buff.key] and KnownRanks(buff) then
+      local left, id = SelfLeft(auras, buff)
+      local due
+      if left == nil then
+        due = self.db.selfMissing and "missing" or nil
+      elseif left and left < lead and (not buff.family or OwnRank(buff, id)) then
+        -- (a family member worn is that member's entry's to renew)
+        due = "ending"
+      end
+      if due then
+        local spell, cast = CastFor(buff, level)
+        if spell then
+          local who = { name = me, unit = "player", reason = "self", class = MY_CLASS, inGroup = true,
+            level = level, buff = buff, cast = cast, spell = spell, due = due,
+            ends = due == "ending" and (GetTime() + left) or nil }
+          self:SaySelf(who)
+          return who
+        end
+      end
+      if not due then
+        selfSaid[buff.key] = nil -- renewed: the next time is said again
+      end
+    end
+  end
+end
+
+function F:SaySelf(who)
+  local said = who.due .. ":" .. tostring(who.ends and math.floor(who.ends / 30) or "")
+  if not self.db.selfChat or selfSaid[who.buff.key] == said or InCombatLockdown() then
+    return
+  end
+  selfSaid[who.buff.key] = said
+  local key = Secure:BoundKey("BuffBack")
+  self:Print(BuffLabel(who.buff) .. (who.due == "missing" and " is missing" or (" ends in "
+    .. Clock(who.ends - GetTime()))) .. (key and (": press " .. key .. ".") or ": click Buff on the card."))
+end
+
+-------------------------------------------------------------------------------
 -- The key
 -------------------------------------------------------------------------------
 
 local function Macro(who)
-  if who.buff.selfCast then
+  if who.buff.selfCast or who.buff.selfOnly then
     return "/cast " .. who.cast
   end
   -- [help,nodead]: if /targetexact didn't find them, the cast doesn't fall
@@ -615,7 +735,7 @@ local function Settle(self, spellID)
   end
   for _, id in ipairs(p.buff.ranks) do
     if id == spellID then
-      if not p.buff.selfCast and sent.spell == spellID and type(sent.target) == "string" and sent.target ~= ""
+      if not p.buff.selfCast and not p.buff.selfOnly and sent.spell == spellID and type(sent.target) == "string" and sent.target ~= ""
         and GetTime() - (sent.at or 0) < 10 and not SameName(sent.target, p.name) then
         -- It went to someone else (they weren't found): not returned.
         self:Debug("cast went to %s, not %s: still owed", sent.target, p.name)
@@ -655,7 +775,7 @@ local function Pressed(self)
   if n >= MAX_TRIES then
     -- Three presses and nothing landed: out of reach, gone, or refused.
     self:Debug("%s: %d presses without a cast, dropped", who.name, n)
-    if who.reason == "group" then
+    if who.reason == "group" or who.reason == "self" then
       resting[who.name] = GetTime() + GROUP_COOLDOWN
       tries[who.name] = nil
     else
@@ -932,7 +1052,7 @@ local function PlaceCard()
   end
 end
 
-local REASON = { asked = "asked you for it", owed = "buffed you", group = "in your group" }
+local REASON = { asked = "asked you for it", owed = "buffed you", group = "in your group", self = "your own buff" }
 local BUFF_W, SKIP_W = 52, 44
 
 -- Skip: the person waits (a group member GROUP_COOLDOWN, anybody else is
@@ -942,7 +1062,7 @@ local function Skip()
   if not who then
     return
   end
-  if who.reason == "group" then
+  if who.reason == "group" or who.reason == "self" then
     resting[who.name] = GetTime() + GROUP_COOLDOWN
     tries[who.name] = nil
   else
@@ -1024,15 +1144,23 @@ local function PaintNow()
   end
   local _, _, _, hex = Lib.ClassColor(who.class)
   local key = Secure:BoundKey("BuffBack")
-  local more = QueueCount() - ((who.reason ~= "group") and 1 or 0)
+  local more = QueueCount() - ((who.reason == "asked" or who.reason == "owed") and 1 or 0)
   card.icon:SetTexture(SpellIcon(who.spell))
   if who.reason == "group" then
-    card:SetAccent() -- (the theme's accent; gold for somebody who asked or buffed you)
+    card:SetAccent() -- (the theme's accent; gold for somebody who asked or buffed you, blue for yours)
+  elseif who.reason == "self" then
+    card:SetAccent(unpack(SELF_ACCENT))
   else
     card:SetAccent(1, 0.82, 0)
   end
-  card:SetLines(BuffLabel(who.buff) .. " |cffffffff→|r |c" .. hex .. who.name .. "|r",
-    (REASON[who.reason] or who.reason) .. (more > 0 and (" · |cffffffff+" .. more .. " waiting|r") or ""),
+  local reason = REASON[who.reason] or who.reason
+  if who.reason == "self" then
+    reason = who.due == "missing" and "|cffff6060missing|r"
+      or ("ends in |cffffffff" .. Clock((who.ends or GetTime()) - GetTime()) .. "|r")
+  end
+  card:SetLines(BuffLabel(who.buff) .. " |cffffffff→|r " .. (who.reason == "self" and "|cffffffffyou|r"
+    or ("|c" .. hex .. who.name .. "|r")),
+    reason .. (more > 0 and (" · |cffffffff+" .. more .. " waiting|r") or ""),
     key and ("Press |cffffd100" .. key .. "|r or click Buff") or "Click Buff, or set a key in /arl buff")
   card:Show()
 end
@@ -1127,14 +1255,14 @@ end
 -------------------------------------------------------------------------------
 
 function F:StatusLine()
-  if #MY_BUFFS == 0 then
-    return "Your class has no buffs for others: nothing to do."
+  if #MY_BUFFS == 0 and #SELF_BUFFS == 0 then
+    return "Your class has no buffs to keep up: nothing to do."
   end
   local key = Secure:BoundKey("BuffBack")
   local head = key and ("Key: " .. key) or "|cffff6060No key set|r (Key bindings > AddOns > Buff Back)"
   if current then
-    return head .. "  ·  next: " .. current.cast .. " → " .. current.name .. " (" .. (REASON[current.reason] or "")
-      .. ")"
+    return head .. "  ·  next: " .. current.cast .. " → " .. (current.reason == "self" and "you" or current.name)
+      .. " (" .. (REASON[current.reason] or "") .. ")"
   end
   return head .. "  ·  nobody to buff right now"
 end
@@ -1177,6 +1305,7 @@ function F:OnEnable()
   wipe(tries)
   wipe(resting)
   pending, current = nil, nil
+  wipe(selfSaid)
   seenIds, baselined = {}, false
   knownCache, askIndex = nil, nil
   if type(self.db.grid) ~= "table" then
@@ -1291,5 +1420,18 @@ F.commands = {
     self:Print("queue cleared.")
   end },
 }
+
+-- "My own buffs": one tick per buff your class has (shown once you know it).
+-- Defaults: on, except short ones, opt-in ones, and buffs for others your
+-- class wouldn't get from the grid's defaults (Wisdom on a warrior).
+for _, buff in ipairs(SELF_BUFFS) do
+  local on = not buff.short and not buff.optIn and (buff.selfOnly or Default(MY_CLASS, buff))
+  F.options[#F.options + 1] = {
+    key = "self_" .. buff.key, type = "boolean", label = BuffLabel(buff), default = on and true or false,
+    page = "self", nocmd = true,
+    hidden = function() return not KnownRanks(buff) end,
+    disabled = function(def) return not def.db.selfOn end,
+  }
+end
 
 ARLE:RegisterModule(F)

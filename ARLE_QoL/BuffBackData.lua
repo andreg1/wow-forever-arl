@@ -138,6 +138,70 @@ D.MANA = { PALADIN = true, HUNTER = true, PRIEST = true, SHAMAN = true, MAGE = t
 D.CASTERS = { MAGE = true, WARLOCK = true, PRIEST = true }
 D.TANKS = { WARRIOR = true, PALADIN = true, DRUID = true }
 
+-- Buffs you can only put on yourself (ARL's own list, not from Manners), for
+-- the "My own buffs" reminder; the buffs above count too when you can cast
+-- them on yourself. Fields as above, plus:
+--   label   the English name, shown until the client names the spell
+--   family  ids of the buffs it can't share you with (a mage's armors): wearing
+--           any of them counts as having it
+--   short   lasts a few minutes: off by default
+--   optIn   off by default (a tank's Righteous Fury)
+D.SELF = {
+  PRIEST = {
+    { key = "innerfire", label = "Inner Fire", ranks = { 10952, 10951, 1006, 602, 7128, 588 } },
+  },
+  MAGE = {
+    { key = "icearmor", label = "Ice Armor", ranks = { 10220, 10219, 7320, 7302 }, family = "magearmor" },
+    { key = "magearmor", label = "Mage Armor", ranks = { 22783, 22782, 6117 }, family = "magearmor" },
+    { key = "frostarmor", label = "Frost Armor", ranks = { 7301, 7300, 168 }, family = "magearmor" },
+  },
+  WARLOCK = {
+    { key = "demonarmor", label = "Demon Armor", ranks = { 11735, 11734, 11733, 1086, 706 }, family = "demon" },
+    { key = "demonskin", label = "Demon Skin", ranks = { 696, 687 }, family = "demon" },
+  },
+  SHAMAN = {
+    { key = "lightningshield", label = "Lightning Shield", ranks = { 10432, 10431, 8134, 945, 905, 325, 324 } },
+  },
+  PALADIN = {
+    { key = "righteousfury", label = "Righteous Fury", ranks = { 25780 }, optIn = true },
+  },
+  HUNTER = {
+    { key = "trueshot", label = "Trueshot Aura", ranks = { 20906, 20905, 19506 } },
+  },
+  DRUID = {
+    { key = "omen", label = "Omen of Clarity", ranks = { 16864 } },
+  },
+}
+-- A family's ids, as each member's `group` (wearing any one counts).
+do
+  local families = {}
+  for _, list in pairs(D.SELF) do
+    for _, buff in ipairs(list) do
+      buff.selfOnly = true
+      if buff.family then
+        local ids = families[buff.family] or {}
+        families[buff.family] = ids
+        for _, id in ipairs(buff.ranks) do
+          ids[#ids + 1] = id
+        end
+      end
+    end
+  end
+  for _, list in pairs(D.SELF) do
+    for _, buff in ipairs(list) do
+      if buff.family then
+        buff.group = families[buff.family]
+      end
+    end
+  end
+end
+-- Battle Shout lasts two minutes: a reminder at every refresh is noise.
+for _, buff in ipairs(D.BUFFS.WARRIOR or {}) do
+  if buff.key == "battleshout" then
+    buff.short = true
+  end
+end
+
 -- The grid's rows, in the game's class order.
 D.CLASSES = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
 
