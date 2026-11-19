@@ -31,7 +31,7 @@ if not ARLE then
   return
 end
 local Data = ns.BuffBackData
-local Skin, Kit, Secure = ARLE.Skin, ARLE.UI.Kit, ARLE.Secure
+local Kit, Secure = ARLE.UI.Kit, ARLE.Secure
 
 local MY_CLASS = select(2, UnitClass("player"))
 local MY_BUFFS = Data.BUFFS[MY_CLASS] or {}
@@ -61,7 +61,7 @@ local F = {
   options = {
     { type = "info", text = function(def) return def:StatusLine() end },
     { type = "keybind", binding = Secure:Binding("BuffBack"), label = "Buff the next person" },
-    { key = "display", type = "boolean", label = "Show what the key will do (movable line)", default = true },
+    { key = "display", type = "boolean", label = "Show who's next, with a Buff button (movable)", default = true },
     { key = "restoreTarget", type = "boolean", label = "Give my target back after the buff", default = true,
       cmd = "restore" },
     ARLE.Options.Preset.ResetPosition(),
@@ -695,6 +695,7 @@ local function ReleaseButton()
   b:SetAttribute("macrotext", nil)
   F:Script(b, "PreClick", nil)
   F:Script(b, "PostClick", nil)
+  b:Hide() -- (the hidden 1x1 key button again; the CLICK binding still reaches it)
   armedText = nil
 end
 
@@ -913,26 +914,80 @@ function F:OnChat(event, text, sender)
 end
 
 -------------------------------------------------------------------------------
--- The line that shows what the key will do
+-- The card that shows what the key will do
 -------------------------------------------------------------------------------
 
-local line
-local placeLine -- Kit.Movable's
+-- A Kit.Card (every ARL popup's look): the spell's icon, who gets it and why,
+-- and two buttons. "Buff" is the host's secure BuffBack button laid exactly
+-- over a plain button (the key binding clicks the same button), so a click
+-- casts like the key. The card holds a secure button, so it's protected: it's
+-- built, sized, shown and hidden only out of combat (Secure:Run).
+local card
+local placeCard -- Kit.Movable's
+local secAttached = false
 
-local function PlaceLine()
-  if placeLine then
-    placeLine()
+local function PlaceCard()
+  if placeCard then
+    placeCard()
   end
 end
 
-local REASON = { asked = "asked", owed = "buffed you", group = "group" }
+local REASON = { asked = "asked you for it", owed = "buffed you", group = "in your group" }
+local BUFF_W, SKIP_W = 52, 44
 
--- A one-line Kit.Card (every ARL popup's look), as wide as its line.
-local function BuildLine()
-  local f = Kit.Card(F, { titleFont = "GameFontHighlightSmall", width = 320, move = { y = -160 } })
-  placeLine = f.place
+-- Skip: the person waits (a group member GROUP_COOLDOWN, anybody else is
+-- dropped). In combat the key keeps its macro until the fight ends.
+local function Skip()
+  local who = current
+  if not who then
+    return
+  end
+  if who.reason == "group" then
+    resting[who.name] = GetTime() + GROUP_COOLDOWN
+    tries[who.name] = nil
+  else
+    Forget(who.name)
+  end
+  F:Debug("%s skipped by hand", who.name)
+  if not InCombatLockdown() then
+    F:Arm()
+  end
+end
+
+local function AttachSecure()
+  local sec = Secure:Attach("BuffBack", card, { "BOTTOMRIGHT", -Kit.CARD.pad, Kit.CARD.pad }, BUFF_W,
+    Kit.CARD.button)
+  if not sec then
+    return
+  end
+  secAttached = true
+  sec:SetFrameLevel(card.buff:GetFrameLevel() + 5)
+  F:Script(sec, "OnEnter", function(self)
+    card.buff:LockHighlight()
+    local key = Secure:BoundKey("BuffBack")
+    Kit.SimpleTooltip(self, "Buff", (current and (current.cast .. " on " .. current.name .. ".\n") or "")
+      .. (key and ("Your key: " .. key .. ".") or "No key yet: set one in /arl buff."))
+  end)
+  F:Script(sec, "OnLeave", function()
+    card.buff:UnlockHighlight()
+    GameTooltip:Hide()
+  end)
+end
+
+local function BuildCard()
+  local f = Kit.Card(F, { icon = true, width = 250, move = { y = -160, secure = true } })
+  placeCard = f.place
   f.text:SetWordWrap(false)
-  line = f
+  f.buff = f:AddButton("Buff", BUFF_W) -- (clicked through the secure button over it)
+  f.skip = f:AddButton("Skip", SKIP_W, Skip)
+  F:Script(f.skip, "OnEnter", function(self)
+    Kit.SimpleTooltip(self, "Skip", "Leave this person for now and show the next one.")
+  end)
+  F:Script(f.skip, "OnLeave", function()
+    GameTooltip:Hide()
+  end)
+  card = f
+  AttachSecure()
 end
 
 local function QueueCount()
@@ -948,27 +1003,47 @@ local function QueueCount()
   return n
 end
 
-function F:Paint()
-  if not self.db.display or not current then
-    if line then
-      line:Hide()
+local function SpellIcon(id)
+  local tex = (C_Spell and C_Spell.GetSpellTexture and Lib.Call(C_Spell.GetSpellTexture, id))
+    or (GetSpellTexture and Lib.Call(GetSpellTexture, id))
+  return tex or 134400
+end
+
+local function PaintNow()
+  local who = current
+  if not F._active or not F.db.display or not who then
+    if card then
+      card:Hide()
     end
     return
   end
-  if not line then
-    BuildLine()
+  if not card then
+    BuildCard()
+  elseif not secAttached then
+    AttachSecure()
   end
+  local _, _, _, hex = Lib.ClassColor(who.class)
   local key = Secure:BoundKey("BuffBack")
-  local more = QueueCount() - ((current.reason ~= "group") and 1 or 0)
-  line:SetLines(string.format("%s%s |cffffffff→ %s|r |cff9d9d9d(%s)%s|r",
-    key and ("|cffffd100[" .. key .. "]|r ") or "|cffff6060[no key]|r ", current.cast, current.name,
-    REASON[current.reason] or current.reason, more > 0 and ("  +" .. more) or ""))
-  line:SetWidth(math.min(460, line.text:GetStringWidth() + 2 * Kit.CARD.pad + Kit.CARD.edge + 2))
-  line:Show()
+  local more = QueueCount() - ((who.reason ~= "group") and 1 or 0)
+  card.icon:SetTexture(SpellIcon(who.spell))
+  if who.reason == "group" then
+    card:SetAccent() -- (the theme's accent; gold for somebody who asked or buffed you)
+  else
+    card:SetAccent(1, 0.82, 0)
+  end
+  card:SetLines(BuffLabel(who.buff) .. " |cffffffff→|r |c" .. hex .. who.name .. "|r",
+    (REASON[who.reason] or who.reason) .. (more > 0 and (" · |cffffffff+" .. more .. " waiting|r") or ""),
+    key and ("Press |cffffd100" .. key .. "|r or click Buff") or "Click Buff, or set a key in /arl buff")
+  card:Show()
+end
+
+function F:Paint()
+  -- (one queued repaint after combat, however many came in it)
+  Secure:Run(PaintNow, "BuffBack.card")
 end
 
 function F:OnResetPosition()
-  PlaceLine()
+  Secure:Run(PlaceCard)
 end
 
 -------------------------------------------------------------------------------
@@ -1154,11 +1229,17 @@ function F:OnDisable()
   wipe(owed)
   wipe(asked)
   pending, current = nil, nil
-  if line then
-    line:Hide()
-  end
   -- (Secure:Run, not OutOfCombat: OutOfCombat drops work once the feature is off.)
-  Secure:Run(ReleaseButton)
+  Secure:Run(function()
+    if card then
+      card:Hide()
+      if secAttached and not F._active then
+        Secure:Detach("BuffBack", card, { "macrotext" })
+        secAttached = false
+      end
+    end
+    ReleaseButton()
+  end, "BuffBack.card")
 end
 
 function F:OnOptionChanged()

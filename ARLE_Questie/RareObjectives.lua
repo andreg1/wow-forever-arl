@@ -787,6 +787,17 @@ F.commands = {
     ARLE:SetOption(self.id, "manual", list)
     self:Print("stopped watching for " .. rest .. " (quest mobs are still watched while needed).")
   end },
+  { name = "removelast", help = "stops watching the last name you added", run = function(self)
+    local list = { unpack(self.db.manual or {}) }
+    local name = table.remove(list)
+    if not name then
+      self:Print("you haven't added any names (/arl rare add <name>).")
+      return
+    end
+    ARLE:SetOption(self.id, "manual", list)
+    self:Print("stopped watching for " .. name .. (#list > 0 and (" (" .. #list .. " added name"
+      .. (#list == 1 and "" or "s") .. " left)") or "") .. ".")
+  end },
   { name = "nameplates", help = "turns enemy nameplates on and raises their range", run = function(self)
     self:Nameplates()
   end },
