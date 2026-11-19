@@ -633,8 +633,12 @@ function F:SelfDue()
   end
   local lead = (self.db.selfMinutes or 0) * 60
   local level = Ask(UnitLevel, "player")
+  -- A paladin wears one of their own blessings at a time: with Kings on you,
+  -- Wisdom isn't missing (casting it would replace Kings).
+  local blessing = EXCLUSIVE and HasMyBlessing(auras) or nil
   for _, buff in ipairs(SELF_BUFFS) do
-    if self.db["self_" .. buff.key] and KnownRanks(buff) then
+    local other = blessing and not buff.selfOnly and blessing ~= buff
+    if self.db["self_" .. buff.key] and KnownRanks(buff) and not other then
       local left, id = SelfLeft(auras, buff)
       local due
       if left == nil then
@@ -1158,7 +1162,8 @@ local function PaintNow()
     reason = who.due == "missing" and "|cffff6060missing|r"
       or ("ends in |cffffffff" .. Clock((who.ends or GetTime()) - GetTime()) .. "|r")
   end
-  card:SetLines(BuffLabel(who.buff) .. " |cffffffff→|r " .. (who.reason == "self" and "|cffffffffyou|r"
+  -- (" on ": the game's fonts have no arrow glyph)
+  card:SetLines(BuffLabel(who.buff) .. " |cff9d9d9don|r " .. (who.reason == "self" and "|cffffffffyou|r"
     or ("|c" .. hex .. who.name .. "|r")),
     reason .. (more > 0 and (" · |cffffffff+" .. more .. " waiting|r") or ""),
     key and ("Press |cffffd100" .. key .. "|r or click Buff") or "Click Buff, or set a key in /arl buff")
@@ -1261,7 +1266,7 @@ function F:StatusLine()
   local key = Secure:BoundKey("BuffBack")
   local head = key and ("Key: " .. key) or "|cffff6060No key set|r (Key bindings > AddOns > Buff Back)"
   if current then
-    return head .. "  ·  next: " .. current.cast .. " → " .. (current.reason == "self" and "you" or current.name)
+    return head .. "  ·  next: " .. current.cast .. " on " .. (current.reason == "self" and "you" or current.name)
       .. " (" .. (REASON[current.reason] or "") .. ")"
   end
   return head .. "  ·  nobody to buff right now"
