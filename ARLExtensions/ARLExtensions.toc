@@ -2,7 +2,7 @@
 ## Title: Associação Rei Leão's Extensions
 ## Notes: One place to enable, disable and configure small extensions for the addons you already use. /arl
 ## Author: aredpanda, andreg1
-## Version: 0.10.2
+## Version: 0.10.3
 ## SavedVariables: ARLExtensionsDB
 ## SavedVariablesPerCharacter: ARLExtensionsCharDB
 ## OptionalDeps: EllesmereUI, ElvUI

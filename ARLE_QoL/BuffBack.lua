@@ -100,6 +100,9 @@ local F = {
       disabled = function(def) return not def.db.selfOn end },
     { key = "selfMissing", type = "boolean", label = "...and when one is missing", default = true, page = "self",
       cmd = "selfmissing", disabled = function(def) return not def.db.selfOn end },
+    { key = "selfSeconds", type = "range", label = "Hide the reminder after (seconds, 0 = keep it up)",
+      min = 0, max = 30, step = 1, default = 5, page = "self", cmd = "selfseconds",
+      disabled = function(def) return not def.db.selfOn end },
     { key = "selfChat", type = "boolean", label = "...also say it in chat (once each time)", default = false,
       page = "self", cmd = "selfchat", disabled = function(def) return not def.db.selfOn end },
 
@@ -585,6 +588,7 @@ end
 -------------------------------------------------------------------------------
 
 local selfSaid = {} -- [buff key] = what the chat line was last said for
+local selfShown = {} -- [buff key .. due] = GetTime() the card first showed it
 
 -- Seconds left on your own cast of it, false when it's on you from somebody
 -- else (or never ends), nil when it isn't on you at all.
@@ -659,6 +663,7 @@ function F:SelfDue()
       end
       if not due then
         selfSaid[buff.key] = nil -- renewed: the next time is said again
+        selfShown[buff.key .. "missing"], selfShown[buff.key .. "ending"] = nil, nil
       end
     end
   end
@@ -1133,9 +1138,25 @@ local function SpellIcon(id)
   return tex or 134400
 end
 
+-- Your own buff's reminder shows for selfSeconds, then the card steps aside
+-- (the key still casts it) until that buff's state changes.
+local function SelfTimedOut(who)
+  local secs = F.db.selfSeconds or 0
+  if who.reason ~= "self" or secs <= 0 then
+    return false
+  end
+  local k = who.buff.key .. who.due
+  local first = selfShown[k]
+  if not first then
+    selfShown[k] = GetTime()
+    return false
+  end
+  return GetTime() - first >= secs
+end
+
 local function PaintNow()
   local who = current
-  if not F._active or not F.db.display or not who then
+  if not F._active or not F.db.display or not who or SelfTimedOut(who) then
     if card then
       card:Hide()
     end
@@ -1311,6 +1332,7 @@ function F:OnEnable()
   wipe(resting)
   pending, current = nil, nil
   wipe(selfSaid)
+  wipe(selfShown)
   seenIds, baselined = {}, false
   knownCache, askIndex = nil, nil
   if type(self.db.grid) ~= "table" then
