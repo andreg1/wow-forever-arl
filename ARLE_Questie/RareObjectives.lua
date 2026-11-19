@@ -23,8 +23,10 @@
 -- a macro run by the player's key press may. So the scan key (the host's
 -- secure button ARLE_SecureRareScan, bound in Key Bindings > ARL Extensions)
 -- runs /cleartarget, /targetexact each active mob, then for a living hostile
--- target /tm 0 + /tm <marker> and /ping; nothing found: /targetlasttarget gives
--- your old target back; a corpse found: /cleartarget [dead] drops it. The same text goes into a character macro (QRareScan,
+-- living target /tm 0 + /tm <marker> and /ping; nothing found: no target
+-- (your old one isn't given back: the user's choice 2026-11-19, the clear and
+-- re-select flickered on every press); a corpse found: /cleartarget [dead]
+-- drops it. The same text goes into a character macro (QRareScan,
 -- made on request, kept up to date, ending with an optional line of yours,
 -- e.g. a mount): the button can't be /clicked from inside another macro.
 -- Macros hold 255 characters: names that don't fit are left out (the button
@@ -423,9 +425,7 @@ local function ScanText(limit, extra)
       -- No ping type: the contextual ping (attack on a hostile mob).
       tail[#tail + 1] = (SLASH_PING1 or "/ping") .. " " .. FOUND_PING
     end
-    tail[#tail + 1] = "/targetlasttarget [noexists]"
-    -- /targetexact can't skip corpses: a dead match is dropped here. (Last, so
-    -- /targetlasttarget above can't bring the corpse back.)
+    -- /targetexact can't skip corpses: a dead match is dropped here.
     tail[#tail + 1] = "/cleartarget [dead]"
   end
   if extra and extra ~= "" then
