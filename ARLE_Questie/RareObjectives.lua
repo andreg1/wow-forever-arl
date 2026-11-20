@@ -101,7 +101,8 @@ local F = {
   },
 }
 
-local watched = {}      -- [npcId] = { name, quests = {[questId] = title}, maps = {[uiMapId] = true} | nil }
+local watched = {}      -- [npcId] = { name, quests = {[questId] = title}, maps = {[uiMapId] = true} | nil, from }
+local zonesLoading = false -- a Rebuild found Questie's zone table still empty: another one follows
 local active = {}       -- [npcId] = entry (watched and in your area)
 local activeByName = {} -- [lowercase name] = { name, quests } (active + manual)
 local lastSeen = {}     -- [guid] = GetTime()
@@ -136,16 +137,57 @@ local function IsRareTarget(npcId, needed)
   return needed == 1 or IsRareRank(npcId)
 end
 
--- The NPC's maps (spawns and waypoints, ARLE.Lib.QuestPlaces), else the
--- quest's zone; nil when unknown (then it counts as everywhere).
+local function AreaMaps(areaId)
+  local uiMap = type(areaId) == "number" and areaId > 0 and Q.UiMapForArea(areaId)
+  return uiMap and { [uiMap] = true } or nil
+end
+
+-- Where a watched mob is, best source first, and which source it was:
+--   "spawns"  the NPC's spawns and waypoints (ARLE.Lib.QuestPlaces)
+--   "npc"     the NPC's own zoneID
+--   "quest"   the quest's zone (zoneOrSort)
+--   "giver"   where the quest's givers / turn-in stand: many mobs new in
+--             Forever have only a name in QuestieDB, and their quests no
+--             zone (2026-11-20: Withermaw, Bonesnout, Elder Shaman Bloodmane)
+-- nil + why when unknown (then it counts as everywhere): "loading" while
+-- Questie's zone table isn't filled yet (Rebuild runs again), "nodata".
 local function MapsFor(npcId, questId)
+  if not Q.ZoneReady() then
+    return nil, "loading"
+  end
   local maps = Lib.QuestPlaces.NpcMaps(npcId)
   if maps then
-    return maps
+    return maps, "spawns"
   end
-  local zone = QDB.Quest(questId, "zoneOrSort")
-  local uiMap = type(zone) == "number" and zone > 0 and Q.UiMapForArea(zone)
-  return uiMap and { [uiMap] = true } or nil
+  maps = AreaMaps(QDB.Npc(npcId, "zoneID"))
+  if maps then
+    return maps, "npc"
+  end
+  maps = AreaMaps(QDB.Quest(questId, "zoneOrSort"))
+  if maps then
+    return maps, "quest"
+  end
+  maps = {}
+  local any = false
+  for _, field in ipairs({ "startedBy", "finishedBy" }) do
+    local by = QDB.Quest(questId, field)
+    if type(by) == "table" then
+      for _, id in ipairs(type(by[1]) == "table" and by[1] or {}) do
+        for m in pairs(Lib.QuestPlaces.NpcMaps(id) or AreaMaps(QDB.Npc(id, "zoneID")) or {}) do
+          maps[m], any = true, true
+        end
+      end
+      for _, id in ipairs(type(by[2]) == "table" and by[2] or {}) do
+        for m in pairs(Lib.QuestPlaces.ObjectMaps(id) or {}) do
+          maps[m], any = true, true
+        end
+      end
+    end
+  end
+  if any then
+    return maps, "giver"
+  end
+  return nil, "nodata"
 end
 
 local function ItemName(itemId)
@@ -173,8 +215,15 @@ end
 local function Watch(npcId, questId, title)
   local entry = watched[npcId]
   if not entry then
-    entry = { name = QDB.Npc(npcId, "name") or ("NPC " .. npcId), quests = {}, maps = MapsFor(npcId, questId) }
+    entry = { name = QDB.Npc(npcId, "name") or ("NPC " .. npcId), quests = {} }
     watched[npcId] = entry
+  end
+  -- (a mob in several quests: the first quest that places it)
+  if not entry.maps then
+    entry.maps, entry.from = MapsFor(npcId, questId)
+    if entry.from == "loading" then
+      zonesLoading = true
+    end
   end
   entry.quests[questId] = title
 end
@@ -260,6 +309,7 @@ local UpdateMacro -- below
 
 local function Rebuild()
   wipe(watched)
+  zonesLoading = false
   if QDB.Ready() then
     for i = 1, C_QuestLog.GetNumQuestLogEntries() do
       local info = C_QuestLog.GetInfo(i)
@@ -284,6 +334,10 @@ local function Rebuild()
     end
   end
   UpdateMacro()
+  if zonesLoading then
+    F:Debug("Questie's zones aren't loaded yet: rebuilding in 5 s")
+    F:Debounce("rebuild", 5, Rebuild)
+  end
 end
 
 -------------------------------------------------------------------------------
@@ -774,11 +828,15 @@ F.commands = {
       any = true
       local state
       if not entry.maps then
-        state = "|cffffd100zone unknown, watched everywhere|r"
+        state = entry.from == "loading" and "|cffffd100Questie's zones still loading, watched everywhere for now|r"
+          or "|cffffd100zone unknown (no location in Questie's data), watched everywhere|r"
       elseif active[npcId] then
         state = "|cff40ff40watching here|r"
       else
         state = "|cffaaaaaanot in this zone|r"
+      end
+      if entry.from == "giver" then
+        state = state .. " |cffaaaaaa(zone of the quest giver)|r"
       end
       print(string.format("   %s (%d)%s - %s", entry.name, npcId, QuestText(entry), state))
     end
