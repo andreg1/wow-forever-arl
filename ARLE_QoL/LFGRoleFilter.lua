@@ -10,7 +10,8 @@
 -- No role checked = no filter.
 --   class filter: a solo player is kept when their class is ticked (none
 --   ticked = any class). Groups aren't filtered by class: what a group
---   lists is the roles it still needs.
+--   lists is the roles it still needs. "Only level 60" keeps solo players at
+--   the level cap and groups whose leader is (an unreadable level is left out).
 --
 -- Taint: when addon code calls into the LFG window (opening it, picking an
 -- activity, touching its list), the window gets tainted and searches hang or
@@ -66,6 +67,8 @@ local F = {
     { key = "roleDps", type = "boolean", label = "Damage (and groups that need it)", default = false, cmd = "dps" },
     { key = "showPlayers", type = "boolean", label = "Solo players", default = true, cmd = "players" },
     { key = "showGroups", type = "boolean", label = "Groups", default = true, cmd = "groups" },
+    { key = "maxLevelOnly", type = "boolean", label = "Only level 60 (solo players, and groups led by one)",
+      default = false, cmd = "60" },
     { type = "header", label = "Classes (solo players; none ticked = any)" },
   },
 }
@@ -326,7 +329,17 @@ local function AnyClassChecked()
   return false
 end
 
+-- The level cap (60 on Forever; the client's own number when it has one).
+local function MaxLevel()
+  local n = (Lib.Call(rawget(_G, "GetMaxPlayerLevel")))
+  return type(n) == "number" and n > 0 and n or 60
+end
+
 local function Passes(e)
+  -- (a level that can't be read counts as not 60 while "only 60" is on)
+  if F.db.maxLevelOnly and not (type(e.level) == "number" and e.level >= MaxLevel()) then
+    return false
+  end
   -- (a player whose class can't be read is left out while a class is ticked)
   if e.solo and AnyClassChecked() and not (e.class and ClassOn(e.class)) then
     return false
@@ -550,7 +563,9 @@ local function Redraw()
   elseif #results == 0 then
     statusText:SetText("Search in the Group Browser to see results.")
   elseif #shown == 0 then
-    statusText:SetText(AnyClassChecked() and "No one matches the ticked roles and classes."
+    statusText:SetText(F.db.maxLevelOnly and ("No level " .. MaxLevel() .. " matches the ticked roles"
+      .. (AnyClassChecked() and " and classes." or "."))
+      or AnyClassChecked() and "No one matches the ticked roles and classes."
       or "No one matches the ticked roles.")
   else
     statusText:SetText("")
@@ -577,6 +592,7 @@ local function Redraw()
   if panel.playersCB then
     panel.playersCB:SetChecked(F.db.showPlayers ~= false)
     panel.groupsCB:SetChecked(F.db.showGroups ~= false)
+    panel.maxCB:SetChecked(F.db.maxLevelOnly == true)
     panel.autoCB.tank:SetChecked(auto.tank)
     panel.autoCB.healer:SetChecked(auto.healer)
   end
@@ -873,12 +889,17 @@ local function CreatePanel()
     classButtons[token] = b
   end
 
+  panel.maxCB = Check("Only level " .. MaxLevel(), 6, -110, function(v)
+    ARLE:SetOption(F.id, "maxLevelOnly", v)
+  end, "Solo players at level " .. MaxLevel() .. ", and groups whose leader is. A level the browser doesn't "
+    .. "show counts as not " .. MaxLevel() .. ".")
+
   statusText = Kit.Text(panel, "GameFontDisableSmall")
-  statusText:SetPoint("TOPLEFT", 10, -114)
-  statusText:SetPoint("TOPRIGHT", -10, -114)
+  statusText:SetPoint("TOPLEFT", 10, -136)
+  statusText:SetPoint("TOPRIGHT", -10, -136)
 
   scroll = CreateFrame("ScrollFrame", nil, panel)
-  scroll:SetPoint("TOPLEFT", 8, -130)
+  scroll:SetPoint("TOPLEFT", 8, -152)
   scroll:SetPoint("BOTTOMRIGHT", -8, 8)
   scroll:EnableMouseWheel(true)
   content = CreateFrame("Frame", nil, scroll)
@@ -1085,6 +1106,7 @@ function F:GetStatus()
   end
   return "Active · roles: " .. (#r > 0 and table.concat(r, ", ") or "any")
     .. " · classes: " .. (#c > 0 and table.concat(c, ", ") or "any")
+    .. (self.db.maxLevelOnly and (" · level " .. MaxLevel() .. " only") or "")
     .. ((auto.tank or auto.healer) and " · auto-invite on" or "")
 end
 
