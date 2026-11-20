@@ -152,6 +152,11 @@ end
 -- nil + why when unknown (then it counts as everywhere): "loading" while
 -- Questie's zone table isn't filled yet (Rebuild runs again), "nodata".
 local function MapsFor(npcId, questId)
+  if not Q.Ready() then
+    -- (Questie missing, or only its "client not supported" toc loaded: an
+    -- update without a _Camelot toc, 2026-11-18 and 2026-11-20)
+    return nil, "noquestie"
+  end
   if not Q.ZoneReady() then
     return nil, "loading"
   end
@@ -829,6 +834,8 @@ F.commands = {
       local state
       if not entry.maps then
         state = entry.from == "loading" and "|cffffd100Questie's zones still loading, watched everywhere for now|r"
+          or entry.from == "noquestie" and "|cffff6060Questie isn't running (check it's enabled and loads on this "
+            .. "client), watched everywhere|r"
           or "|cffffd100zone unknown (no location in Questie's data), watched everywhere|r"
       elseif active[npcId] then
         state = "|cff40ff40watching here|r"
