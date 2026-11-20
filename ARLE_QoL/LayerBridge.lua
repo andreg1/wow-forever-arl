@@ -42,6 +42,10 @@
 --     their answers are still ours (we don't press LayerSwap's button).
 --  5. Leaving the host's group once the read layer changes, after an ask of
 --     ours (AutoLayer doesn't leave by itself; LayerSwap does).
+--  6. A history of the layers this character has been on (6 h, with the host
+--     who moved us): our LayerSwap asks name them all "not <id>", so a hop
+--     always goes to a new layer; a History click asks "want <id>" instead,
+--     its host first. AutoLayer's "inv layer" line can't carry either.
 -- Never touches either addon's tables or frames; InviteUnit / LeaveParty /
 -- SendWho are the same calls both addons make.
 local ADDON = ...
@@ -67,6 +71,8 @@ local ASK_GAP = 10 -- s between two asks of ours
 local LEAVE_AFTER = 4
 local ASK_TTL = 180 -- s an ask of ours stays "ours" for the leave-after-move
 local LOG_MAX = 30
+local HISTORY_TTL, HISTORY_MAX = 6 * 3600, 12 -- layers we've been on: avoided for 6 h, 12 at most
+local LINE_MAX = 250 -- an addon message holds 255 characters
 
 local F = {
   id = "LayerBridge",
@@ -89,6 +95,11 @@ local F = {
     { key = "host", type = "boolean", label = "Host for the other addon's users", default = false,
       desc = "Off: ARL never invites anyone or answers anyone's ask. On, and only while AutoLayer or LayerSwap "
         .. "hosts too: answer LayerSwap users (AutoLayer hosting) or invite AutoLayer users (LayerSwap hosting)." },
+    { key = "avoidVisited", type = "boolean", label = "Don't go back to layers I've been on", default = true,
+      cmd = "avoid",
+      desc = "LayerSwap asks also name the layers you've been on in the last 6 hours, so only hosts on a new "
+        .. "layer invite. To go back to one, click it in the box's History list. (AutoLayer's \"inv layer\" "
+        .. "line can't say which layers to avoid.)" },
     { key = "leave", type = "boolean", label = "Leave the group after the move", default = true,
       desc = "After an ask of ours, leave the host's group once the layer has changed." },
     { key = "button", type = "boolean", label = "Show the LayerSwap / AutoLayer buttons", default = true,
@@ -246,6 +257,77 @@ function F:ScanUnits()
 end
 
 -------------------------------------------------------------------------------
+-- Layers we've been on (per character: layers are per realm), newest first:
+--   char.history[i] = { id = "<server>-<zoneUID>", zone = uiMapID,
+--     at = time() last seen there, host = "First Surname" (who brought us) }
+-- Our LayerSwap asks name them all as "not <id>", so only hosts on a new layer
+-- invite; clicking one in the History list asks for it ("want <id>").
+-------------------------------------------------------------------------------
+
+-- The history without entries older than HISTORY_TTL; the layer we're on
+-- counts as seen now.
+function F:History()
+  local list = type(self.char.history) == "table" and self.char.history or {}
+  self.char.history = list
+  local now = time()
+  for i = #list, 1, -1 do
+    local e = list[i]
+    if type(e) ~= "table" or type(e.id) ~= "string" then
+      table.remove(list, i)
+    else
+      if layer.id and SameLayer(e.id, layer.id) then
+        e.at = now
+      end
+      if type(e.at) ~= "number" or now - e.at > HISTORY_TTL then
+        table.remove(list, i)
+      end
+    end
+  end
+  return list
+end
+
+-- Records the layer we're on (or have just moved to, brought by host).
+function F:NoteLayer(id, host)
+  if type(id) ~= "string" then
+    return
+  end
+  local list = self:History()
+  local e
+  for i, other in ipairs(list) do
+    if SameLayer(other.id, id) then
+      e = table.remove(list, i)
+      break
+    end
+  end
+  e = e or {}
+  e.id, e.zone, e.at = id, ZoneMap() or e.zone, time()
+  e.host = host or e.host
+  table.insert(list, 1, e)
+  for i = #list, HISTORY_MAX + 1, -1 do
+    list[i] = nil
+  end
+  self:Debug("history: layer %s%s (%d kept)", Key(id), host and (" via " .. host) or "", #list)
+  self:PaintHistory()
+end
+
+-- The layers an ask should name as "not <id>": ours first, then the history
+-- (when "Don't go back to layers I've been on" is on), newest first.
+function F:AvoidList()
+  local out = {}
+  if layer.id then
+    out[1] = layer.id
+  end
+  if self.db.avoidVisited ~= false then
+    for _, e in ipairs(self:History()) do
+      if not SameLayer(e.id, layer.id) then
+        out[#out + 1] = e.id
+      end
+    end
+  end
+  return out
+end
+
+-------------------------------------------------------------------------------
 -- LayerSwap's ask tag: "<LS 1429 not 7088-2 not 6990-4 48.2,42.5>"
 -------------------------------------------------------------------------------
 
@@ -265,23 +347,40 @@ local function ParseTag(msg)
   }
 end
 
-local function AskLine()
+-- want: the one layer to be invited to (a History click); otherwise every
+-- layer in avoids is named "not <id>", as many as fit in one message.
+local function AskLine(want, avoids)
   local parts = { "<LS" }
   local zone = ZoneMap()
   if zone then
     parts[#parts + 1] = tostring(zone)
   end
-  if layer.id then
-    parts[#parts + 1] = "not " .. layer.id
-  end
+  local pos
   if zone and C_Map.GetPlayerMapPosition then
     local ok, pos = pcall(C_Map.GetPlayerMapPosition, zone, "player")
     if ok and pos and not Secret(pos) then
       local okXY, x, y = pcall(pos.GetXY, pos)
       if okXY and type(x) == "number" and type(y) == "number" and x > 0 and y > 0 then
-        parts[#parts + 1] = string.format("%.1f,%.1f", x * 100, y * 100)
+        pos = string.format("%.1f,%.1f", x * 100, y * 100)
       end
     end
+  end
+  if want then
+    parts[#parts + 1] = "want " .. want
+  else
+    -- "inv layer " + the parts + " " + position + ">"
+    local len = 10 + #table.concat(parts, " ") + (pos and #pos + 1 or 0) + 1
+    for _, id in ipairs(avoids or {}) do
+      local add = " not " .. id
+      if len + #add > LINE_MAX then
+        break
+      end
+      parts[#parts + 1] = "not " .. id
+      len = len + #add
+    end
+  end
+  if pos then
+    parts[#parts + 1] = pos
   end
   return "inv layer " .. table.concat(parts, " ") .. ">"
 end
@@ -540,7 +639,8 @@ end
 
 function F:Summary(r)
   local parts = { r.pool == "autolayer" and "asked AutoLayer hosts"
-    or (r.pool == "layerswap" and "asked LayerSwap hosts" or "not asked") }
+    or (r.pool == "layerswap" and (r.want and ("asked LayerSwap hosts for layer " .. r.want) or "asked LayerSwap hosts")
+      or "not asked") }
   if r.pool == "autolayer" then
     -- nothing to say about a search: none was made
   elseif r.whoFound == nil then
@@ -771,9 +871,42 @@ function F:Asked()
   lastAsk = { at = GetTime(), layer = layer.id }
 end
 
+-- A new ask of ours. target (a History click: { id, host }) makes it a
+-- "want <id>" ask, with the host who brought us there asked first.
+function F:NewAsk(zone, via, target)
+  local p = { at = GetTime(), zone = zone, layer = layer.id, queue = {}, sent = 0, via = via, heard = 0, hosts = 0,
+    want = target and target.id or nil, line = AskLine(target and target.id, self:AvoidList()) }
+  local host = target and Str(target.host)
+  if host and host ~= MyName() then
+    local e = self:Book()[host]
+    p.queue[1] = type(e) == "table" and Str(e.from) or host
+  end
+  return p
+end
+
+-- Whether name is already in the ask's queue.
+local function Queued(p, name)
+  local key = Short(name)
+  for _, q in ipairs(p.queue) do
+    if Short(q) == key then
+      return true
+    end
+  end
+  return false
+end
+
 -- forced: "layerswap" or "autolayer" from the pad's two buttons; otherwise
--- (/arl layer ask, AutoLayer's hop button) F:Pool decides.
-function F:Ask(via, forced)
+-- (/arl layer ask, AutoLayer's hop button) F:Pool decides. target: a layer
+-- from the History list ({ id, host }), asked for by LayerSwap hosts only.
+function F:Ask(via, forced, target)
+  if target then
+    forced = "layerswap"
+    self:ScanUnits()
+    if SameLayer(target.id, layer.id) then
+      self:Print("you're already on that layer.")
+      return
+    end
+  end
   if not self.db.layerswap and not self.db.autolayer then
     self:Print("\"Work with LayerSwap users\" and \"Work with AutoLayer users\" are both off.")
     return
@@ -788,6 +921,7 @@ function F:Ask(via, forced)
     return
   end
   self:StartRun(via)
+  run.want = target and Key(target.id) or nil
   self:ScanUnits()
   self:Step("press (%s): zone %s, your layer %s, in a group: %s, AutoLayer %s, LayerSwap %s", via,
     tostring(ZoneMap()), layer.id and Key(layer.id) or "unknown", tostring(IsInGroup()),
@@ -857,7 +991,10 @@ function F:Ask(via, forced)
   end
   -- As LayerSwap: the ask names the layer you leave, so hosts on it stay out.
   -- Without it they'd invite you for nothing; read it first.
-  if not layer.id then
+  if target then
+    self:Step("asking for layer %s (from the history)%s", Key(target.id),
+      Str(target.host) and (", " .. target.host .. " first") or "")
+  elseif not layer.id then
     run.skipWho = "LayerSwap users not asked: your layer isn't read yet"
     self:Step(run.skipWho)
     self:Print("reading your layer first: target or mouse over a creature, then press again.")
@@ -877,7 +1014,7 @@ function F:Ask(via, forced)
   if ago and ago < SEARCH_GAP then
     -- No search (the server would refuse it), but the LayerSwap hosts we
     -- already know can still be asked directly.
-    local n = self:AskKnown(zone, via)
+    local n = self:AskKnown(zone, via, target)
     if n > 0 then
       self:Asked()
     end
@@ -896,8 +1033,8 @@ function F:Ask(via, forced)
   end
   local rec = { at = now, heard = 0 }
   searched[zone] = rec
-  ask = { at = now, zone = zone, layer = layer.id, line = AskLine(), queue = {}, sent = 0, via = via,
-    heard = 0, hosts = 0, rec = rec }
+  ask = self:NewAsk(zone, via, target)
+  ask.rec = rec
   stats.asked = stats.asked + 1
   if C_FriendList.SetWhoToUi then
     pcall(C_FriendList.SetWhoToUi, true)
@@ -933,7 +1070,8 @@ function F:Ask(via, forced)
   ask.whoAt = now
   self:Asked()
   self:Step("search sent (%s): %s; ask line %s", how, text, ask.line)
-  Log("ask", via, zoneName, layer.id and ("leaving " .. Key(layer.id)) or "layer unknown")
+  Log("ask", via, zoneName, target and ("for " .. Key(target.id))
+    or (layer.id and ("leaving " .. Key(layer.id)) or "layer unknown"))
   local mine = ask
   self:After(WHO_WAIT, function(def)
     if mine.whoAt then
@@ -1010,7 +1148,7 @@ function F:OnWho()
   end
   for _, list in ipairs({ hosts, known, here, rest, mates }) do
     for _, full in ipairs(list) do
-      if #p.queue < ASK_MAX then
+      if #p.queue < ASK_MAX and not Queued(p, full) then
         p.queue[#p.queue + 1] = full
       end
     end
@@ -1045,7 +1183,7 @@ end
 
 -- Asks the LayerSwap hosts we know (newest first) without a search. Only one
 -- in our zone can move us; the others just answer "heard". Returns how many.
-function F:AskKnown(zone, via)
+function F:AskKnown(zone, via, target)
   local list = {}
   for key, e in pairs(self:Book()) do
     local away = type(e) == "table" and type(e.offline) == "number" and time() - e.offline < OFFLINE_FOR
@@ -1056,16 +1194,18 @@ function F:AskKnown(zone, via)
       list[#list + 1] = { key = key, at = e.at or 0, to = e.from or key }
     end
   end
-  if #list == 0 then
+  local p = self:NewAsk(zone, via, target)
+  if #list == 0 and #p.queue == 0 then
     return 0
   end
   table.sort(list, function(a, b)
     return a.at > b.at
   end)
-  ask = { at = GetTime(), zone = zone, layer = layer.id, line = AskLine(), queue = {}, sent = 0, via = via,
-    heard = 0, hosts = 0 }
+  ask = p
   for i = 1, math.min(#list, KNOWN_MAX) do
-    ask.queue[i] = list[i].to
+    if not Queued(p, list[i].to) then
+      p.queue[#p.queue + 1] = list[i].to
+    end
   end
   local n = #ask.queue
   self:Send(ask)
@@ -1243,8 +1383,11 @@ end
 -- skips an ask that names the layer we leave: it can't rule out standing on
 -- it. When no invite has come, each such host gets the ask once more without
 -- that layer, and then invites (LayerSwap does the same).
+-- That re-ask names no layer at all, so it can bring us back to one in the
+-- history; it's LayerSwap's own trade-off (else those hosts never invite).
+-- Not for a "want" ask: a host that can't read its layer can't be on it.
 function F:Anyway(p)
-  if ask ~= p or (run and #run.invites > 0) or IsInGroup() then
+  if ask ~= p or p.want or (run and #run.invites > 0) or IsInGroup() then
     return
   end
   -- A host known to stand on another layer gets until ANYWAY_LATE to invite
@@ -1343,6 +1486,22 @@ end
 -------------------------------------------------------------------------------
 
 local joined -- { at, layer }: we joined someone's group while our ask was fresh
+local inviter -- { at, name }: the last party invite during a press
+
+-- The host who moved us: our group's leader, else the last invite's sender.
+local function HostName()
+  for i = 1, 4 do
+    local unit = "party" .. i
+    local ok, lead = pcall(UnitIsGroupLeader, unit)
+    if ok and lead == true and not Secret(lead) then
+      local name = ARLE.Lib.UnitFullName(unit)
+      if Str(name) then
+        return Short(name)
+      end
+    end
+  end
+  return inviter and GetTime() - inviter.at < ASK_TTL and Short(inviter.name) or nil
+end
 
 function F:OnGroupJoined()
   if lastAsk and GetTime() - lastAsk.at < ASK_TTL and not UnitIsGroupLeader("player") then
@@ -1352,6 +1511,8 @@ function F:OnGroupJoined()
 end
 
 function F:OnLayerChanged(was)
+  local moved = joined and GetTime() - joined.at <= ASK_TTL and IsInGroup()
+  self:NoteLayer(layer.id, moved and HostName() or nil)
   if not joined or not self.db.leave then
     return
   end
@@ -1399,8 +1560,10 @@ end
 -- A Kit.Card (every ARL popup's look): two buttons on top, two lines under them.
 local function BuildPad()
   local C = Kit.CARD
-  local f = Kit.Card(F, { width = 230, move = { y = -220, secure = true } })
-  f:SetHeight(64)
+  local f = Kit.Card(F, { width = 230, move = { y = -220, secure = true, onMoved = function()
+    F:PlaceHistory()
+  end } })
+  f:SetHeight(64 + C.button + 4)
   placePad = f.place
   -- Two buttons, one per pool. LayerSwap: a plain button (its click is the
   -- hardware event /who needs). AutoLayer: the host's secure macro button,
@@ -1438,9 +1601,18 @@ local function BuildPad()
   -- (the card's own line, moved under the buttons and centred)
   f.text:SetFontObject(GameFontHighlightSmall)
   f.text:ClearAllPoints()
-  f.text:SetPoint("BOTTOMLEFT", C.pad + C.edge, C.pad - 2)
-  f.text:SetPoint("BOTTOMRIGHT", -C.pad, C.pad - 2)
+  f.text:SetPoint("BOTTOMLEFT", C.pad + C.edge, C.pad + C.button + 2)
+  f.text:SetPoint("BOTTOMRIGHT", -C.pad, C.pad + C.button + 2)
   f.text:SetJustifyH("CENTER")
+  -- The layers we've been on, in their own card (see F:ToggleHistory).
+  f.hist = f:AddButton("History", 90, function()
+    F:ToggleHistory()
+  end)
+  F:Script(f.hist, "OnEnter", function(self)
+    Kit.SimpleTooltip(self, "Layers you've been on", "The layers you've been on in the last 6 hours. The "
+      .. "LayerSwap button skips them all; click one in the list to go back to it.")
+  end)
+  F:Script(f.hist, "OnLeave", GameTooltip_Hide)
   pad = f
 end
 
@@ -1553,6 +1725,156 @@ function F:PadText()
   end, "LayerBridge.al")
   pad.ls:SetEnabled(self.db.layerswap and true or false)
   pad.text:SetText(top .. "\n|cffaaaaaa" .. al .. "|r")
+  pad.hist:SetText(string.format("History (%d)", #self:History()))
+end
+
+-------------------------------------------------------------------------------
+-- The History list: its own card under the box (not parented or anchored to
+-- the box, which holds a secure button, so this one stays usable in combat).
+-------------------------------------------------------------------------------
+
+local hist
+local rowEntry = setmetatable({}, { __mode = "k" }) -- row button -> history entry
+local clearArmed = 0
+local ROW_H = 18
+
+local function Ago(at)
+  local s = math.max(0, time() - (at or time()))
+  if s < 60 then
+    return "just now"
+  elseif s < 3600 then
+    return string.format("%d min ago", math.floor(s / 60))
+  end
+  return string.format("%d h %d min ago", math.floor(s / 3600), math.floor(s % 3600 / 60))
+end
+
+local function ZoneName(id)
+  local ok, info = pcall(C_Map.GetMapInfo, id or 0)
+  return ok and type(info) == "table" and Str(info.name) or nil
+end
+
+local function BuildHistory()
+  local C = Kit.CARD
+  hist = Kit.Card(F, { width = 280 })
+  hist:SetClampedToScreen(true)
+  hist.rows = {}
+  hist.rowWidth = 280 - 2 * C.pad - C.edge
+  hist:AddButton("Close", 52, function()
+    hist:Hide()
+  end)
+  -- Two clicks (the "armed" pattern): the first only asks "Sure?".
+  hist.clear = hist:AddButton("Clear", 52, function()
+    if GetTime() > clearArmed then
+      clearArmed = GetTime() + 3
+      hist.clear:SetText("Sure?")
+      F:After(3.1, F.PaintHistory)
+      return
+    end
+    clearArmed = 0
+    F.char.history = {}
+    F:Print("layer history cleared.")
+    F:NoteLayer(layer.id)
+    F:PaintHistory()
+  end)
+end
+
+local function Row(i)
+  local r = hist.rows[i]
+  if r then
+    return r
+  end
+  r = Kit.SmallButton(hist, "", hist.rowWidth)
+  r:SetHeight(ROW_H - 2)
+  r:SetPoint("TOPLEFT", hist.sub, "BOTTOMLEFT", 0, -4 - (i - 1) * ROW_H)
+  local fs = r:GetFontString()
+  if fs then
+    fs:ClearAllPoints()
+    fs:SetPoint("LEFT", 6, 0)
+    fs:SetPoint("RIGHT", -6, 0)
+    fs:SetJustifyH("LEFT")
+  end
+  F:Script(r, "OnClick", function(self)
+    local e = rowEntry[self]
+    if e then
+      F:Ask("history", nil, e)
+    end
+  end)
+  F:Script(r, "OnEnter", function(self)
+    local e = rowEntry[self]
+    if e then
+      Kit.SimpleTooltip(self, "Layer " .. tostring(Key(e.id)), "Asks only LayerSwap hosts on this layer"
+        .. (Str(e.host) and (", " .. e.host .. " first") or "") .. ". Accept the invite that comes.")
+    end
+  end)
+  F:Script(r, "OnLeave", GameTooltip_Hide)
+  hist.rows[i] = r
+  return r
+end
+
+-- Under the box, by coordinates; mid-screen when the box isn't shown.
+function F:PlaceHistory()
+  if not hist then
+    return
+  end
+  hist:ClearAllPoints()
+  local x = pad and pad:IsShown() and pad:GetCenter()
+  local bottom = pad and pad:IsShown() and pad:GetBottom()
+  if x and bottom then
+    local s = pad:GetEffectiveScale() / hist:GetEffectiveScale()
+    hist:SetPoint("TOP", UIParent, "BOTTOMLEFT", x * s, bottom * s - 4)
+  else
+    hist:SetPoint("CENTER", UIParent, "CENTER", 0, -120)
+  end
+end
+
+function F:PaintHistory()
+  if not hist or not hist:IsShown() then
+    return
+  end
+  local list = self:History()
+  if GetTime() > clearArmed then
+    hist.clear:SetText("Clear")
+  end
+  hist.clear:SetEnabled(#list > 0)
+  for i, e in ipairs(list) do
+    local r = Row(i)
+    rowEntry[r] = e
+    local here = SameLayer(e.id, layer.id)
+    local parts = { "Layer " .. tostring(Key(e.id)) }
+    parts[#parts + 1] = ZoneName(e.zone)
+    parts[#parts + 1] = Str(e.host) and ("via " .. e.host) or nil
+    parts[#parts + 1] = here and "|cff80ff80you're here|r" or Ago(e.at)
+    r:SetText(table.concat(parts, " · "))
+    r:SetEnabled(not here)
+    r:Show()
+  end
+  for i = #list + 1, #hist.rows do
+    hist.rows[i]:Hide()
+    rowEntry[hist.rows[i]] = nil
+  end
+  hist.extra = #list > 0 and (4 + #list * ROW_H) or 0
+  local sub
+  if #list == 0 then
+    sub = "None yet: your layer is noted once it's read."
+  elseif self.db.avoidVisited ~= false then
+    sub = "The LayerSwap button skips these for 6 hours. Click one to go back."
+  else
+    sub = "Click one to go back. (\"Don't go back to layers I've been on\" is off.)"
+  end
+  hist:SetLines("Layers you've been on", sub)
+end
+
+function F:ToggleHistory()
+  if hist and hist:IsShown() then
+    hist:Hide()
+    return
+  end
+  if not hist then
+    BuildHistory()
+  end
+  self:PlaceHistory()
+  hist:Show()
+  self:PaintHistory()
 end
 
 -- Shown while on, wanted and outside instances; checked again when it runs,
@@ -1564,6 +1886,9 @@ end
 function F:Paint()
   -- The pad holds a secure button: shown and hidden out of combat only.
   if not self._active or not self.db.button or InInstance() then
+    if hist then
+      hist:Hide()
+    end
     if pad then
       ARLE.Secure:Run(SyncPad, "LayerBridge.pad")
     end
@@ -1683,6 +2008,7 @@ function F:OnEnable()
   self:Ticker(2, function(def)
     def:ScanUnits()
     def:PadText()
+    def:PaintHistory()
   end)
   for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA" }) do
     self:On(e, function(def)
@@ -1737,9 +2063,10 @@ function F:OnEnable()
       end
     end)
   end
-  self:On("PARTY_INVITE_REQUEST", function(def, _, inviter)
-    local who = Str(inviter) or "?"
+  self:On("PARTY_INVITE_REQUEST", function(def, _, from)
+    local who = Str(from) or "?"
     if run then
+      inviter = { at = GetTime(), name = who }
       run.invites[#run.invites + 1] = who
       def.char.invitedAt = GetTime()
       if run.pool == "autolayer" then
@@ -1780,7 +2107,10 @@ function F:OnDisable()
   end)
   Unhush()
   self:ChatFilter(false)
-  ask, joined, lastAsk = nil, nil, nil
+  ask, joined, lastAsk, inviter = nil, nil, nil, nil
+  if hist then
+    hist:Hide()
+  end
   self:LeaveLayer()
   if pad then
     ARLE.Secure:Run(SyncPad, "LayerBridge.pad")
@@ -1797,6 +2127,12 @@ function F:ReportDetails()
       tostring(ZoneMap()), tostring(LayerChannelId() or "not joined"), tostring(Restricted()),
       pad and (pad:IsShown() and "shown" or "hidden") or "not built"),
   }
+  local history = self:History()
+  out[#out + 1] = string.format("history (%d, avoided: %s):", #history, tostring(self.db.avoidVisited ~= false))
+  for _, e in ipairs(history) do
+    out[#out + 1] = string.format("  %s zone %s, %s, via %s", tostring(e.id), tostring(e.zone),
+      Ago(e.at), tostring(e.host or "-"))
+  end
   if lastRun then
     out[#out + 1] = "last swap:"
     for _, l in ipairs(lastRun.lines) do
@@ -1820,8 +2156,10 @@ function F:GetStatus()
   if #found == 0 then
     found[1] = "On its own"
   end
-  return string.format("%s · layer %s · answered %d, invites %d, asks %d (%d heard, %d hosts)",
+  local avoid = #self:AvoidList() - (layer.id and 1 or 0)
+  return string.format("Active · %s · layer %s · %s · answered %d, invites %d, asks %d (%d heard, %d hosts)",
     table.concat(found, " + "), layer.id and Key(layer.id) or "unknown (look at a creature)",
+    self.db.avoidVisited ~= false and string.format("avoiding %d visited layers", avoid) or "visited layers allowed",
     stats.answered, stats.handed + stats.invited, stats.asked, stats.heard, stats.hosts)
 end
 
