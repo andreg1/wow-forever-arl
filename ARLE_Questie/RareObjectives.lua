@@ -29,8 +29,10 @@
 -- drops it. The same text goes into a character macro (QRareScan,
 -- made on request, kept up to date, ending with an optional line of yours,
 -- e.g. a mount): the button can't be /clicked from inside another macro.
--- Macros hold 255 characters: names that don't fit are left out (the button
--- keeps them all). Edits wait for combat to end.
+-- Macros hold 255 characters, and so does the button's macrotext (the game
+-- cuts it there: 0.10.5's longer closing lines got cut mid "[exists" and the
+-- key said "Unknown macro option"). So names that don't fit are left out of
+-- both, never the closing lines. Edits wait for combat to end.
 local ADDON = ...
 local ARLE = _G.ARLExtensions
 if not ARLE then
@@ -409,11 +411,27 @@ end
 -- The scan text for limit characters (nil when there's nothing to scan for),
 -- and how many names didn't fit.
 local function ScanText(limit, extra)
-  local names = {}
-  for _, entry in pairs(activeByName) do
-    names[#names + 1] = entry.name
+  -- Names added by hand (/arl rare add) come first, in the order added, so
+  -- they're the last to be left out when the 255 characters run short; then
+  -- the quest mobs, by name.
+  local names, taken = {}, {}
+  for _, name in ipairs(F.db.manual or {}) do
+    local key = type(name) == "string" and name:lower()
+    if key and activeByName[key] and not taken[key] then
+      taken[key] = true
+      names[#names + 1] = activeByName[key].name
+    end
   end
-  table.sort(names)
+  local rest = {}
+  for key, entry in pairs(activeByName) do
+    if not taken[key] then
+      rest[#rest + 1] = entry.name
+    end
+  end
+  table.sort(rest)
+  for _, name in ipairs(rest) do
+    names[#names + 1] = name
+  end
   local tail = {}
   local marker = tonumber(F.db.marker) or 0
   if #names > 0 then
@@ -482,7 +500,13 @@ local function IsScanBody(body)
 end
 
 function UpdateMacro()
-  Secure:SetAttributes("RareScan", { macrotext = F._active and (ScanText(1000)) or "" })
+  local text, cut = ScanText(MACRO_LIMIT)
+  Secure:SetAttributes("RareScan", { macrotext = F._active and text or "" })
+  if F._active and (cut or 0) > 0 and cut ~= lastDropped then
+    F:Print(string.format("%d watched mob%s didn't fit in the scan (255 characters); they're still watched and "
+      .. "alerted on. /arl rare macro shows what the scan runs.", cut, cut == 1 and "" or "s"))
+  end
+  lastDropped = F._active and cut or 0
   if InCombatLockdown() then
     macroPending = true
     return
@@ -500,11 +524,9 @@ function UpdateMacro()
     else
       F.char.macroBody = body
     end
-    if (dropped or 0) > 0 and dropped ~= lastDropped then
-      F:Print(string.format("%d watched mob%s didn't fit in the %s macro (255 characters); the scan key still has "
-        .. "them all.", dropped, dropped == 1 and "" or "s", name))
+    if (dropped or 0) > (cut or 0) then
+      F:Debug("%d watched mobs didn't fit in %s (its extra line takes room)", dropped, name)
     end
-    lastDropped = dropped or 0
   end
 end
 
@@ -807,13 +829,17 @@ F.commands = {
     self:MakeMacro()
   end },
   { name = "macro", help = "shows what the scan runs", run = function(self)
-    local text = ScanText(1000) or ""
+    local text, cut = ScanText(MACRO_LIMIT)
+    text = text or ""
     if text == "" then
       self:Print("the scan has nothing to look for (no watched mob here; /arl rare list).")
     else
       self:Print("the scan runs:")
       for line in text:gmatch("[^\n]+") do
         print("   " .. line)
+      end
+      if (cut or 0) > 0 then
+        print(string.format("   (%d more watched mob%s didn't fit in 255 characters)", cut, cut == 1 and "" or "s"))
       end
     end
     if not Macro:Ours(self.char.macro, IsScanBody) then

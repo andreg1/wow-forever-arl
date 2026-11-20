@@ -2,7 +2,7 @@
 ## Title: ARL Extensions: DungeonJournal
 ## Notes: Dungeon Helper: bosses and their loot (BiS for you and your ARL partymates), quests with their chains, and clear times with a guild leaderboard.
 ## Author: aredpanda, andreg1
-## Version: 0.10.7
+## Version: 0.10.8
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
 ## OptionalDeps: ForeverDungeonJournal, ForeverLevelingBiS, QuestieDB
