@@ -8,6 +8,9 @@
 --   a group is kept when it still misses one (5-player activities: 1 tank,
 --   1 healer, 3 damage; larger ones: any role while the group isn't full).
 -- No role checked = no filter.
+--   class filter: a solo player is kept when their class is ticked (none
+--   ticked = any class). Groups aren't filtered by class: what a group
+--   lists is the roles it still needs.
 --
 -- Taint: when addon code calls into the LFG window (opening it, picking an
 -- activity, touching its list), the window gets tainted and searches hang or
@@ -32,6 +35,20 @@ local ROLE_LABEL = { tank = "Tank", healer = "Healer", dps = "DPS" }
 local ROLE_TOKEN = { tank = "TANK", healer = "HEALER", dps = "DAMAGER" }
 local ROLE_KEY = { tank = "roleTank", healer = "roleHealer", dps = "roleDps" }
 local INVITE_WAIT = 60 -- seconds before a pending invite counts as declined
+-- The classes this client has (Forever: no Death Knight, Monk, Demon Hunter...).
+local CLASSES = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
+local CLASS_ICON = 22
+local CLASS_SHEET = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes"
+
+local function ClassLabel(token)
+  local names = rawget(_G, "LOCALIZED_CLASS_NAMES_MALE")
+  local name = type(names) == "table" and names[token]
+  return type(name) == "string" and name or (token:sub(1, 1) .. token:sub(2):lower())
+end
+
+local function ClassKey(token)
+  return "class" .. token
+end
 
 local F = {
   id = "LFGRoleFilter",
@@ -39,8 +56,8 @@ local F = {
   title = "LFG Role Filter",
   group = "QualityOfLife",
   command = "lfg",
-  commandHelp = "filters the Looking For Group browser by role",
-  description = "Filters the Group Browser by role, with whisper, invite and auto-invite.",
+  commandHelp = "filters the Looking For Group browser by role and class",
+  description = "Filters the Group Browser by role and class, with whisper, invite and auto-invite.",
   options = {
     { type = "header", label = "Show" },
     { key = "roleTank", type = "boolean", label = "Tanks (and groups that need one)", default = false, cmd = "tank" },
@@ -49,11 +66,18 @@ local F = {
     { key = "roleDps", type = "boolean", label = "Damage (and groups that need it)", default = false, cmd = "dps" },
     { key = "showPlayers", type = "boolean", label = "Solo players", default = true, cmd = "players" },
     { key = "showGroups", type = "boolean", label = "Groups", default = true, cmd = "groups" },
+    { type = "header", label = "Classes (solo players; none ticked = any)" },
   },
 }
+for _, token in ipairs(CLASSES) do
+  local opts = F.options
+  opts[#opts + 1] = { key = ClassKey(token), type = "boolean", label = ClassLabel(token), default = false,
+    cmd = token:lower() }
+end
 
 local panel, rows, content, scroll, countText, statusText
 local roleButtons = {}
+local classButtons = {}
 local results = {} -- built entries, all of them
 local shown = {}   -- entries that pass the filter
 local anySecret = false
@@ -289,7 +313,24 @@ local function AnyRoleChecked()
   return RoleOn("tank") or RoleOn("healer") or RoleOn("dps")
 end
 
+local function ClassOn(token)
+  return F.db[ClassKey(token)] == true
+end
+
+local function AnyClassChecked()
+  for _, token in ipairs(CLASSES) do
+    if ClassOn(token) then
+      return true
+    end
+  end
+  return false
+end
+
 local function Passes(e)
+  -- (a player whose class can't be read is left out while a class is ticked)
+  if e.solo and AnyClassChecked() and not (e.class and ClassOn(e.class)) then
+    return false
+  end
   if e.solo and F.db.showPlayers == false then
     return false
   end
@@ -509,7 +550,8 @@ local function Redraw()
   elseif #results == 0 then
     statusText:SetText("Search in the Group Browser to see results.")
   elseif #shown == 0 then
-    statusText:SetText("No one matches the ticked roles.")
+    statusText:SetText(AnyClassChecked() and "No one matches the ticked roles and classes."
+      or "No one matches the ticked roles.")
   else
     statusText:SetText("")
   end
@@ -521,6 +563,15 @@ local function Redraw()
       b.icon:SetAlpha(RoleOn(r) and 1 or 0.45)
       b.mark:SetColorTexture(ar, ag, ab, 1)
       b.mark:SetShown(RoleOn(r))
+    end
+  end
+  for _, token in ipairs(CLASSES) do
+    local b = classButtons[token]
+    if b then
+      b.icon:SetDesaturated(not ClassOn(token))
+      b.icon:SetAlpha(ClassOn(token) and 1 or 0.45)
+      b.mark:SetColorTexture(ar, ag, ab, 1)
+      b.mark:SetShown(ClassOn(token))
     end
   end
   if panel.playersCB then
@@ -792,12 +843,42 @@ local function CreatePanel()
     end, AUTO_TIP:format("healer", "healer")),
   }
 
+  -- Class icons (the character-creation sheet), one per class this client has.
+  local coords = rawget(_G, "CLASS_ICON_TCOORDS")
+  for i, token in ipairs(CLASSES) do
+    local b = CreateFrame("Button", nil, panel)
+    b:SetSize(CLASS_ICON, CLASS_ICON)
+    b:SetPoint("TOPLEFT", 10 + (i - 1) * (CLASS_ICON + 5), -84)
+    b.icon = b:CreateTexture(nil, "ARTWORK")
+    b.icon:SetAllPoints()
+    local c = type(coords) == "table" and coords[token]
+    if c then
+      b.icon:SetTexture(CLASS_SHEET)
+      b.icon:SetTexCoord(c[1] + 0.015, c[2] - 0.015, c[3] + 0.015, c[4] - 0.015)
+    else
+      b.icon:SetColorTexture(ClassColor(token))
+    end
+    b.mark = b:CreateTexture(nil, "OVERLAY")
+    b.mark:SetHeight(2)
+    b.mark:SetPoint("TOPLEFT", b, "BOTTOMLEFT", 0, -2)
+    b.mark:SetPoint("TOPRIGHT", b, "BOTTOMRIGHT", 0, -2)
+    local hl = b:CreateTexture(nil, "HIGHLIGHT")
+    hl:SetAllPoints()
+    hl:SetColorTexture(1, 1, 1, 0.12)
+    F:Script(b, "OnClick", function()
+      ARLE:SetOption(F.id, ClassKey(token), not ClassOn(token))
+    end)
+    Kit.Tip(b, ClassLabel(token), "Solo players of this class. Tick several to see any of them; none ticked "
+      .. "shows every class. Groups aren't filtered by class.")
+    classButtons[token] = b
+  end
+
   statusText = Kit.Text(panel, "GameFontDisableSmall")
-  statusText:SetPoint("TOPLEFT", 10, -86)
-  statusText:SetPoint("TOPRIGHT", -10, -86)
+  statusText:SetPoint("TOPLEFT", 10, -114)
+  statusText:SetPoint("TOPRIGHT", -10, -114)
 
   scroll = CreateFrame("ScrollFrame", nil, panel)
-  scroll:SetPoint("TOPLEFT", 8, -102)
+  scroll:SetPoint("TOPLEFT", 8, -130)
   scroll:SetPoint("BOTTOMRIGHT", -8, 8)
   scroll:EnableMouseWheel(true)
   content = CreateFrame("Frame", nil, scroll)
@@ -996,16 +1077,26 @@ function F:GetStatus()
       r[#r + 1] = ROLE_LABEL[k]
     end
   end
+  local c = {}
+  for _, token in ipairs(CLASSES) do
+    if ClassOn(token) then
+      c[#c + 1] = ClassLabel(token)
+    end
+  end
   return "Active · roles: " .. (#r > 0 and table.concat(r, ", ") or "any")
+    .. " · classes: " .. (#c > 0 and table.concat(c, ", ") or "any")
     .. ((auto.tank or auto.healer) and " · auto-invite on" or "")
 end
 
 F.commands = {
-  { name = "clear", help = "unticks every role", run = function(self)
+  { name = "clear", help = "unticks every role and class", run = function(self)
     for _, r in ipairs(ROLES) do
       ARLE:SetOption(self.id, ROLE_KEY[r], false)
     end
-    self:Print("all roles unticked: everyone is shown.")
+    for _, token in ipairs(CLASSES) do
+      ARLE:SetOption(self.id, ClassKey(token), false)
+    end
+    self:Print("all roles and classes unticked: everyone is shown.")
   end },
   { name = "auto", args = "tank|healer [on|off]", help = "auto-invites that role (this session)",
     run = function(self, rest)
