@@ -2,14 +2,14 @@
 ## Title: ARL Extensions: Quality of Life
 ## Notes: Sleeping Bag reminders, XP Food, Fishing Pole Alert, Spec Gear Swap, LFG Role Filter, Leveling BiS Spec, Auto Uprank, Quick Loot, Loot Sparkles, Buff Back, Layer Bridge and Share Location.
 ## Author: aredpanda, andreg1
-## Version: 0.10.11
+## Version: 0.11.0
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
-## OptionalDeps: ForeverLevelingBiS, AutoLayer, LayerSwap
+## OptionalDeps: ForeverLevelingBiS, AutoLayer, LayerSwap, PallyPower
 ## LoadOnDemand: 1
 ## X-ARLE-Pack: QoL
 ## X-ARLE-Group: QualityOfLife
-## X-ARLE-Features: SleepingBag, XPFood, FishingPoleAlert, SpecGearSwap, LFGRoleFilter, LevelingBiSSpec, AutoUprank, QuickLoot, LootSparkles, BuffBack, LayerBridge, ShareLocation
+## X-ARLE-Features: SleepingBag, XPFood, FishingPoleAlert, SpecGearSwap, LFGRoleFilter, LevelingBiSSpec, AutoUprank, QuickLoot, LootSparkles, BuffBack, LayerBridge, ShareLocation, PallyPowerHide
 ## X-ARLE-Feature-SleepingBag: title=Sleeping Bag; cmd=bag; default=off; replaces=ForeverSleepingBag
 ## X-ARLE-Feature-XPFood: title=XP Food; cmd=food; default=off; replaces=ForeverSnackTrack
 ## X-ARLE-Feature-FishingPoleAlert: title=Fishing Pole Alert; cmd=fish; default=off; replaces=FishingPoleAlert
@@ -22,6 +22,7 @@
 ## X-ARLE-Feature-BuffBack: title=Buff Back; cmd=buff; default=off; replaces=Manners
 ## X-ARLE-Feature-LayerBridge: title=Layer Bridge; cmd=layer; default=off
 ## X-ARLE-Feature-ShareLocation: title=Share Location; cmd=share
+## X-ARLE-Feature-PallyPowerHide: title=PallyPower Auto-Hide; extends=PallyPower; group=PallyPower; cmd=pally; default=off
 
 SleepingBag.lua
 XPFood.lua
@@ -36,3 +37,4 @@ BuffBackData.lua
 BuffBack.lua
 LayerBridge.lua
 ShareLocation.lua
+PallyPowerHide.lua
