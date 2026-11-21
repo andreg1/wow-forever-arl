@@ -995,10 +995,12 @@ function F:Ask(via, forced, target)
     self:Step("asking for layer %s (from the history)%s", Key(target.id),
       Str(target.host) and (", " .. target.host .. " first") or "")
   elseif not layer.id then
-    run.skipWho = "LayerSwap users not asked: your layer isn't read yet"
-    self:Step(run.skipWho)
-    self:Print("reading your layer first: target or mouse over a creature, then press again.")
-    return
+    -- Since 2026-11 Forever gives creatures in one place different server and
+    -- zone parts in their GUIDs (seen: 53781-8170193, 41578-13189355,
+    -- 63654-8797957 side by side), so the layer may never be read. Ask anyway
+    -- without naming it, like LayerSwap's own "anyway" re-ask: a host on our
+    -- own layer may invite for nothing, which beats never asking.
+    self:Step("your layer isn't read: asking without naming it (a host on your own layer may invite)")
   end
   local zone = ZoneMap()
   local okInfo, info = pcall(C_Map.GetMapInfo, zone or 0)
@@ -1702,7 +1704,7 @@ function F:PadText()
   if not pad then
     return
   end
-  local top = layer.id and self:LayerLabel(layer.id) or "|cff999999Layer unknown: look at a creature|r"
+  local top = layer.id and self:LayerLabel(layer.id) or "|cff999999Layer unknown (asks go out anyway)|r"
   -- The AutoLayer button's state: off, not in the channel, a refusing realm,
   -- or AutoLayer hosts' 5-minute wait after they invited you.
   local al
@@ -2158,7 +2160,7 @@ function F:GetStatus()
   end
   local avoid = #self:AvoidList() - (layer.id and 1 or 0)
   return string.format("Active · %s · layer %s · %s · answered %d, invites %d, asks %d (%d heard, %d hosts)",
-    table.concat(found, " + "), layer.id and Key(layer.id) or "unknown (look at a creature)",
+    table.concat(found, " + "), layer.id and Key(layer.id) or "unknown (asks go out without it)",
     self.db.avoidVisited ~= false and string.format("avoiding %d visited layers", avoid) or "visited layers allowed",
     stats.answered, stats.handed + stats.invited, stats.asked, stats.heard, stats.hosts)
 end
