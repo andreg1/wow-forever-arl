@@ -82,6 +82,8 @@ local BUTTONS = {
   -- Layer Bridge's AutoLayer button (the key keeps its first name): a
   -- clickable macro, so its "inv layer" line is said by the player's click.
   LayerSwap = { kind = "macro", click = true, label = "Layer Bridge: ask AutoLayer hosts (inv layer)" },
+  -- Soulstone Reminder's card icon: puts the stone up (or makes one).
+  Soulstone = { kind = "macro", click = true, label = "Soulstone Reminder: put my soulstone up (or make one)" },
   UseItem = { kind = "item" }, -- Sleeping Bag's bag icon
   UseFood = { kind = "item" }, -- XP Food's food icon (both alerts can be up at once)
 }
