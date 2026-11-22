@@ -38,6 +38,7 @@ local Items = Lib.Items
 local KEY = "Soulstone" -- the host's secure button (Secure/Secure.lua)
 local SHARD = 6265 -- Soul Shard
 local PAINT = "SoulstoneReminder.card" -- Secure:Run key for every show / hide / paint
+local STRATA = "FULLSCREEN_DIALOG" -- the top layer but tooltips
 local FALLBACK_ICON = 134336 -- Major Soulstone's icon
 local SCAN_AURAS = 40 -- buffs read per group member
 
@@ -362,6 +363,9 @@ local function AttachButton()
   if not b then
     return
   end
+  -- (out of combat, from Paint: in the card's strata, over the card)
+  b:SetFrameStrata(STRATA)
+  b:SetFrameLevel(alert:GetFrameLevel() + 5)
   F:Script(b, "OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     GameTooltip:SetText(F.title)
@@ -377,7 +381,10 @@ end
 
 -- No Dismiss or Snooze (the user's choice): the card is the instance's.
 local function BuildAlert()
-  local f = Kit.Card(F, { icon = true, move = { y = 160, secure = true } })
+  -- Over everything but tooltips (the user's choice, 2026-11-22: above the
+  -- map, other addons' windows and dialogs), not the popups' usual MEDIUM.
+  -- (no SetToplevel: a click would raise this protected frame, even in combat)
+  local f = Kit.Card(F, { icon = true, strata = STRATA, move = { y = 160, secure = true } })
   placeAlert = f.place
   alert = f
 end
