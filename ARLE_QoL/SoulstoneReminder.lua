@@ -1,9 +1,10 @@
--- Soulstone Reminder: for warlocks in dungeons and raids, a card always on
--- screen that says whether your soulstone is up, and when it isn't, puts one
--- on the healer with one click.
+-- Soulstone Reminder: for warlocks in dungeons and raids, a card that shows
+-- who wears your soulstone, and when none is up, puts one on the healer with
+-- one click.
 --
 -- The card can't be dismissed or snoozed (the user's choice, 2026-11-22): it
--- shows for as long as you're in an instance this is on for, combat included.
+-- shows in an instance this is on for, combat included, except while the
+-- stone is on cooldown with none of yours to be seen (spent, or unreadable).
 -- The way out is the In dungeons / In raids switches.
 --
 -- Own code, no other addon needed. Out of combat, alive, in a party or raid
@@ -63,8 +64,8 @@ local F = {
   group = "QualityOfLife",
   command = "soulstone",
   commandHelp = "warlocks: soulstone reminder in dungeons and raids",
-  description = "For warlocks in dungeons and raids: a card always on screen showing whether your soulstone is up. "
-    .. "When it isn't, one click puts it on the healer (or your target), or makes one first.",
+  description = "For warlocks in dungeons and raids: a card showing who wears your soulstone. When none is up "
+    .. "and it's off cooldown, one click puts it on the healer (or your target), or makes one first.",
   options = {
     { type = "info", text = function(def) return def:StatusLine() end },
     { key = "dungeons", type = "boolean", label = "In dungeons", default = true },
@@ -238,7 +239,7 @@ local function UseMacro(stone, who)
   return table.concat(lines, "\n")
 end
 
-local GREEN, GREY, RED = { 0.3, 0.85, 0.35 }, { 0.55, 0.55, 0.55 }, { 0.95, 0.25, 0.2 }
+local GREEN, RED = { 0.3, 0.85, 0.35 }, { 0.95, 0.25, 0.2 }
 
 -- The card for a state that needs nothing from you: shown, not due.
 local function Quiet(state, why, message, sub, color, note)
@@ -274,10 +275,10 @@ local function Plan()
   end
   local cooldown = Cooldown(stone.item)
   if cooldown > 0 then
+    -- (no card while the stone is on cooldown with none of ours to be seen: user's choice 2026-11-22)
     local ready = cooldown == math.huge and "once it's spent or ends" or ("in " .. Minutes(cooldown))
-    return Quiet("cooldown", "soulstone in use, ready again " .. ready
-      .. (hidden and " (some buffs can't be read here)" or ""),
-      "Soulstone used", "Ready again " .. ready, GREY, note)
+    return { state = "cooldown", why = "soulstone on cooldown, ready again " .. ready
+      .. (hidden and " (some buffs can't be read here)" or "") .. "; no card meanwhile" }
   end
   local here = kind .. ":" .. InstanceID()
   if owned then
