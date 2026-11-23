@@ -35,6 +35,7 @@ Copy every folder of this repo (`ARLExtensions` and the `ARLE_*` packs) into `Wo
 | Auctionator | Darkmoon Tickets: Darkmoon Faire turn-ins ranked by gold per Prize Ticket | `/arl dmf` | Auctionator |
 | DungeonJournal | Dungeon Helper: two-pane dungeon window. Bosses & Loot (BiS and upgrades for you and your ARL partymates; members with Forever Leveling BiS share their numbers even with it turned off), Quests (prerequisites and follow-up chains, party progress), Clear Times (splits, records, guild leaderboard) | `/arl dh` (`/arl bis`, `/arl quests`, `/arl timers`) | DungeonJournal (Forever Leveling BiS and QuestieDB optional) |
 | OpenMap | Sharer Markers: guildmates and friends who share where they are show as class-coloured diamonds with their names, so your party (round dots with a gold ring) stands apart | `/arl markers` | OpenMap |
+| OneMoreQuest | Dungeon Lead-ins: a dungeon mark in OneMoreQuest's quest list and on the quest's page when its chain leads to a dungeon quest you can still do; hover for where it leads | `/arl leads` | OneMoreQuest (and QuestieDB) |
 
 Officers and the Guild Master also get **Officer Tools**: who in the guild runs the addon, and which version.
 

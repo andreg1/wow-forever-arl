@@ -232,76 +232,8 @@ local function QuestText(questId)
   return table.concat(parts, "\n"):lower()
 end
 
--- Faction: "A", "H" or "both".
-local factionCache = {}
-
-local function HasBit(value, bitValue)
-  return math.floor(value / bitValue) % 2 == 1
-end
-
-local function RaceSide(races)
-  local enum = QDB.Enum()
-  if type(races) ~= "number" or races == 0 or not (enum and enum.raceMaskById and enum.factionRaceMasks) then
-    return nil
-  end
-  -- Arithmetic bit tests: Forever's race bits 32/33 overflow the bit library.
-  local function Overlaps(mask)
-    if type(mask) ~= "number" then
-      return false
-    end
-    for _, bitValue in pairs(enum.raceMaskById) do
-      if HasBit(races, bitValue) and HasBit(mask, bitValue) then
-        return true
-      end
-    end
-    return false
-  end
-  local a, h = Overlaps(enum.factionRaceMasks.Alliance), Overlaps(enum.factionRaceMasks.Horde)
-  if a and not h then
-    return "A"
-  end
-  if h and not a then
-    return "H"
-  end
-  return "both"
-end
-
-local function NpcSide(givers)
-  local npcs = type(givers) == "table" and type(givers[1]) == "table" and givers[1] or nil
-  if not npcs then
-    return nil
-  end
-  local a, h, known = false, false, false
-  for _, npcId in ipairs(npcs) do
-    local friendly = QDB.Npc(npcId, "friendlyToFaction")
-    if type(friendly) == "string" and friendly ~= "" then
-      known = true
-      a = a or friendly:find("A", 1, true) ~= nil
-      h = h or friendly:find("H", 1, true) ~= nil
-    end
-  end
-  if not known then
-    return nil
-  end
-  if a and not h then
-    return "A"
-  end
-  if h and not a then
-    return "H"
-  end
-  return "both"
-end
-
-local function QuestSide(questId)
-  local side = factionCache[questId]
-  if side then
-    return side
-  end
-  side = RaceSide(QGet(questId, "requiredRaces")) or NpcSide(QGet(questId, "startedBy"))
-    or NpcSide(QGet(questId, "finishedBy")) or "both"
-  factionCache[questId] = side
-  return side
-end
+-- Faction: "A", "H" or "both" (ARLE.Lib.Quests.Side).
+local QuestSide = Quests.Side
 
 local function PassesFilter(questId)
   local f = Faction()

@@ -2,7 +2,7 @@
 ## Title: ARL Extensions: Questie
 ## Notes: New in Forever stars, Sub-Quest Filter, Rare Objectives alerts and Quest Search, for Questie and QuestieDB.
 ## Author: aredpanda, andreg1
-## Version: 0.12.2
+## Version: 0.13.3
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
 ## OptionalDeps: Questie, QuestieDB

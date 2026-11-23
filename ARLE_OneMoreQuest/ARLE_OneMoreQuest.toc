@@ -1,0 +1,15 @@
+## Interface: 16001, 120105, 120107
+## Title: ARL Extensions: OneMoreQuest
+## Notes: Dungeon Lead-ins: a dungeon mark on OneMoreQuest's quests that lead to a dungeon quest.
+## Author: aredpanda, andreg1
+## Version: 0.13.3
+## Group: ARLExtensions
+## Dependencies: ARLExtensions
+## OptionalDeps: OneMoreQuest, QuestieDB
+## LoadOnDemand: 1
+## X-ARLE-Pack: OneMoreQuest
+## X-ARLE-Group: OneMoreQuest
+## X-ARLE-Features: DungeonLeadIns
+## X-ARLE-Feature-DungeonLeadIns: title=Dungeon Lead-ins; extends=OneMoreQuest; cmd=leads; default=off
+
+DungeonLeadIns.lua

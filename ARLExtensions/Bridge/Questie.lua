@@ -8,6 +8,7 @@
 -- Questie: modules through the global QuestieLoader:ImportModule(name).
 local _, ns = ...
 local ARLE = ns.ARLE
+local Lib = ARLE.Lib
 
 local DB = {}
 ARLE.Bridge.QuestieDB = DB
@@ -62,6 +63,66 @@ function DB.Enum()
   return type(lib) == "table" and type(lib.Enum) == "table" and lib.Enum or nil
 end
 
+-- Instance zones as QuestieDB lists them (support\<flavor>\Zones\dungeons.lua,
+-- published as LibQuestieDB.Support.Get("ZoneDB").private.dungeons; Questie's
+-- ZoneDB:GetDungeons() holds the same table): areaId -> instance name, each
+-- alternative area ID (wings, quest zones) included. Battlegrounds, the tram,
+-- the Faire's island and other non-instances are left out. Built once.
+local NOT_INSTANCES = {
+  [2257] = true, -- Deeprun Tram
+  [2597] = true, -- Alterac Valley
+  [3277] = true, -- Warsong Gulch
+  [3358] = true, -- Arathi Basin
+  [5733] = true, -- Molten Front
+  [5861] = true, -- Darkmoon Faire Island
+  [6298] = true, -- Brawl'gar Arena
+  [6618] = true, -- Bizmo's Brawlpub
+}
+local instanceZones
+
+local function DungeonTable()
+  local lib = _G.LibQuestieDB
+  local support = type(lib) == "table" and type(lib.Support) == "table" and lib.Support or nil
+  if support and type(support.Get) == "function" then
+    local ok, zoneDB = pcall(support.Get, "ZoneDB")
+    local t = ok and type(zoneDB) == "table" and type(zoneDB.private) == "table" and zoneDB.private.dungeons
+    if type(t) == "table" then
+      return t
+    end
+  end
+  local zoneDB = ARLE.Bridge.Questie.Module("ZoneDB")
+  if zoneDB and type(zoneDB.GetDungeons) == "function" then
+    local ok, t = pcall(zoneDB.GetDungeons, zoneDB)
+    if ok and type(t) == "table" then
+      return t
+    end
+  end
+end
+
+function DB.InstanceZones()
+  if instanceZones then
+    return instanceZones
+  end
+  local t = DungeonTable()
+  if not t then
+    return nil -- (not cached: QuestieDB may still be loading)
+  end
+  instanceZones = {}
+  for areaId, entry in pairs(t) do
+    if type(areaId) == "number" and type(entry) == "table" and not NOT_INSTANCES[areaId] then
+      local name = Lib.Str((Lib.Call(C_Map and C_Map.GetAreaInfo, areaId)))
+        or (type(entry[1]) == "string" and entry[1]) or ("Zone " .. areaId)
+      instanceZones[areaId] = name
+      for _, alt in ipairs(type(entry[2]) == "table" and entry[2] or {}) do
+        if type(alt) == "number" and not NOT_INSTANCES[alt] then
+          instanceZones[alt] = name
+        end
+      end
+    end
+  end
+  return instanceZones
+end
+
 local Q = {}
 ARLE.Bridge.Questie = Q
 
@@ -113,6 +174,28 @@ function Q.QuestLink(id)
       return text
     end
   end
+end
+
+-- A quest's tag ID (81 dungeon, 85 heroic, 62/88/89 raid, 41 PvP, 1 elite):
+-- Questie's QuestieDB.GetQuestTagInfo first (it holds corrections for quests
+-- the game tags wrongly, such as Leaders of the Fang), else the game's own
+-- C_QuestLog.GetQuestTagInfo / GetQuestTagInfo. nil when unknown.
+function Q.QuestTag(id)
+  local qdb = Q.Module("QuestieDB")
+  if qdb and type(qdb.GetQuestTagInfo) == "function" then
+    local tag = Lib.Call(qdb.GetQuestTagInfo, id)
+    if type(tag) == "number" then
+      return tag
+    end
+  end
+  if C_QuestLog and C_QuestLog.GetQuestTagInfo then
+    local info = Lib.Call(C_QuestLog.GetQuestTagInfo, id)
+    if Lib.Readable(info) and type(info.tagID) == "number" then
+      return info.tagID
+    end
+  end
+  local tag = _G.GetQuestTagInfo and Lib.Call(_G.GetQuestTagInfo, id)
+  return type(tag) == "number" and tag or nil
 end
 
 -- An area ID's world map (subzones resolve to their zone), via Questie's ZoneDB.
