@@ -90,6 +90,32 @@ local settings = {
         ARLE:QueuePresence()
       end,
     },
+    { type = "header", label = "Other characters" },
+    {
+      type = "info",
+      text = function()
+        local copy, applied = ARLE:SettingsCopyInfo()
+        if not copy then
+          return "|cff999999Copies which features are on and all their settings to your other characters. Each "
+            .. "one gets them the next time it logs in. Their own data (item locks, gear set links, window "
+            .. "positions) stays as it is.|r"
+        end
+        return ("Last copy: from %s, %s. %s"):format(tostring(copy.from or "?"),
+          type(copy.at) == "number" and date("%d %b %Y %H:%M", copy.at) or "?",
+          applied and "This character has it." or "This character doesn't have it yet.")
+      end,
+    },
+    {
+      type = "button",
+      label = "Copy my settings to all characters",
+      confirm = "Click again to copy",
+      tooltip = "Your other characters (and new ones) take this character's features and settings the next time "
+        .. "they log in, once. What they set themselves later stays.",
+      run = function()
+        local count = ARLE:CopySettingsToAll()
+        ARLE:Print(("Copied the settings of %d features. Your other characters get them at their next login."):format(count))
+      end,
+    },
     { type = "header", label = "About" },
     {
       type = "info",

@@ -3,8 +3,10 @@
 --     .modules[id]   each feature's settings and its on/off switch (def.db)
 --     .features[id]  each feature's data: item locks, gear set links,
 --                    remembered weapons (def.char)
+--     .settingsCopyStamp  the settings copy (below) this character has applied
 --   ARLExtensionsDB (account wide)
 --     theme, accent, loginMessage (how the window looks)
+--     .settingsCopy  settings one character copied to all the others
 --     .modules[id]   data a feature shares between characters (def.shared),
 --                    e.g. Darkmoon ticket counts learned from quest windows.
 --                    Before 0.2 this also held every feature's settings;
@@ -120,6 +122,73 @@ function ARLE:CharDB(id)
   return t
 end
 
+-------------------------------------------------------------------------------
+-- Copying settings to every character
+-------------------------------------------------------------------------------
+-- A character's file can only be written while it is logged in, so a copy is
+-- a snapshot in the account table (ARLExtensionsDB.settingsCopy = { stamp,
+-- from, at, modules }) that every other character applies once at its next
+-- load (ARLExtensionsCharDB.settingsCopyStamp), before any feature binds.
+-- Only settings (modules[id], the on/off switches included) are copied, never
+-- a character's data (features[id]: item locks, positions, gear set links).
+
+-- A list (lists of names, Rare Objectives' manual list) is replaced whole.
+local function IsList(t)
+  return type(t) == "table" and (next(t) == nil or t[1] ~= nil)
+end
+
+-- Copies `from` into `into` key by key, so keys only the target has stay
+-- (Buff Back's grid holds a row per class: another class's row is kept).
+local function Merge(into, from)
+  for key, value in pairs(from) do
+    if type(value) == "table" and not IsList(value) and type(into[key]) == "table" and not IsList(into[key]) then
+      Merge(into[key], value)
+    else
+      into[key] = DeepCopy(value)
+    end
+  end
+end
+
+-- Takes a snapshot of this character's settings for the others. Returns how
+-- many features it holds.
+function ARLE:CopySettingsToAll()
+  local modules = DeepCopy(self:CharModules())
+  local count = 0
+  for _, t in pairs(modules) do
+    if type(t) == "table" then
+      count = count + 1
+      for key in pairs(SHARED_ONLY) do
+        t[key] = nil
+      end
+    end
+  end
+  local now = time()
+  local from = self:MyName() or "?"
+  local stamp = now .. ":" .. from
+  self.db.settingsCopy = { stamp = stamp, from = from, at = now, modules = modules }
+  CharSV().settingsCopyStamp = stamp -- (its own settings already are these)
+  return count
+end
+
+-- The copy waiting in the account table, and whether this character has it.
+function ARLE:SettingsCopyInfo()
+  local copy = self.db and self.db.settingsCopy
+  if type(copy) ~= "table" or type(copy.modules) ~= "table" then
+    return nil
+  end
+  return copy, CharSV().settingsCopyStamp == copy.stamp
+end
+
+local function ApplySettingsCopy()
+  local copy, applied = ARLE:SettingsCopyInfo()
+  if not copy or applied then
+    return
+  end
+  Merge(ARLE:CharModules(), copy.modules)
+  CharSV().settingsCopyStamp = copy.stamp
+  ARLE.settingsCopiedFrom = tostring(copy.from or "another character") -- said at login (AnnounceLogin)
+end
+
 function ARLE:QueueBind(def)
   pending = pending or {}
   pending[#pending + 1] = def
@@ -145,6 +214,7 @@ function ARLE:InitDB()
   sv.themeV3 = true
   self.db = sv
   self:CharModules() -- seeds this character's settings once
+  ApplySettingsCopy() -- (before any feature reads its settings)
   if pending then
     local queued = pending
     pending = nil

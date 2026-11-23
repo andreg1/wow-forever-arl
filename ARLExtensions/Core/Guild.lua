@@ -153,6 +153,10 @@ function ARLE:AnnounceLogin()
     return
   end
   announced = true
+  if state == "member" and self.settingsCopiedFrom then
+    -- (said even with the login message off: the settings just changed)
+    self:Print("This character now has the settings copied from " .. self.settingsCopiedFrom .. ".")
+  end
   if self.db.loginMessage == false then
     return
   end
