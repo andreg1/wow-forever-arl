@@ -1,5 +1,6 @@
--- Dungeon Lead-ins: a dungeon mark on OneMoreQuest's quest list and quest
--- page for every quest whose chain leads to a dungeon (or raid) quest.
+-- Dungeon Lead-ins: a dungeon mark on OneMoreQuest's quest list, quest page
+-- and world map quest givers ("!") for every quest whose chain leads to a
+-- dungeon (or raid) quest, so you know which quests to pick up.
 --
 -- OneMoreQuest has no public API (its namespace is private) and no license
 -- that lets its code into MIT ARL, so none of its code is used and nothing of
@@ -14,6 +15,10 @@
 --                         share / voice buttons)
 --   the page header       a child of TrailheadLog with `.questId`, `.title`
 --                         (FontString) and `.titleButton`
+--   the world map marks  pooled Buttons on a layer frame over WorldMapFrame's
+--                         canvas, each with `.mark` = { kind, questId, questIds,
+--                         offerQuestIds }: a "giver" offers questIds or questId,
+--                         a "turnIn" that also offers has offerQuestIds
 -- OneMoreQuest redraws on its own schedule (no hookable function), so the
 -- marks follow it on a 0.2 s ticker while the window is visible. Our marks
 -- are child frames of our own, anchored to its row buttons, so they scroll
@@ -27,8 +32,8 @@
 -- character hasn't done that is for an instance: its zoneOrSort is an
 -- instance zone (ARLE.Bridge.QuestieDB.InstanceZones), or its tag says dungeon
 -- or raid (ARLE.Bridge.Questie.QuestTag; Leaders of the Fang is filed under
--- the Barrens and only its tag tells). Quests that are themselves in a dungeon aren't
--- marked.
+-- the Barrens and only its tag tells). A quest that is itself a dungeon quest
+-- is marked too ("Dungeon quest: <dungeon>"), unless the `direct` switch is off.
 local ADDON = ...
 local ARLE = _G.ARLExtensions
 if not ARLE then
@@ -46,7 +51,8 @@ local ROW_X, ROW_Y = 10, -6
 local STRIPE_WIDTH = 3   -- px, the orange stripe down a marked row's left edge
 local STRIPE_COLOR = { 1, 0.5, 0.1, 0.9 }
 local PAGE_BADGE = 30    -- px, the mark after the page title
-local LIST_NAMES = { "TrailheadLogList", "TrailheadLogListLegacy" }
+local MAP_BADGE_SHARE = 0.75 -- the map icon's size, of the "!" mark's own (so it follows the zoom)
+local LIST_NAMES ={ "TrailheadLogList", "TrailheadLogListLegacy" }
 
 local F = {
   id = "DungeonLeadIns",
@@ -55,13 +61,15 @@ local F = {
   group = "OneMoreQuest",
   extends = "OneMoreQuest",
   command = "leads",
-  commandHelp = "dungeon marks on OneMoreQuest's quests that lead to a dungeon quest",
-  description = "Marks the quests in OneMoreQuest's quest log that lead to a dungeon quest, in the list and on the quest's page; hover for where it leads.",
+  commandHelp = "dungeon marks on OneMoreQuest's quests and quest givers that lead to a dungeon quest",
+  description = "Marks dungeon quests, and the quests that lead to one, in OneMoreQuest's quest list, on the quest's page and on its quest givers (!) on the world map; hover for where it leads.",
   options = {
     { type = "info", text = function(def) return def:GetStatus() end },
     { key = "list", type = "boolean", label = "Mark the quest list", default = true },
+    { key = "direct", type = "boolean", label = "Mark dungeon quests themselves too", default = true },
     { key = "page", type = "boolean", label = "Mark the quest page", default = true },
-    { key = "tooltip", type = "boolean", label = "Say where it leads in the list's tooltip", default = true },
+    { key = "map", type = "boolean", label = "Mark quest givers (!) on the world map", default = true },
+    { key = "tooltip", type = "boolean", label = "Say where it leads in the tooltips", default = true },
   },
 }
 
@@ -76,6 +84,7 @@ local succ          -- questId -> { questIds that follow it }
 local indexState    -- nil, "building", "ready", "failed"
 local indexCount = 0
 local leadCache = {} -- questId -> lead table or false
+local instanceCache = {} -- questId -> the instance it is a quest for, or false
 
 local function AddNext(from, to)
   if type(from) ~= "number" or type(to) ~= "number" or from <= 0 or to <= 0 or from == to then
@@ -110,7 +119,7 @@ local function BuildIndex()
     return
   end
   local ids = QDB.AllQuestIds()
-  succ, indexState, indexCount, leadCache = {}, "building", 0, {}
+  succ, indexState, indexCount, leadCache, instanceCache = {}, "building", 0, {}, {}
   local i = 0
   local function Step()
     local stop = math.min(#ids, i + SLICE)
@@ -177,15 +186,23 @@ end
 -- game's: Leaders of the Fang is filed under the Barrens but tagged Dungeon).
 -- A tagged quest is named after where its objectives are, else "a dungeon".
 local function InstanceOf(questId)
+  local cached = instanceCache[questId]
+  if cached ~= nil then
+    return cached or nil
+  end
   local zones = QDB.InstanceZones() or {}
   local zone = QDB.Quest(questId, "zoneOrSort")
+  local found
   if type(zone) == "number" and zones[zone] then
-    return zones[zone]
+    found = zones[zone]
+  else
+    local kind = DUNGEON_TAGS[ARLE.Bridge.Questie.QuestTag(questId) or 0]
+    if kind then
+      found = ObjectiveInstance(questId, zones) or ("a " .. kind)
+    end
   end
-  local kind = DUNGEON_TAGS[ARLE.Bridge.Questie.QuestTag(questId) or 0]
-  if kind then
-    return ObjectiveInstance(questId, zones) or ("a " .. kind)
-  end
+  instanceCache[questId] = found or false
+  return found
 end
 
 local function QuestName(questId)
@@ -237,6 +254,34 @@ end
 local function LeadText(lead)
   return ("Leads to %s: %s%s"):format(lead.dungeon, lead.name,
     lead.steps > 1 and (" (%d steps on)"):format(lead.steps) or "")
+end
+
+-- What a quest is marked for: a lead (above), or { direct = true, dungeon }
+-- for a quest that is itself a dungeon quest (option `direct`); nil if neither.
+local function Marked(questId)
+  if indexState ~= "ready" or type(questId) ~= "number" then
+    return nil
+  end
+  local here = InstanceOf(questId)
+  if here then
+    return F.db.direct and { direct = true, dungeon = here } or nil
+  end
+  return Lead(questId)
+end
+
+local function MarkText(m)
+  if m.direct then
+    return ("Dungeon quest: %s"):format(m.dungeon)
+  end
+  return LeadText(m)
+end
+
+-- A map mark's tooltip line, for one of the quests it offers.
+local function MapLine(questId, m)
+  if m.direct then
+    return ("%s: dungeon quest in %s"):format(QuestName(questId), m.dungeon)
+  end
+  return QuestName(questId) .. ": " .. (LeadText(m):gsub("^Leads", "leads"))
 end
 
 -------------------------------------------------------------------------------
@@ -292,10 +337,10 @@ local function OnRowEnter(button)
   if not F.db.tooltip then
     return
   end
-  local lead = Lead(rawget(button, "data"))
+  local lead = Marked(rawget(button, "data"))
   if lead and GameTooltip:IsOwned(button) and GameTooltip:IsShown() then
     GameTooltip:AddLine(" ")
-    GameTooltip:AddLine("|T" .. ICON_FILE .. ":0|t " .. LeadText(lead), 1, 0.82, 0, true)
+    GameTooltip:AddLine("|T" .. ICON_FILE .. ":0|t " .. MarkText(lead), 1, 0.82, 0, true)
     GameTooltip:Show()
   end
 end
@@ -333,7 +378,7 @@ local function SyncList()
   end
   local n = 0
   for id, row in pairs(rows) do
-    if Lead(id) then
+    if Marked(id) then
       n = n + 1
       local b = RowBadge(n, content)
       b:ClearAllPoints()
@@ -360,11 +405,11 @@ local function FindPageHeader(window)
 end
 
 local function ShowPageTooltip(self)
-  local lead = Lead(pageQuest)
+  local lead = Marked(pageQuest)
   if lead then
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    GameTooltip:SetText("Dungeon lead-in", 1, 0.82, 0)
-    GameTooltip:AddLine(LeadText(lead), 1, 1, 1, true)
+    GameTooltip:SetText(lead.direct and "Dungeon quest" or "Dungeon lead-in", 1, 0.82, 0)
+    GameTooltip:AddLine(MarkText(lead), 1, 1, 1, true)
     GameTooltip:Show()
   end
 end
@@ -373,7 +418,7 @@ local function SyncPage(window)
   local header = F.db.page and FindPageHeader(window)
   headerFound = header ~= nil or not F.db.page
   local questId = header and header:IsVisible() and rawget(header, "questId")
-  local lead = Lead(questId)
+  local lead = Marked(questId)
   if not lead then
     if pageBadge then
       pageBadge:Hide()
@@ -402,6 +447,131 @@ local function SyncPage(window)
   pageQuest = questId
 end
 
+-------------------------------------------------------------------------------
+-- World map: OMQ's "!" marks
+-------------------------------------------------------------------------------
+
+-- OMQ's marks are pooled Buttons on a layer frame of its own over the world
+-- map's canvas (MapMarks/Layout.lua), each with `.mark` = { kind, questId,
+-- questIds (merged givers), offerQuestIds (a "?" that also offers) }. The
+-- layer is found once as the canvas child whose children carry `.mark`.
+local markLayer
+local mapBadges = {}                                   -- our pool, map marks
+local marksHooked = setmetatable({}, { __mode = "k" }) -- OMQ mark buttons given our OnEnter
+local shownMarks = 0
+local mapFound -- whether the last sync found OMQ's mark layer (nil: not looked)
+
+local function FindMarkLayer(canvas)
+  if markLayer and markLayer:GetParent() == canvas then
+    return markLayer
+  end
+  markLayer = nil
+  for _, layer in ipairs({ canvas:GetChildren() }) do
+    for _, child in ipairs({ layer:GetChildren() }) do
+      local mark = rawget(child, "mark")
+      if type(mark) == "table" and type(mark.kind) == "string" then
+        markLayer = layer
+        return layer
+      end
+    end
+  end
+end
+
+-- The quests a mark offers to pick up.
+local function OfferedQuests(mark)
+  if mark.kind == "giver" then
+    return type(mark.questIds) == "table" and mark.questIds or { mark.questId }
+  end
+  if mark.kind == "turnIn" and type(mark.offerQuestIds) == "table" then
+    return mark.offerQuestIds
+  end
+end
+
+local function MarkLeads(mark)
+  local leads
+  for _, questId in ipairs(type(mark) == "table" and OfferedQuests(mark) or {}) do
+    local lead = Marked(questId)
+    if lead then
+      leads = leads or {}
+      leads[#leads + 1] = { questId = questId, lead = lead }
+    end
+  end
+  return leads
+end
+
+local function OnMarkEnter(button)
+  if not F.db.tooltip then
+    return
+  end
+  local leads = MarkLeads(rawget(button, "mark"))
+  if leads and GameTooltip:IsOwned(button) and GameTooltip:IsShown() then
+    GameTooltip:AddLine(" ")
+    for _, item in ipairs(leads) do
+      GameTooltip:AddLine("|T" .. ICON_FILE .. ":0|t " .. MapLine(item.questId, item.lead), 1, 0.82, 0, true)
+    end
+    GameTooltip:Show()
+  end
+end
+
+local function MapBadge(i, parent)
+  local b = mapBadges[i]
+  if not b then
+    b = CreateFrame("Frame", nil, parent)
+    b:EnableMouse(false) -- the mark keeps its clicks and tooltip
+    local tex = b:CreateTexture(nil, "OVERLAY", nil, 7)
+    tex:SetAllPoints(b)
+    SetIcon(tex)
+    mapBadges[i] = b
+  elseif b:GetParent() ~= parent then
+    b:SetParent(parent)
+  end
+  return b
+end
+
+local function HideMap(from)
+  for i = from, #mapBadges do
+    mapBadges[i]:Hide()
+  end
+end
+
+local function SyncMap()
+  local map = _G.WorldMapFrame
+  local canvas = F.db.map and map and map:IsVisible() and map.GetCanvas and map:GetCanvas()
+  local layer = canvas and FindMarkLayer(canvas)
+  if canvas then
+    mapFound = layer ~= nil
+  end
+  if not (layer and layer:IsVisible()) then
+    HideMap(1)
+    shownMarks = 0
+    return
+  end
+  local n = 0
+  for _, button in ipairs({ layer:GetChildren() }) do
+    local mark = button:IsVisible() and rawget(button, "mark")
+    if type(mark) == "table" and OfferedQuests(mark) then
+      if MarkLeads(mark) then
+        n = n + 1
+        -- (OMQ scales each mark to the zoom: its width times its own scale, in the layer's units)
+        local size = math.max((Lib.Plain(button:GetWidth()) or 0) * (Lib.Plain(button:GetScale()) or 1)
+          * MAP_BADGE_SHARE, 8)
+        local b = MapBadge(n, layer)
+        b:SetSize(size, size)
+        b:ClearAllPoints()
+        b:SetPoint("CENTER", button, "BOTTOMRIGHT", -size * 0.15, size * 0.15)
+        b:SetFrameLevel((button:GetFrameLevel() or 1) + 5)
+        b:Show()
+      end
+      if not marksHooked[button] then
+        marksHooked[button] = true
+        F:HookScript(button, "OnEnter", OnMarkEnter)
+      end
+    end
+  end
+  HideMap(n + 1)
+  shownMarks = n
+end
+
 local function HideAll()
   HideRows(1)
   shownRows = 0
@@ -409,16 +579,28 @@ local function HideAll()
     pageBadge:Hide()
   end
   pageQuest = nil
+  HideMap(1)
+  shownMarks = 0
 end
 
 local function Sync()
-  local window = _G.TrailheadLog
-  if not (window and window:IsVisible()) or indexState ~= "ready" then
+  if indexState ~= "ready" then
     HideAll()
     return
   end
-  SyncList()
-  SyncPage(window)
+  local window = _G.TrailheadLog
+  if window and window:IsVisible() then
+    SyncList()
+    SyncPage(window)
+  else
+    HideRows(1)
+    shownRows = 0
+    if pageBadge then
+      pageBadge:Hide()
+    end
+    pageQuest = nil
+  end
+  SyncMap()
 end
 
 -------------------------------------------------------------------------------
@@ -456,7 +638,8 @@ F.commands = {
     local here = InstanceOf(id)
     local lead = Lead(id)
     if here then
-      self:Print(("%s (%d) is itself a quest for %s, so it isn't marked."):format(QuestName(id), id, here))
+      self:Print(("%s (%d) is itself a quest for %s%s."):format(QuestName(id), id, here,
+        self.db.direct and "" or " (not marked: \"Mark dungeon quests themselves too\" is off)"))
     elseif lead then
       self:Print(("%s (%d): %s, quest %d."):format(QuestName(id), id, LeadText(lead), lead.questId))
       for i, step in ipairs(lead.path) do
@@ -475,22 +658,27 @@ function F:GetStatus()
   if indexState ~= "ready" then
     return ("Active · reading quest chains (%d quests so far)"):format(indexCount)
   end
-  local window = _G.TrailheadLog
-  if not window then
-    return "Active · waiting for OneMoreQuest's quest window"
+  local window, map = _G.TrailheadLog, _G.WorldMapFrame
+  if not (map and map:IsVisible()) then
+    return "Active · marks show when the world map with OneMoreQuest's quest window is open"
   end
-  if not window:IsVisible() then
-    return "Active · marks show when OneMoreQuest's quest window is open"
+  local parts, missing = {}, {}
+  if window and window:IsVisible() then
+    parts[#parts + 1] = ("%d in the quest list%s"):format(shownRows, pageQuest and " and the page" or "")
+    if listFound == false then
+      missing[#missing + 1] = "quest list"
+    end
+    if headerFound == false then
+      missing[#missing + 1] = "quest page title"
+    end
   end
-  local missing = {}
-  if listFound == false then
-    missing[#missing + 1] = "its quest list"
+  if F.db.map then
+    parts[#parts + 1] = ("%d quest giver%s on the map"):format(shownMarks, shownMarks == 1 and "" or "s")
+    if mapFound == false then
+      missing[#missing + 1] = "map marks"
+    end
   end
-  if headerFound == false then
-    missing[#missing + 1] = "its quest page title"
-  end
-  return ("Active · %d quest%s marked in the list%s%s"):format(shownRows, shownRows == 1 and "" or "s",
-    pageQuest and ", and the page" or "",
+  return ("Active · marked: %s%s"):format(#parts > 0 and table.concat(parts, ", ") or "nothing shown",
     #missing > 0 and (" · can't find OneMoreQuest's " .. table.concat(missing, " or ") .. " (OneMoreQuest update?)") or "")
 end
 
