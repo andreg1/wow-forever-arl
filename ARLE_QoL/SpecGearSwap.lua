@@ -6,8 +6,9 @@
 --
 -- Why not EllesmereUI's character sheet: it listens for the retail
 -- PLAYER_SPECIALIZATION_CHANGED / GetSpecialization, which this client's dual
--- spec never fires. Surfaces (Blizzard API only): the talent events and set
--- (Lib.TALENT_EVENTS, Lib.TalentGroup), C_EquipmentSet.*, EquipmentManager_EquipSet.
+-- spec never fires. Surfaces (Blizzard API only): ACTIVE_TALENT_GROUP_CHANGED,
+-- GetActiveTalentGroup, C_EquipmentSet.*, EquipmentManager_EquipSet; the main tree
+-- through Lib.MainTalentTree.
 --
 -- Which set a spec gets: the set you linked to it (link / set / learned: the
 -- first set you equip by hand in a spec with no link), else a set named like
@@ -90,10 +91,23 @@ end
 -- Spec helpers
 -------------------------------------------------------------------------------
 
--- (Lib.TalentGroup / Lib.MainTalentTree read Forever's trait tree; the old
--- GetTalentTabInfo is gone from the client.)
+-- The active talent group, read as it always was here (GetActiveTalentGroup
+-- first): 0.13.7 switched it to Lib.TalentGroup and the extra talent events,
+-- and gear swaps stopped (reported 2026-11-25), so this keeps what worked.
 local function ActiveGroup()
-  return Lib.TalentGroup()
+  if GetActiveTalentGroup then
+    local ok, g = pcall(GetActiveTalentGroup)
+    if ok and g then
+      return g
+    end
+  end
+  if C_SpecializationInfo and C_SpecializationInfo.GetActiveSpecGroup then
+    local ok, g = pcall(C_SpecializationInfo.GetActiveSpecGroup)
+    if ok and g then
+      return g
+    end
+  end
+  return 1
 end
 
 local function NumGroups()
@@ -745,11 +759,11 @@ function F:OnEnable()
     end
   end
   -- Talent events differ between clients (On registers nothing for an unknown one).
-  local any = false
-  for _, e in ipairs(Lib.TALENT_EVENTS) do
-    any = self:On(e, SpecEvent) and true or any
-  end
-  if not any then
+  -- Only these two: the trait events (Lib.TALENT_EVENTS) can come while the
+  -- swap is still being cast, and putting gear on then cancels it.
+  local okA = self:On("ACTIVE_TALENT_GROUP_CHANGED", SpecEvent)
+  local okT = self:On("PLAYER_TALENT_UPDATE", SpecEvent)
+  if not (okA or okT) then
     F:Print("no talent group events on this client; spec changes won't be seen.")
   end
   self:On("PLAYER_REGEN_ENABLED", function()
