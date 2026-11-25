@@ -7,9 +7,17 @@
 -- talent spec"), so its Talent spec box keeps what you picked (or the
 -- class's first spec) and never follows a spec switch.
 --
--- Detection: the active talent group (GetActiveTalentGroup) and the talent
--- tree with the most points in it (GetTalentTabInfo; both return shapes are
--- handled). No points, or a tie: nothing is changed.
+-- Detection: the active talent set and the talent tree with the most points
+-- in it, through Lib.TalentGroup / Lib.MainTalentTree (Forever's trait tree,
+-- C_Traits; the old GetTalentTabInfo is gone from the client, which left this
+-- feature finding "no talent points" and never setting a spec). No points,
+-- or a tie: nothing is changed. A swap ends on ACTIVE_COMBAT_CONFIG_CHANGED
+-- (Lib.TALENT_EVENTS).
+--
+-- Standing aside: Forever Leveling BiS 1.6.0 can follow dual talent itself
+-- (a spec line linked to a talent set in its Settings: charDB.mainTalents /
+-- offSpecs[i].talents). While any line there is linked, this leaves the spec
+-- to it, so the two never fight over a swap.
 -- Tree -> spec key: ForeverLevelingBiS_API.GetSpecs(classFile) lists the keys
 -- in talent-tab order (its public, read-only API). Druid feral is "feral"
 -- (cat) or "bear", Hunter survival "survival" or "survivalmelee": there the
@@ -33,6 +41,7 @@ local ARLE = _G.ARLExtensions
 if not ARLE then
   return
 end
+local Lib = ARLE.Lib
 
 local F = {
   id = "LevelingBiSSpec",
@@ -52,59 +61,6 @@ local F = {
       run = function(def) def:Apply(true) end },
   },
 }
-
--------------------------------------------------------------------------------
--- Talents
--------------------------------------------------------------------------------
-
-local function ActiveGroup()
-  if GetActiveTalentGroup then
-    local ok, g = pcall(GetActiveTalentGroup)
-    if ok and g then
-      return g
-    end
-  end
-  if C_SpecializationInfo and C_SpecializationInfo.GetActiveSpecGroup then
-    local ok, g = pcall(C_SpecializationInfo.GetActiveSpecGroup)
-    if ok and g then
-      return g
-    end
-  end
-  return 1
-end
-
--- Tab index with the most points in `group`, its name and points (nil on a
--- tie or no points).
-local function MainTab(group)
-  if not (GetNumTalentTabs and GetTalentTabInfo) then
-    return nil
-  end
-  local bestTab, bestName, bestPts, tie = nil, nil, 0, false
-  for tab = 1, (GetNumTalentTabs() or 0) do
-    local ok, a, b, c, _, e = pcall(GetTalentTabInfo, tab, false, false, group)
-    if not ok then
-      ok, a, b, c, _, e = pcall(GetTalentTabInfo, tab)
-    end
-    if ok then
-      local name, pts
-      if type(a) == "number" then
-        name, pts = b, e -- id, name, description, icon, points
-      else
-        name, pts = a, c -- name, icon, points, file
-      end
-      pts = tonumber(pts) or 0
-      if pts > bestPts then
-        bestTab, bestName, bestPts, tie = tab, name, pts, false
-      elseif pts == bestPts and pts > 0 then
-        tie = true
-      end
-    end
-  end
-  if tie or not bestTab then
-    return nil, nil, bestPts
-  end
-  return bestTab, bestName, bestPts
-end
 
 -------------------------------------------------------------------------------
 -- Forever Leveling BiS side
@@ -144,16 +100,39 @@ local function CandidatesFor(classFile, tab)
   return #out > 0 and out or nil
 end
 
--- This character's entry in Forever Leveling BiS's saved data (the key its
--- Core.lua builds at login), or nil.
+-- This character's entry in Forever Leveling BiS's saved data, or nil. Since
+-- 1.2 it settles the key once the full name and realm are known (the realm
+-- can read "" for 10+ s after a /reload) and keeps it per character in
+-- ForeverLevelingBiSChar.key: that key first, else "First Last-Realm".
 local function CharEntry()
   local root = _G.ForeverLevelingBiSDB
   if type(root) ~= "table" or type(root.chars) ~= "table" then
     return nil
   end
-  local key = (GetUnitName("player", true) or UnitName("player")) .. "-" .. GetRealmName()
-  local entry = root.chars[key]
+  local own = _G.ForeverLevelingBiSChar
+  local key = type(own) == "table" and type(own.key) == "string" and own.key
+  local entry = key and root.chars[key]
+  if type(entry) ~= "table" then
+    local realm = GetRealmName() or ""
+    entry = realm ~= "" and root.chars[ARLE:MyName() .. "-" .. realm]
+  end
   return type(entry) == "table" and entry or nil
+end
+
+-- Whether a spec line in its Settings is linked to a talent set: it follows
+-- swaps itself then.
+local function FLBLinked(entry)
+  if entry.mainTalents ~= nil then
+    return true
+  end
+  if type(entry.offSpecs) == "table" then
+    for _, e in pairs(entry.offSpecs) do
+      if type(e) == "table" and e.talents ~= nil then
+        return true
+      end
+    end
+  end
+  return false
 end
 
 local function RefreshFLB()
@@ -167,10 +146,11 @@ end
 -- The spec keys it would set, or nil and why not; then group, tab, tree name.
 local function Detect()
   local _, classFile = UnitClass("player")
-  local group = ActiveGroup()
-  local tab, treeName, pts = MainTab(group)
+  local group = Lib.TalentGroup()
+  local tab, treeName, _, why = Lib.MainTalentTree(group)
   if not tab then
-    return nil, (pts or 0) > 0 and "two talent trees have the same points" or "no talent points spent yet", group
+    return nil, why == "unreadable" and "this client didn't tell the talent trees"
+      or why == "tie" and "two talent trees have the same points" or "no talent points spent yet", group
   end
   local cands = CandidatesFor(classFile, tab)
   if not cands then
@@ -195,6 +175,15 @@ function F:Apply(force)
     if force then
       self:Print("Forever Leveling BiS hasn't set up this character yet (open its window once).")
     end
+    self:Debug("no Forever Leveling BiS entry for this character yet")
+    return
+  end
+  if FLBLinked(entry) then
+    if force then
+      self:Print("not changed: a spec in Forever Leveling BiS's Settings is linked to a talent set, so it "
+        .. "follows your swaps itself.")
+    end
+    self:Debug("standing aside: Forever Leveling BiS has a spec line linked to a talent set")
     return
   end
   local cands, why, group, tab, treeName = Detect()
@@ -202,10 +191,12 @@ function F:Apply(force)
     if force then
       self:Print("not changed: " .. why .. ".")
     end
+    self:Debug("not changed: %s", why)
     return
   end
   local sig = group .. ":" .. tab
   if not force and self.char.last == sig then
+    self:Debug("still %s, nothing to do", sig)
     return
   end
   local spec = cands[1]
@@ -240,7 +231,10 @@ function F:StatusText()
   local cands, why, group, _, treeName = Detect()
   local entry = CharEntry()
   local set = entry and entry.spec or (entry and "not set (its first spec)" or "unknown (not set up yet)")
-  return ("Talent group %d: %s.  Forever Leveling BiS spec: %s."):format(group or ActiveGroup(),
+  if entry and FLBLinked(entry) then
+    set = set .. " (it follows your talent sets itself: its Settings link a spec to one)"
+  end
+  return ("Talent group %d: %s.  Forever Leveling BiS spec: %s."):format(group or Lib.TalentGroup(),
     cands and (tostring(treeName) .. " -> " .. table.concat(cands, " / ")) or tostring(why), tostring(set))
 end
 
@@ -280,7 +274,7 @@ function F:OnEnable()
     Queue(self, 2)
   end)
   -- Not every client has every talent event; self:On skips a missing one.
-  for _, e in ipairs({ "ACTIVE_TALENT_GROUP_CHANGED", "PLAYER_TALENT_UPDATE", "CHARACTER_POINTS_CHANGED" }) do
+  for _, e in ipairs(Lib.TALENT_EVENTS) do
     self:On(e, function()
       Queue(self, 1)
     end)

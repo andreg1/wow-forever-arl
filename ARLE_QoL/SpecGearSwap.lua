@@ -6,8 +6,8 @@
 --
 -- Why not EllesmereUI's character sheet: it listens for the retail
 -- PLAYER_SPECIALIZATION_CHANGED / GetSpecialization, which this client's dual
--- spec never fires. Surfaces (Blizzard API only): ACTIVE_TALENT_GROUP_CHANGED,
--- GetActiveTalentGroup, C_EquipmentSet.*, EquipmentManager_EquipSet.
+-- spec never fires. Surfaces (Blizzard API only): the talent events and set
+-- (Lib.TALENT_EVENTS, Lib.TalentGroup), C_EquipmentSet.*, EquipmentManager_EquipSet.
 --
 -- Which set a spec gets: the set you linked to it (link / set / learned: the
 -- first set you equip by hand in a spec with no link), else a set named like
@@ -32,7 +32,8 @@ local ARLE = _G.ARLExtensions
 if not ARLE then
   return
 end
-local Items = ARLE.Lib.Items
+local Lib = ARLE.Lib
+local Items = Lib.Items
 
 local F = {
   id = "SpecGearSwap",
@@ -89,20 +90,10 @@ end
 -- Spec helpers
 -------------------------------------------------------------------------------
 
+-- (Lib.TalentGroup / Lib.MainTalentTree read Forever's trait tree; the old
+-- GetTalentTabInfo is gone from the client.)
 local function ActiveGroup()
-  if GetActiveTalentGroup then
-    local ok, g = pcall(GetActiveTalentGroup)
-    if ok and g then
-      return g
-    end
-  end
-  if C_SpecializationInfo and C_SpecializationInfo.GetActiveSpecGroup then
-    local ok, g = pcall(C_SpecializationInfo.GetActiveSpecGroup)
-    if ok and g then
-      return g
-    end
-  end
-  return 1
+  return Lib.TalentGroup()
 end
 
 local function NumGroups()
@@ -117,29 +108,8 @@ end
 
 -- Name of the talent tree with the most points in group, or nil.
 local function MainTree(group)
-  if not (GetNumTalentTabs and GetTalentTabInfo) then
-    return nil
-  end
-  local bestName, bestPts = nil, 0
-  for tab = 1, (GetNumTalentTabs() or 0) do
-    local ok, a, b, c, d, e = pcall(GetTalentTabInfo, tab, false, false, group)
-    if not ok then
-      ok, a, b, c, d, e = pcall(GetTalentTabInfo, tab)
-    end
-    if ok then
-      local name, pts
-      if type(a) == "number" then
-        name, pts = b, e -- id, name, desc, icon, points
-      else
-        name, pts = a, c -- name, icon, points, file
-      end
-      pts = tonumber(pts) or 0
-      if name and pts > bestPts then
-        bestName, bestPts = name, pts
-      end
-    end
-  end
-  return bestName
+  local _, name = Lib.MainTalentTree(group)
+  return name
 end
 
 local function SpecLabel(group)
@@ -775,9 +745,11 @@ function F:OnEnable()
     end
   end
   -- Talent events differ between clients (On registers nothing for an unknown one).
-  local okA = self:On("ACTIVE_TALENT_GROUP_CHANGED", SpecEvent)
-  local okT = self:On("PLAYER_TALENT_UPDATE", SpecEvent)
-  if not (okA or okT) then
+  local any = false
+  for _, e in ipairs(Lib.TALENT_EVENTS) do
+    any = self:On(e, SpecEvent) and true or any
+  end
+  if not any then
     F:Print("no talent group events on this client; spec changes won't be seen.")
   end
   self:On("PLAYER_REGEN_ENABLED", function()

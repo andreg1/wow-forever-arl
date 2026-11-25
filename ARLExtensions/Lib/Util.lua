@@ -215,3 +215,150 @@ function L.StripRealm(name)
   name = L.Str(name)
   return name and (name:match("^([^%-]+)") or name) or nil
 end
+
+-- Talents ----------------------------------------------------------------------
+-- Forever has no GetNumTalentTabs / GetTalentTabInfo any more (calling them
+-- gives "attempt to call a nil value", ForeverDungeonJournal's notes, 20 Nov
+-- 2026). Its talent window is the trait tree (C_Traits, Camelot's
+-- Blizzard_ClassTalentsFrame): one tree per class, with the three talent
+-- trees as its groups (C_Traits.GetGroupDisplayInfoByTreeID, tab order =
+-- orderIndex). The talent set is C_SpecializationInfo.GetActiveSpecGroup(),
+-- and a set swap ends on ACTIVE_COMBAT_CONFIG_CHANGED; ACTIVE_TALENT_GROUP_CHANGED
+-- has not been seen to fire there (Forever Leveling BiS's notes). The old
+-- functions are still tried on a client that has them.
+
+-- The talent events a feature listens for to see a swap or a respec (self:On
+-- skips the ones this client lacks).
+L.TALENT_EVENTS = { "ACTIVE_COMBAT_CONFIG_CHANGED", "TRAIT_CONFIG_UPDATED", "PLAYER_TALENT_UPDATE",
+  "ACTIVE_TALENT_GROUP_CHANGED", "CHARACTER_POINTS_CHANGED" }
+
+-- The active talent set (1 or 2).
+function L.TalentGroup()
+  local S = C_SpecializationInfo
+  local g = S and (L.Call(S.GetActiveSpecGroup))
+  if type(g) ~= "number" then
+    g = (L.Call(_G.GetActiveTalentGroup))
+  end
+  return type(g) == "number" and g or 1
+end
+
+-- The trait config of talent set `group`.
+local function TalentConfig(group)
+  local S = C_SpecializationInfo
+  local id = S and (L.Call(S.GetCombatConfigIDForSpecGroup, group))
+  if type(id) ~= "number" and group == L.TalentGroup() and C_ClassTalents then
+    id = (L.Call(C_ClassTalents.GetActiveConfigID))
+  end
+  return type(id) == "number" and id or nil
+end
+
+local function Num(t, key)
+  local v = L.Plain(t[key])
+  return type(v) == "number" and v or nil
+end
+
+local function TraitTrees(group)
+  local T = C_Traits
+  if type(T) ~= "table" or not T.GetConfigInfo or not T.GetTreeNodes or not T.GetNodeInfo
+    or not T.GetGroupDisplayInfoByTreeID then
+    return nil
+  end
+  local configID = TalentConfig(group)
+  local config = configID and (L.Call(T.GetConfigInfo, configID))
+  local treeIDs = L.Readable(config) and config.treeIDs
+  local treeID = L.Readable(treeIDs) and L.Plain(treeIDs[1])
+  if type(treeID) ~= "number" then
+    return nil
+  end
+  local displays = L.Call(T.GetGroupDisplayInfoByTreeID, treeID)
+  if not L.Readable(displays) then
+    return nil
+  end
+  local trees, byGroup = {}, {}
+  for _, d in ipairs(displays) do
+    local gid = L.Readable(d) and Num(d, "groupID")
+    if gid then
+      local tree = { name = L.Str(d.displayName), points = 0, order = Num(d, "orderIndex") or #trees }
+      trees[#trees + 1] = tree
+      byGroup[gid] = tree
+    end
+  end
+  if #trees == 0 then
+    return nil
+  end
+  table.sort(trees, function(a, b)
+    return a.order < b.order
+  end)
+  local nodes = L.Call(T.GetTreeNodes, treeID)
+  if not L.Readable(nodes) then
+    return nil
+  end
+  for _, nodeID in ipairs(nodes) do
+    local info = L.Call(T.GetNodeInfo, configID, nodeID)
+    if L.Readable(info) and L.Readable(info.groupIDs) then
+      local pts = Num(info, "ranksPurchased") or Num(info, "activeRank") or 0
+      if pts > 0 then
+        for _, gid in ipairs(info.groupIDs) do
+          local tree = byGroup[L.Plain(gid)]
+          if tree then
+            tree.points = tree.points + pts
+            break
+          end
+        end
+      end
+    end
+  end
+  return trees
+end
+
+local function LegacyTrees(group)
+  local tabs = (L.Call(_G.GetNumTalentTabs))
+  if type(tabs) ~= "number" or tabs < 1 or type(_G.GetTalentTabInfo) ~= "function" then
+    return nil
+  end
+  local trees = {}
+  for tab = 1, tabs do
+    local ok, a, b, c, _, e = pcall(GetTalentTabInfo, tab, false, false, group)
+    if not ok then
+      ok, a, b, c, _, e = pcall(GetTalentTabInfo, tab)
+    end
+    if not ok then
+      return nil
+    end
+    if type(L.Plain(a)) == "number" then
+      trees[tab] = { name = L.Str(b), points = tonumber(L.Plain(e)) or 0 } -- id, name, description, icon, points
+    else
+      trees[tab] = { name = L.Str(a), points = tonumber(L.Plain(c)) or 0 } -- name, icon, points, file
+    end
+  end
+  return trees
+end
+
+-- The talent trees of set `group` (default: the active one) in tab order, as
+-- { { name, points }, ... }, or nil when the client can't tell.
+function L.TalentTrees(group)
+  group = group or L.TalentGroup()
+  return TraitTrees(group) or LegacyTrees(group)
+end
+
+-- The tree with the most points in set `group`: tab index, name, points.
+-- No points or a tie: nil, nil, the most points (and "tie" on a tie);
+-- unreadable talents: nil, nil, nil, "unreadable".
+function L.MainTalentTree(group)
+  local trees = L.TalentTrees(group)
+  if not trees then
+    return nil, nil, nil, "unreadable"
+  end
+  local best, bestPts, tie = nil, 0, false
+  for tab, tree in ipairs(trees) do
+    if tree.points > bestPts then
+      best, bestPts, tie = tab, tree.points, false
+    elseif tree.points == bestPts and bestPts > 0 then
+      tie = true
+    end
+  end
+  if tie or not best then
+    return nil, nil, bestPts, tie and "tie" or nil
+  end
+  return best, trees[best].name, bestPts
+end
