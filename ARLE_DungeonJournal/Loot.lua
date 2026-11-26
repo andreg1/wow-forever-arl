@@ -74,6 +74,11 @@ tab.SpecLabel = SpecLabel
 local party = {}
 tab.data = party
 
+-- GearQuest's rank of a drop for the player (1 = its best), or nil.
+local function GQRank(item)
+  return item.loc and H.GQRank(item.id, item.loc) or nil
+end
+
 -- The player's own gains, straight from Forever Leveling BiS.
 local function MyData(dungeon)
   local api = FLB()
@@ -421,11 +426,6 @@ local STAR = H.Inline(H.ICON.star, 12)
 
 -- What a boss's drops hold for the filter: visible items, BiS and upgrade
 -- counts, and the members it has something for (strong: BiS for them).
--- GearQuest's rank of a drop for the player (1 = its best), or nil.
-local function GQRank(item)
-  return item.loc and H.GQRank(item.id, item.loc) or nil
-end
-
 local function Summary(items, marks, filter)
   local me = Me()
   local visible, bis, ups, who, order = {}, 0, 0, {}, {}

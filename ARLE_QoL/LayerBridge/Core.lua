@@ -85,7 +85,7 @@ local F = {
     { key = "scale", type = "range", label = "Size (%)", min = 70, max = 150, step = 5, default = 100, cmd = "size" },
     ARLE.Options.Preset.ResetPosition(),
     { type = "button", label = "Swap layer now", nocmd = true,
-      run = function() LB.Swap.Click("panel") end },
+      run = function() ns.LayerBridge.Swap.Click("panel") end },
     { type = "header", label = "Networks" },
     -- (one switch per network, added by LB.RegisterNetwork)
   },
