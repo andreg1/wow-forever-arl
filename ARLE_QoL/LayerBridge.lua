@@ -10,7 +10,8 @@
 --    NovaWorldBuffs knows the layer (it isn't on Forever).
 --  * LayerSwap (Adam5288) asks out of sight: a click runs /who on the zone
 --    and sends each name a hidden addon whisper, prefix "LayerSwap", text
---    "inv layer <LS <zoneMap> [want <id>|not <id> ...] [x,y]>". A host on
+--    "inv layer <LS <zoneMap> [want <id>|not <id> ...] r3 [x,y]>" (r3 since
+--    LayerSwap 1.14.52: its hosts on Forever invite only marked asks). A host on
 --    another layer in that zone invites; every LayerSwap user in the zone
 --    answers "heard <asker>|<layer id or ->|<zone or ->|<h or ->", and a
 --    host on the asker's own layer whispers "same". The layer id is a
@@ -73,6 +74,12 @@ local ASK_TTL = 180 -- s an ask of ours stays "ours" for the leave-after-move
 local LOG_MAX = 30
 local HISTORY_TTL, HISTORY_MAX = 6 * 3600, 12 -- layers we've been on: avoided for 6 h, 12 at most
 local LINE_MAX = 250 -- an addon message holds 255 characters
+-- LayerSwap 1.14.52+: on Forever its hosts invite only asks marked with the
+-- generation of rules the asker keeps ("r3": the hour's limit, none in combat,
+-- none while dead or a ghost); others get "-". We keep the hour's limit and
+-- the dead rule, but ask in combat too (the user's choice, 2026-11-26).
+local RULES_MARK = "r3"
+local SWAP_CAP, SWAP_CAP_FOR = 16, 3600 -- the game allows 16 group joins as a guest an hour (LayerSwap's Who.CAP)
 
 local F = {
   id = "LayerBridge",
@@ -357,9 +364,11 @@ local function AskLine(want, avoids)
   end
   local pos
   if zone and C_Map.GetPlayerMapPosition then
-    local ok, pos = pcall(C_Map.GetPlayerMapPosition, zone, "player")
-    if ok and pos and not Secret(pos) then
-      local okXY, x, y = pcall(pos.GetXY, pos)
+    -- (was "local ok, pos": the inner pos hid this one, so the ask never
+    -- carried the position, which hosts use to judge the distance)
+    local ok, at = pcall(C_Map.GetPlayerMapPosition, zone, "player")
+    if ok and at and not Secret(at) then
+      local okXY, x, y = pcall(at.GetXY, at)
       if okXY and type(x) == "number" and type(y) == "number" and x > 0 and y > 0 then
         pos = string.format("%.1f,%.1f", x * 100, y * 100)
       end
@@ -368,8 +377,8 @@ local function AskLine(want, avoids)
   if want then
     parts[#parts + 1] = "want " .. want
   else
-    -- "inv layer " + the parts + " " + position + ">"
-    local len = 10 + #table.concat(parts, " ") + (pos and #pos + 1 or 0) + 1
+    -- "inv layer " + the parts + " " + mark + " " + position + ">"
+    local len = 10 + #table.concat(parts, " ") + #RULES_MARK + 1 + (pos and #pos + 1 or 0) + 1
     for _, id in ipairs(avoids or {}) do
       local add = " not " .. id
       if len + #add > LINE_MAX then
@@ -378,6 +387,11 @@ local function AskLine(want, avoids)
       parts[#parts + 1] = "not " .. id
       len = len + #add
     end
+  end
+  -- the mark only behind a zone, as LayerSwap's routeText (older versions
+  -- know the tag by its first word)
+  if zone then
+    parts[#parts + 1] = RULES_MARK
   end
   if pos then
     parts[#parts + 1] = pos
@@ -915,6 +929,16 @@ function F:Ask(via, forced, target)
     self:Print("can't change layer in an instance.")
     return
   end
+  if UnitIsDeadOrGhost("player") then
+    self:Print("can't ask for a layer swap while dead. Ask again once you're alive.")
+    return
+  end
+  local left = self:CapWait()
+  if left then
+    self:Print(string.format("the game allows %d layer swaps an hour and they're used up. Ask again in %d min.",
+      SWAP_CAP, math.ceil(left / 60)))
+    return
+  end
   local now = GetTime()
   if forced ~= "autolayer" and ask and now - ask.at < ASK_GAP then
     self:Print(string.format("wait %d s before asking again.", ASK_GAP - (now - ask.at)))
@@ -1403,7 +1427,7 @@ function F:Anyway(p)
   if other > 0 and p.doneAt and GetTime() - p.doneAt < ANYWAY_LATE then
     return
   end
-  local line = "inv layer <LS " .. tostring(p.zone) .. ">"
+  local line = "inv layer <LS " .. tostring(p.zone) .. " " .. RULES_MARK .. ">"
   for name, r in pairs(p.replies or {}) do
     if r.host and r.layer == nil and not r.anyway and r.zone == tostring(p.zone) then
       r.anyway = true
@@ -1505,8 +1529,33 @@ local function HostName()
   return inviter and GetTime() - inviter.at < ASK_TTL and Short(inviter.name) or nil
 end
 
+-- char.joins: time() of each host's group we joined after an ask of ours, the
+-- last hour's. Every one counts towards the game's limit, moved or not.
+function F:Joins()
+  local list, keep, now = self.char.joins or {}, {}, time()
+  for _, at in ipairs(list) do
+    if type(at) == "number" and now - at < SWAP_CAP_FOR then
+      keep[#keep + 1] = at
+    end
+  end
+  self.char.joins = keep
+  return keep
+end
+
+-- Seconds until a swap is allowed again, or nil while some are left.
+function F:CapWait()
+  local list = self:Joins()
+  if #list < SWAP_CAP then
+    return nil
+  end
+  return list[#list - SWAP_CAP + 1] + SWAP_CAP_FOR - time()
+end
+
 function F:OnGroupJoined()
   if lastAsk and GetTime() - lastAsk.at < ASK_TTL and not UnitIsGroupLeader("player") then
+    local list = self:Joins()
+    list[#list + 1] = time()
+    self:Debug("joined a host's group: %d of %d this hour", #list, SWAP_CAP)
     joined = { at = GetTime(), layer = lastAsk.layer or layer.id }
     self:Step("joined a group; waiting for the layer to change (now %s)", layer.id and Key(layer.id) or "unknown")
   end
@@ -2159,10 +2208,11 @@ function F:GetStatus()
     found[1] = "On its own"
   end
   local avoid = #self:AvoidList() - (layer.id and 1 or 0)
-  return string.format("Active · %s · layer %s · %s · answered %d, invites %d, asks %d (%d heard, %d hosts)",
+  return string.format("Active · %s · layer %s · %s · %d of %d swaps this hour · answered %d, invites %d, "
+    .. "asks %d (%d heard, %d hosts)",
     table.concat(found, " + "), layer.id and Key(layer.id) or "unknown (asks go out without it)",
     self.db.avoidVisited ~= false and string.format("avoiding %d visited layers", avoid) or "visited layers allowed",
-    stats.answered, stats.handed + stats.invited, stats.asked, stats.heard, stats.hosts)
+    #self:Joins(), SWAP_CAP, stats.answered, stats.handed + stats.invited, stats.asked, stats.heard, stats.hosts)
 end
 
 F.commands = {

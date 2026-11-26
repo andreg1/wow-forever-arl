@@ -2,7 +2,7 @@
 ## Title: ARL Extensions: OneMoreQuest
 ## Notes: Dungeon Lead-ins: a dungeon mark on OneMoreQuest's quests that lead to a dungeon quest.
 ## Author: aredpanda, andreg1
-## Version: 0.13.8
+## Version: 0.13.9
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
 ## OptionalDeps: OneMoreQuest, QuestieDB
