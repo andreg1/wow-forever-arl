@@ -79,9 +79,9 @@ local BUTTONS = {
   FishingSwap = { kind = "macro", label = "Fishing Pole Alert: put my weapons back on" },
   RareScan = { kind = "macro", label = "Rare Objectives: scan for rare quest mobs" },
   BuffBack = { kind = "macro", label = "Buff Back: buff the next person in the queue" },
-  -- Layer Bridge's AutoLayer button (the key keeps its first name): a
-  -- clickable macro, so its "inv layer" line is said by the player's click.
-  LayerSwap = { kind = "macro", click = true, label = "Layer Bridge: ask AutoLayer hosts (inv layer)" },
+  -- Layer Bridge's Swap key (the key keeps its first name): an empty macro;
+  -- the swap runs in its PostClick, inside the key press (the /who needs one).
+  LayerSwap = { kind = "macro", click = true, label = "Layer Bridge: swap layer" },
   -- Soulstone Reminder's card icon: puts the stone up (or makes one).
   Soulstone = { kind = "macro", click = true, label = "Soulstone Reminder: put my soulstone up (or make one)" },
   UseItem = { kind = "item" }, -- Sleeping Bag's bag icon

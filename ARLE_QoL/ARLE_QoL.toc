@@ -2,10 +2,10 @@
 ## Title: ARL Extensions: Quality of Life
 ## Notes: Sleeping Bag reminders, XP Food, Fishing Pole Alert, Spec Gear Swap, LFG Role Filter, Leveling BiS Spec, Auto Uprank, Quick Loot, Loot Sparkles, Buff Back, Layer Bridge, Share Location, PallyPower Auto-Hide and Soulstone Reminder.
 ## Author: aredpanda, andreg1
-## Version: 0.13.9
+## Version: 0.14.0
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
-## OptionalDeps: ForeverLevelingBiS, AutoLayer, LayerSwap, PallyPower
+## OptionalDeps: ForeverLevelingBiS, AutoLayer, LayerSwap, LayerAnarchy, ForeverLayerHop, VoidLayer, PallyPower
 ## LoadOnDemand: 1
 ## X-ARLE-Pack: QoL
 ## X-ARLE-Group: QualityOfLife
@@ -20,7 +20,7 @@
 ## X-ARLE-Feature-QuickLoot: title=Quick Loot; cmd=loot; default=off
 ## X-ARLE-Feature-LootSparkles: title=Loot Sparkles; cmd=sparkle; default=off; replaces=ForeverLootSparkles
 ## X-ARLE-Feature-BuffBack: title=Buff Back; cmd=buff; default=off; replaces=Manners
-## X-ARLE-Feature-LayerBridge: title=Layer Bridge; cmd=layer; default=off
+## X-ARLE-Feature-LayerBridge: title=Layer Bridge; cmd=layer; default=off; replaces=LayerAnarchy
 ## X-ARLE-Feature-ShareLocation: title=Share Location; cmd=share
 ## X-ARLE-Feature-PallyPowerHide: title=PallyPower Auto-Hide; extends=PallyPower; group=PallyPower; cmd=pally; default=off
 ## X-ARLE-Feature-SoulstoneReminder: title=Soulstone Reminder; cmd=soulstone; default=off
@@ -36,7 +36,14 @@ QuickLoot.lua
 LootSparkles.lua
 BuffBackData.lua
 BuffBack.lua
-LayerBridge.lua
+LayerBridge\Core.lua
+LayerBridge\Swap.lua
+LayerBridge\Net_LayerSwap.lua
+LayerBridge\Net_AutoLayer.lua
+LayerBridge\Net_VoidNet.lua
+LayerBridge\Net_FLH.lua
+LayerBridge\UI.lua
+LayerBridge\Feature.lua
 ShareLocation.lua
 PallyPowerHide.lua
 SoulstoneReminder.lua

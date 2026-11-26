@@ -27,9 +27,9 @@ local function DeepCopy(value)
   return out
 end
 
--- self.shared keys (Layer Bridge's book and asked, Darkmoon's learned counts,
--- Dungeon Helper's board): data, not settings.
-local SHARED_ONLY = { book = true, asked = true, learned = true, board = true }
+-- self.shared keys (Layer Bridge's books, book (before 0.14) and asked,
+-- Darkmoon's learned counts, Dungeon Helper's board): data, not settings.
+local SHARED_ONLY = { book = true, books = true, asked = true, learned = true, board = true }
 
 local function CharSV()
   local sv = _G.ARLExtensionsCharDB
