@@ -2,7 +2,7 @@
 ## Title: ARL Extensions: Auctionator
 ## Notes: Darkmoon Tickets: Darkmoon Faire turn-ins ranked by gold per Prize Ticket, from Auctionator's prices.
 ## Author: aredpanda, andreg1
-## Version: 0.15.1
+## Version: 0.16.0
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
 ## OptionalDeps: Auctionator

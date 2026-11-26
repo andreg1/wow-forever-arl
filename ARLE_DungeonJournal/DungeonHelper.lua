@@ -43,6 +43,7 @@ local S = H.Script
 
 local FULL_W, FULL_LIST_W = 660, 260
 local COMPACT_W, SIDE_W = 300, 360
+local HOME_W = 30
 local HEADER_H, BANNER_H, TABS_H, TOOL_H = 24, 54, 24, 26
 local MIN_H = 180
 local FADED = 0.3
@@ -111,6 +112,12 @@ end
 
 local function SetTab(key)
   if tabs[key] then
+    if H.objective and key ~= "quests" then
+      return -- (an objective's view is a list of quests only)
+    end
+    if H.shown or H.objective then
+      H.home = false
+    end
     if tabs[key].OnShown and mod.db.tab ~= key then
       tabs[key]:OnShown()
     end
@@ -218,7 +225,12 @@ local function PaintHeader()
   local d = DungeonInfo()
   local compact = Compact()
   frame.dicon:SetShown(compact)
-  if compact then
+  if H.objective and not H.home then
+    local label, icon = tabs.quests.ObjectiveLabel(H.objective)
+    H.SetIcon(frame.dicon, icon or H.ICON.available, true)
+    frame.dicon:Show()
+    frame.title:SetText(label)
+  elseif compact then
     H.SetIcon(frame.dicon, d and type(d.icon) == "string" and d.icon or H.ICON.dungeon,
       d and d.icon and true or false)
     local name = H.shown or "Dungeon Helper"
@@ -229,15 +241,22 @@ local function PaintHeader()
     frame.title:SetText(folded and H.shown and ("Dungeon Helper - " .. H.shown) or "Dungeon Helper")
   end
   frame.collapse:SetText(mod.db.listCollapsed and "+" or "-")
-  frame.pick:SetText(H.auto and "v" or "|cffffd100v|r")
   frame.layout:SetText(compact and ">" or "<")
 end
 
 local function PaintTabs(current)
   local ar, ag, ab = Skin:Accent()
   local compact = Compact()
+  local home = H.home or not (H.shown or H.objective)
+  local hb = frame.homeBtn
+  hb.bg:SetColorTexture(home and ar or 1, home and ag or 1, home and ab or 1, home and 0.18 or 0.04)
+  hb.bar:SetColorTexture(ar, ag, ab, 1)
+  hb.bar:SetShown(home)
+  hb.icon:SetDesaturated(not home)
   for _, b in ipairs(frame.tabButtons) do
-    local on = b.tab == current
+    local on = b.tab == current and not home
+    local off = H.objective and not home and b.tab.key ~= "quests"
+    b:SetAlpha(off and 0.35 or 1)
     b.text:SetText(compact and SHORT[b.tab.key] or b.tab.label)
     b.text:SetTextColor(on and 1 or 0.7, on and 1 or 0.7, on and 1 or 0.7)
     b.bg:SetColorTexture(on and ar or 1, on and ag or 1, on and ab or 1, on and 0.18 or 0.04)
@@ -279,11 +298,13 @@ local function Layout()
   frame.tabStrip:ClearAllPoints()
   frame.tabStrip:SetPoint("TOPLEFT", 4, -stripY)
   frame.tabStrip:SetPoint("TOPRIGHT", -4, -stripY)
-  local tabW = (width - 8 - (#H.tabs - 1) * 3) / #H.tabs
+  local tabW = (width - 8 - HOME_W - 3 - (#H.tabs - 1) * 3) / #H.tabs
+  frame.homeBtn:ClearAllPoints()
+  frame.homeBtn:SetPoint("LEFT", 0, 0)
   for i, b in ipairs(frame.tabButtons) do
     b:SetWidth(tabW)
     b:ClearAllPoints()
-    b:SetPoint("LEFT", (i - 1) * (tabW + 3), 0)
+    b:SetPoint("LEFT", HOME_W + 3 + (i - 1) * (tabW + 3), 0)
   end
   frame.toolbars:ClearAllPoints()
   frame.toolbars:SetPoint("TOPLEFT", 6, -(stripY + TABS_H + 1))
@@ -352,14 +373,16 @@ local function PlaceSide()
 end
 
 -------------------------------------------------------------------------------
--- The dungeon picker (no dungeon shown)
+-- Home: the start page (both sizes). What's going on (your dungeon quests,
+-- the objectives you're working on: attunements, Tier 0.5, class quests) and
+-- every dungeon, with what the open tab is about there. The Home button at
+-- the start of the tab strip comes back here.
 -------------------------------------------------------------------------------
 
 local pick = {}
 local PICK_ROW = 34
 local ShowDungeon
 
--- "58-60" -> 58, 60 (a single "60" -> 60, 60).
 local function LevelRange(text)
   local lo, hi = tostring(text or ""):match("(%d+)%s*%-%s*(%d+)")
   lo, hi = tonumber(lo), tonumber(hi)
@@ -370,7 +393,7 @@ local function LevelRange(text)
   return lo, hi
 end
 
--- What a dungeon holds for the tab, as the row's note and a sort weight.
+-- What a dungeon holds for the tab, as the row's note.
 local function PickNote(key, name)
   if key == "quests" then
     local inLog, ready, avail = tabs.quests.CountFor(name)
@@ -384,14 +407,14 @@ local function PickNote(key, name)
     if avail > 0 then
       parts[#parts + 1] = H.Inline(H.ICON.available, 11) .. avail
     end
-    return table.concat(parts, "  "), inLog > 0, inLog * 10 + avail
+    return table.concat(parts, "  "), inLog > 0
   elseif key == "bis" then
     local ups, bis = tabs.bis.ForMe(name)
     if ups == 0 then
-      return "", false, 0
+      return "", false
     end
     return (bis > 0 and (H.Inline(H.ICON.star, 11) .. "|cffffd100" .. bis .. "|r  ") or "")
-      .. "|cff66ff66+" .. ups .. "|r", false, bis * 10 + ups
+      .. "|cff66ff66+" .. ups .. "|r", false
   else
     local mine, guild, who, isMe = tabs.times.BestFor(name)
     local parts = {}
@@ -403,8 +426,42 @@ local function PickNote(key, name)
     elseif guild and isMe then
       parts[#parts + 1] = "|cffffd100guild record|r"
     end
-    return table.concat(parts, "  "), false, mine and 1 or 0
+    return table.concat(parts, "  "), false
   end
+end
+
+-- Leaving Home for a dungeon's tabs, or an objective's quests.
+local function GoDungeon(name, tabKey, questID)
+  H.objective = nil
+  if name ~= H.CurrentDungeon() then
+    ShowDungeon(name)
+  else
+    ShowDungeon(nil)
+  end
+  H.home = false
+  if questID then
+    tabs.quests.Preselect(name, questID)
+    H.sideOpen = true
+  end
+  SetTab(tabKey or mod.db.tab)
+end
+
+local function GoObjective(key, questID)
+  H.objective, H.home = key, false
+  if questID then
+    tabs.quests.Preselect("obj:" .. key, questID)
+    H.sideOpen = true
+  end
+  SetTab("quests")
+end
+
+function H.GoHome()
+  H.home = true
+  H.sideOpen = false
+  if listScroll then
+    listScroll:SetVerticalScroll(0)
+  end
+  H.Render()
 end
 
 local function CreatePicker(listParent, barParent)
@@ -414,111 +471,199 @@ local function CreatePicker(listParent, barParent)
   pick.bar = CreateFrame("Frame", nil, barParent)
   pick.bar:SetAllPoints()
   pick.bar:Hide()
-  pick.filters = H.FilterButtons(pick.bar, {
-    { key = "suggested", label = "For me", width = 54, tip = "Dungeons with quests in your log, and those for your "
-      .. "level" },
-    { key = "all", label = "All", width = 36, tip = "Every dungeon DungeonJournal knows" },
-  }, function()
-    return mod.db.pickFilter or "suggested"
-  end, function(key)
-    mod.db.pickFilter = key
-  end)
   pick.hint = Kit.Text(pick.bar, "GameFontDisableSmall")
+  pick.hint:SetPoint("LEFT", 2, 0)
   pick.hint:SetPoint("RIGHT", 0, 0)
-  pick.hint:SetJustifyH("RIGHT")
+  pick.hint:SetWordWrap(false)
   pick.rows = H.Pool(function()
     local r = H.Row(pick.list, PICK_ROW, PICK_ROW - 8)
     S(r, "OnClick", function(row)
-      ShowDungeon(row.dungeon)
+      if row.go then
+        row.go()
+      end
     end)
     H.Tip(r, function(row)
-      return row.dungeon
+      return row.tipTitle
     end, function(row)
-      return (row.tip or "") .. "\nClick: show this dungeon. The v button goes back to this list."
+      return row.tip
     end)
     return r
   end)
+  -- Category headers fold and unfold on a click (db.homeFold).
   pick.sections = H.Pool(function()
-    return H.Section(pick.list)
+    local h = H.Section(pick.list)
+    h.hit = CreateFrame("Button", nil, h)
+    h.hit:SetAllPoints()
+    S(h.hit, "OnClick", function()
+      if h.fold then
+        mod.db.homeFold = type(mod.db.homeFold) == "table" and mod.db.homeFold or {}
+        mod.db.homeFold[h.fold] = not h.folded
+        H.Render()
+      end
+    end)
+    H.Tip(h.hit, function()
+      return h.label and h.label:GetText() or ""
+    end, function()
+      return h.fold and (h.folded and "Click to show it." or "Click to fold it.") or nil
+    end)
+    return h
   end)
   pick.empty = H.Empty(pick.list)
 end
 
+-- Dungeons by level bracket: the bracket a dungeon starts in.
+local BRACKETS = { { 0, 29, "Dungeons · levels 10-29" }, { 30, 44, "Dungeons · levels 30-44" },
+  { 45, 54, "Dungeons · levels 45-54" }, { 55, 99, "Dungeons · levels 55-60" } }
+
 local function RenderPicker(width, key)
-  pick.filters.Paint()
   local level = UnitLevel and Plain(UnitLevel("player")) or 1
   local fdj = H.FDJ()
-  local mineList, levelList, rest = {}, {}, {}
+  local ar, ag, ab = Skin:Accent()
+  local folds = type(mod.db.homeFold) == "table" and mod.db.homeFold or {}
+  local y = 2
+  -- A category header; fold: its key in db.homeFold, open: whether it's open
+  -- when never clicked. Returns whether its rows show.
+  local function Section(label, note, icon, fold, open)
+    local h = pick.sections:Get()
+    local folded
+    if fold then
+      if folds[fold] == nil then
+        folded = not open
+      else
+        folded = folds[fold] and true or false
+      end
+    end
+    h.fold, h.folded = fold, folded
+    H.PaintSection(h, (fold and (folded and "+ " or "- ") or "") .. label,
+      note and ("|cff888888" .. note .. "|r") or nil, icon)
+    y = H.Place(h, y + (y > 2 and 6 or 0), 20, 2)
+    return not folded
+  end
+  local function Row(o)
+    local r = pick.rows:Get()
+    r.go, r.tipTitle, r.tip = o.go, o.tipTitle or o.name, o.tip
+    H.SetIcon(r.pic, o.icon or H.ICON.dungeon, o.trim)
+    H.SetEdge(r.pic, ar, ag, ab, 0.3)
+    H.PaintRow(r, { name = o.name, sub = o.sub, note = o.note, color = o.color, dim = o.dim,
+      progress = o.progress, tint = o.tint })
+    y = H.Place(r, y, PICK_ROW)
+  end
+  local function DungeonRow(name, tint)
+    local d = fdj and fdj.DB[name] or {}
+    local lo, hi = LevelRange(d.level)
+    lo, hi = lo or 0, hi or lo or 0
+    local cr, cg, cb = 0.9, 0.9, 0.9
+    if lo > 0 then
+      if level < lo - 3 then
+        cr, cg, cb = 1, 0.35, 0.3
+      elseif level > hi + 4 then
+        cr, cg, cb = 0.55, 0.55, 0.55
+      elseif level >= lo then
+        cr, cg, cb = 0.4, 1, 0.45
+      else
+        cr, cg, cb = 1, 0.82, 0
+      end
+    end
+    local lv = d.level and ("Lv " .. tostring(d.level)) or ""
+    local where = type(d.location) == "string" and d.location or ""
+    local note = PickNote(key, name)
+    Row({ name = name, icon = type(d.icon) == "string" and d.icon or nil, trim = d.icon and true or false,
+      sub = "|cff999999" .. lv .. (where ~= "" and ("  ·  " .. where) or "") .. "|r",
+      note = note ~= "" and note or nil, color = { cr, cg, cb }, dim = lo > 0 and level > hi + 4, tint = tint,
+      tip = (lv ~= "" and (lv .. (where ~= "" and (" · " .. where) or "")) or where) .. "\nClick to open it.",
+      go = function() GoDungeon(name, key) end })
+  end
+
+  -- Where you are.
+  local here = InInstance() and H.CurrentDungeon()
+  if here then
+    Section("You're in")
+    DungeonRow(here, { ar, ag, ab, 0.08 })
+  end
+
+  -- Dungeons, by level bracket (the one for your level open).
+  local byBracket = {}
   for _, name in ipairs(H.Dungeons()) do
     local d = fdj and fdj.DB[name] or {}
     local lo, hi = LevelRange(d.level)
-    local note, hasLog, weight = PickNote(key, name)
-    local e = { name = name, d = d, lo = lo or 0, hi = hi or 0, note = note, weight = weight }
-    if hasLog then
-      mineList[#mineList + 1] = e
-    elseif lo and level >= lo - 3 and level <= (hi or lo) + 2 then
-      levelList[#levelList + 1] = e
-    else
-      rest[#rest + 1] = e
-    end
-  end
-  local function ByLevel(a, b)
-    if a.lo ~= b.lo then
-      return a.lo < b.lo
-    end
-    return a.name < b.name
-  end
-  table.sort(mineList, ByLevel)
-  table.sort(levelList, ByLevel)
-  table.sort(rest, ByLevel)
-  local groups = { { "Your quests are here", mineList }, { "For your level (" .. level .. ")", levelList } }
-  if (mod.db.pickFilter or "suggested") == "all" or (#mineList == 0 and #levelList == 0) then
-    groups[#groups + 1] = { "Other dungeons", rest }
-  end
-  local ar, ag, ab = Skin:Accent()
-  local y = 2
-  local shown = 0
-  for _, g in ipairs(groups) do
-    if #g[2] > 0 then
-      local h = pick.sections:Get()
-      H.PaintSection(h, g[1], "|cff888888" .. #g[2] .. "|r")
-      y = H.Place(h, y + (y > 2 and 6 or 0), 20, 2)
-      for _, e in ipairs(g[2]) do
-        local r = pick.rows:Get()
-        r.dungeon = e.name
-        H.SetIcon(r.pic, type(e.d.icon) == "string" and e.d.icon or H.ICON.dungeon, e.d.icon and true or false)
-        H.SetEdge(r.pic, ar, ag, ab, 0.3)
-        local cr, cg, cb = 0.9, 0.9, 0.9
-        if e.lo > 0 then
-          if level < e.lo - 3 then
-            cr, cg, cb = 1, 0.35, 0.3 -- too high for you
-          elseif level > e.hi + 4 then
-            cr, cg, cb = 0.55, 0.55, 0.55 -- grey
-          elseif level >= e.lo then
-            cr, cg, cb = 0.4, 1, 0.45
-          else
-            cr, cg, cb = 1, 0.82, 0
-          end
-        end
-        local lv = e.d.level and ("Lv " .. tostring(e.d.level)) or ""
-        local where = type(e.d.location) == "string" and e.d.location or ""
-        r.tip = (lv ~= "" and (lv .. (where ~= "" and (" · " .. where) or "")) or where)
-        H.PaintRow(r, {
-          name = e.name,
-          sub = "|cff999999" .. lv .. "|r",
-          note = e.note ~= "" and e.note or nil,
-          color = { cr, cg, cb },
-          dim = level > e.hi + 4,
-        })
-        y = H.Place(r, y, PICK_ROW)
-        shown = shown + 1
+    lo = lo or 0
+    for i, b in ipairs(BRACKETS) do
+      if lo >= b[1] and lo <= b[2] then
+        byBracket[i] = byBracket[i] or {}
+        table.insert(byBracket[i], { name = name, lo = lo, hi = hi or lo })
       end
     end
   end
+  for i, b in ipairs(BRACKETS) do
+    local list = byBracket[i]
+    if list then
+      table.sort(list, function(a2, b2)
+        if a2.lo ~= b2.lo then
+          return a2.lo < b2.lo
+        end
+        return a2.name < b2.name
+      end)
+      local mine = false
+      for _, e in ipairs(list) do
+        mine = mine or (level >= e.lo - 3 and level <= e.hi + 2)
+      end
+      if Section(b[3], tostring(#list), H.ICON.dungeon, "dungeons" .. i, mine) then
+        for _, e in ipairs(list) do
+          DungeonRow(e.name)
+        end
+      end
+    end
+  end
+
+  -- Objectives, by category.
+  local objectives, state = tabs.quests.Objectives()
+  local cats = { { "Raid Attunements", "Interface\\Icons\\INV_Misc_Head_Dragon_01" },
+    { "Important Quests", H.ICON.star }, { "PvP", "Interface\\Icons\\INV_BannerPVP_02" } }
+  for _, c in ipairs(cats) do
+    local list = {}
+    for _, o in ipairs(objectives) do
+      if o.category == c[1] then
+        list[#list + 1] = o
+      end
+    end
+    if #list > 0 and Section(c[1], tostring(#list), c[2], "cat:" .. c[1], true) then
+      for _, o in ipairs(list) do
+        local nextText
+        if o.done >= o.total then
+          nextText = "|cff59ff73all done|r"
+        elseif o.next then
+          local words = o.nextCode == "r" and "|cff59ff73ready|r " or (o.nextCode == "l" and "|cffffd100in log|r ")
+            or (o.nextCode == "a" and "|cffffd100next|r ") or "|cff999999next|r "
+          nextText = words .. "|cffdddddd" .. o.next.name .. "|r"
+        end
+        Row({ name = o.label, icon = o.icon, sub = nextText, note = "|cffffd100" .. o.done .. "|r|cff888888/"
+          .. o.total .. "|r", tip = "Every quest of it for your character, in chain order, and where you are in "
+            .. "it. Click to see them.", go = function() GoObjective(o.key) end })
+      end
+    end
+  end
+  if #objectives == 0 and state == "building" then
+    Section("Objectives", "reading QuestieDB...")
+  end
+
+  -- Your dungeon quests in progress.
+  local log = tabs.quests.LogQuests()
+  if #log > 0 and Section("In your quest log", tostring(#log), H.ICON.active, "log", true) then
+    for _, e in ipairs(log) do
+      Row({ name = e.q.name, icon = H.ICON.active, trim = false,
+        sub = "|cff999999" .. e.dungeon .. "|r" .. (e.code == "r" and "  |cff59ff73ready|r"
+          or (e.progress and ("  " .. e.progress) or "")),
+        color = e.code == "r" and { 0.4, 1, 0.45 } or { 1, 0.82, 0 },
+        tip = "In " .. e.dungeon .. ". Click to open it there.",
+        go = function() GoDungeon(e.dungeon, "quests", tonumber(e.q.id)) end })
+    end
+  end
+
   pick.rows:Done()
   pick.sections:Done()
-  pick.hint:SetText(key == "quests" and "quests for you" or key == "bis" and "upgrades for you" or "best times")
-  if shown == 0 then
+  pick.hint:SetText("Pick a dungeon or an objective  ·  " .. (key == "quests" and "notes: your quests"
+    or key == "bis" and "notes: your upgrades" or "notes: best times"))
+  if y <= 2 then
     y = H.ShowEmpty(pick.empty, 8, width, fdj and "No dungeons known" or "DungeonJournal isn't loaded",
       H.ICON.dungeon)
   else
@@ -549,8 +694,8 @@ local function DoRender()
   local ar, ag, ab = Skin:Accent()
   frame.divider:SetColorTexture(ar, ag, ab, 0.25)
 
-  -- No dungeon: the picker, the tab as what to show for each.
-  local picking = not H.shown
+  -- Home (the start page; also whenever there's no dungeon or objective).
+  local picking = H.home or not (H.shown or H.objective)
   pick.bar:SetShown(picking and not folded)
   if picking then
     for _, t in ipairs(H.tabs) do
@@ -633,8 +778,16 @@ ShowDungeon = function(name, keepAuto)
   end
   local was = H.shown
   H.shown = name or H.CurrentDungeon()
+  if name then
+    H.objective = nil
+  end
   if H.shown ~= was then
     H.sideOpen = false
+    if H.shown and was == nil and not H.objective then
+      H.home = false -- (entered a dungeon, or picked one)
+    elseif not H.shown and not H.objective then
+      H.home = true
+    end
     for _, tab in ipairs(H.tabs) do
       if tab.OnDungeon then
         tab:OnDungeon(H.shown)
@@ -644,35 +797,6 @@ ShowDungeon = function(name, keepAuto)
   tabs.bis.RefreshMine()
   H.Request()
   H.Render()
-end
-
-local function DungeonMenu(owner)
-  local names = H.Dungeons()
-  if MenuUtil and MenuUtil.CreateContextMenu then
-    MenuUtil.CreateContextMenu(owner, function(_, root)
-      root:CreateRadio("Current dungeon (outside: the dungeon list)", function()
-        return H.auto
-      end, function()
-        ShowDungeon(nil)
-      end)
-      root:CreateDivider()
-      for _, name in ipairs(names) do
-        root:CreateRadio(name, function()
-          return not H.auto and H.shown == name
-        end, function()
-          ShowDungeon(name)
-        end)
-      end
-    end)
-  else
-    local idx = 0
-    for i, name in ipairs(names) do
-      if name == H.shown then
-        idx = i
-      end
-    end
-    ShowDungeon(names[idx % #names + 1])
-  end
 end
 
 local function Pane(name, parent)
@@ -771,15 +895,8 @@ local function CreateWindow()
     return mod.db.stayClosed and InInstance() and "It stays closed until you leave this dungeon (/arl dh opens it)."
       or "/arl dh opens it again."
   end)
-  frame.pick = H.SmallButton(frame, "v", 18)
-  frame.pick:SetPoint("RIGHT", frame.close, "LEFT", -2, 0)
-  S(frame.pick, "OnClick", DungeonMenu)
-  H.Tip(frame.pick, "Pick a dungeon", function()
-    return H.auto and "Following the dungeon you are in (outside one: the dungeon list)." or "Showing a dungeon "
-      .. "you picked. Pick \"Current dungeon\" to follow where you are again (outside: back to the list)."
-  end)
   frame.layout = H.SmallButton(frame, ">", 18)
-  frame.layout:SetPoint("RIGHT", frame.pick, "LEFT", -2, 0)
+  frame.layout:SetPoint("RIGHT", frame.close, "LEFT", -2, 0)
   S(frame.layout, "OnClick", function()
     ARLE:SetOption(mod.id, "layout", Compact() and "full" or "compact")
   end)
@@ -813,6 +930,28 @@ local function CreateWindow()
   strip:SetHeight(TABS_H - 2)
   frame.tabStrip = strip
   frame.tabButtons = {}
+  local hb = CreateFrame("Button", nil, strip)
+  hb:SetSize(HOME_W, TABS_H - 2)
+  hb.bg = hb:CreateTexture(nil, "BACKGROUND")
+  hb.bg:SetAllPoints()
+  hb.bar = hb:CreateTexture(nil, "ARTWORK")
+  hb.bar:SetHeight(2)
+  hb.bar:SetPoint("BOTTOMLEFT")
+  hb.bar:SetPoint("BOTTOMRIGHT")
+  hb.icon = hb:CreateTexture(nil, "ARTWORK")
+  hb.icon:SetSize(16, 16)
+  hb.icon:SetPoint("CENTER")
+  hb.icon:SetTexture("Interface\Icons\INV_Misc_Map_01")
+  hb.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+  local hl = hb:CreateTexture(nil, "HIGHLIGHT")
+  hl:SetAllPoints()
+  hl:SetColorTexture(1, 1, 1, 0.06)
+  S(hb, "OnClick", function()
+    H.GoHome()
+  end)
+  H.Tip(hb, "Home", "Pick a dungeon or an objective (raid attunements, Tier 0.5, class quests, battlegrounds); "
+    .. "your dungeon quests in progress are at the bottom. Click Home to come back here.")
+  frame.homeBtn = hb
   for i, tab in ipairs(H.tabs) do
     local b = CreateFrame("Button", nil, strip)
     b:SetHeight(TABS_H - 2)
@@ -933,7 +1072,9 @@ local function Show(tabKey)
   if not frame then
     CreateWindow()
   end
-  if tabKey and tabKey ~= "last" then
+  if tabKey == "home" then
+    H.home = true
+  elseif tabKey and tabKey ~= "last" then
     SetTab(tabKey)
   end
   frame:Show()
@@ -1297,6 +1438,10 @@ local function Command(rest)
   if word == "reset" then
     tabs.times:Reset()
     mod:Print("Clear Times: run reset.")
+    return
+  end
+  if word == "home" then
+    Open("home")
     return
   end
   if word == "compact" or word == "full" then
