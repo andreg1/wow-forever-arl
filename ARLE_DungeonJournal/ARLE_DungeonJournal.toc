@@ -1,11 +1,11 @@
 ## Interface: 16001, 120105, 120107
 ## Title: ARL Extensions: DungeonJournal
-## Notes: Dungeon Helper: bosses and their loot (BiS for you and your ARL partymates), quests with their chains, and clear times with a guild leaderboard.
+## Notes: Dungeon Helper: a compact dungeon window: quests and class quests with every quest leading to them, bosses and their loot (BiS from Forever Leveling BiS or GearQuest), and clear times with a guild leaderboard.
 ## Author: aredpanda, andreg1
-## Version: 0.14.0
+## Version: 0.15.0
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
-## OptionalDeps: ForeverDungeonJournal, ForeverLevelingBiS, QuestieDB
+## OptionalDeps: ForeverDungeonJournal, ForeverLevelingBiS, GearQuestForever, QuestieDB, Questie
 ## LoadOnDemand: 1
 ## X-ARLE-Pack: DungeonJournal
 ## X-ARLE-Group: ForeverDungeonJournal

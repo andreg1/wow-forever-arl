@@ -765,7 +765,7 @@ local function Select(key)
     selected[H.shown] = key
     H.DetailToTop()
   end
-  H.Render()
+  H.Picked()
 end
 
 local function ResetClick(self)
@@ -814,20 +814,78 @@ function tab:Progress()
   return killed .. "/" .. total .. " bosses"
 end
 
+-- The tab was opened: the guild's leaderboard for this dungeon (asked at
+-- most every few minutes per dungeon).
+function tab:OnShown()
+  AskGuild(H.shown)
+end
+
+-- One line about this dungeon's times, for the chat box: the run going, the
+-- best clear and where it stands on the guild's board.
+local function ReportLine(dungeon)
+  local parts = {}
+  local run = Run()
+  if run and run.dungeon == dungeon and run.start then
+    local killed, total = Killed(run, dungeon)
+    parts[#parts + 1] = (run.done and "cleared in " or "run ") .. FormatTime(Elapsed(run))
+      .. (run.done and "" or (" (" .. killed .. "/" .. total .. " bosses)"))
+  end
+  local rec = Records(dungeon)
+  if rec and rec.total then
+    local board = Leaders(dungeon)
+    local place
+    for i, e in ipairs(board) do
+      if e.me then
+        place = i
+      end
+    end
+    parts[#parts + 1] = "best clear " .. FormatTime(rec.total)
+      .. (place and #board > 1 and (", guild #" .. place .. " of " .. #board) or "")
+  else
+    parts[#parts + 1] = "no clear recorded yet"
+  end
+  local board = Leaders(dungeon)
+  if board[1] and not board[1].me then
+    parts[#parts + 1] = "guild record " .. FormatTime(board[1].value) .. " by " .. board[1].name
+  end
+  return "[ARL] " .. dungeon .. ": " .. table.concat(parts, ", ")
+end
+
+local function ReportClick(_, button)
+  local dungeon = H.shown
+  if not dungeon then
+    mod:Print("no dungeon to report on.")
+    return
+  end
+  local where = (button == "RightButton" and "GUILD")
+    or (IsInGroup and IsInGroup() and (IsInInstance() and IsInGroup(LE_PARTY_CATEGORY_INSTANCE or 2) and
+      "INSTANCE_CHAT" or "PARTY")) or "GUILD"
+  if not H.PrefillChat(ReportLine(dungeon), where) then
+    mod:Print("your chat box is in use: " .. ReportLine(dungeon))
+  end
+end
+
 function tab:Create(bar, list, detailFrame)
   self.statusIcon = bar:CreateTexture(nil, "ARTWORK")
   self.statusIcon:SetSize(16, 16)
   self.statusIcon:SetPoint("LEFT", 2, 0)
   self.statusIcon:SetTexture(H.ICON.watch)
   self.statusIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-  self.reset = H.SmallButton(bar, "Reset", 52)
+  self.reset = H.SmallButton(bar, "Reset", 46)
   self.reset:SetPoint("RIGHT", 0, 0)
+  self.report = H.SmallButton(bar, "Report", 50)
+  self.report:SetPoint("RIGHT", self.reset, "LEFT", -3, 0)
+  self.report:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+  S(self.report, "OnClick", ReportClick)
+  H.Tip(self.report, "Report", "Puts a line about this dungeon's times in your chat box (your run, your best clear "
+    .. "and your place on the guild's board): press Enter to send it. Left-click: party (or guild when solo). "
+    .. "Right-click: guild.")
   S(self.reset, "OnClick", ResetClick)
   H.Tip(self.reset, "Start over", "Throws away this run and waits for the next pull. Records are kept. "
     .. "Click twice to confirm.")
   self.status = Kit.Text(bar, "GameFontHighlight")
   self.status:SetPoint("LEFT", self.statusIcon, "RIGHT", 6, 0)
-  self.status:SetPoint("RIGHT", self.reset, "LEFT", -6, 0)
+  self.status:SetPoint("RIGHT", self.report, "LEFT", -6, 0)
   self.status:SetWordWrap(false)
 
   listPool = H.Pool(function()
@@ -1211,6 +1269,14 @@ function tab:RenderDetail(width)
     y = H.Para(fs, y + 4, width, "|cffff9933You don't share yours|r (Clear Times settings)")
   end
   return Finish(y + 6)
+end
+
+-- For the dungeon picker: your best clear, the guild's best and whose.
+function tab.BestFor(dungeon)
+  local rec = Records(dungeon)
+  local board = Leaders(dungeon)
+  local top = board[1]
+  return rec and rec.total or nil, top and top.value or nil, top and top.name or nil, top and top.me or false
 end
 
 function tab:Status()

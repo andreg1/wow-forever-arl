@@ -15,6 +15,14 @@
 --
 -- Party members with ARL share their state of each quest ("QS"), shown as
 -- class-coloured squares like the loot's.
+--
+-- 0.15.0: the list also holds QuestieDB's quests whose work is in the
+-- dungeon that DungeonJournal doesn't list (class quests above all): an
+-- index of every QuestieDB quest, built once in slices, by the instance its
+-- zone or (for tagged and class quests) its objectives' spawns are in. The
+-- chain is a tree: every quest that unlocks it, the quests that unlock those
+-- ("chains of chains", branches indented, "one of" groups), its lead-ins
+-- (QuestieDB breadcrumbs), then the quests that follow.
 local _, ns = ...
 local ARLE = _G.ARLExtensions
 local H = ns.H
@@ -30,6 +38,7 @@ local LQ = ARLE.Lib.Quests
 
 local ROW_H, STEP_H = 34, 26
 local CHAIN_MAX, WALK_MAX = 25, 15
+local TREE_MAX, INDENT, SLICE = 40, 14, 400
 
 local tab = { key = "quests", label = "Quests" }
 H.tabs[#H.tabs + 1] = tab
@@ -115,16 +124,180 @@ local function ForMe(q, id)
   return not ((q.unavailable or race) and not IsDone(id))
 end
 
+-------------------------------------------------------------------------------
+-- QuestieDB's quests for a dungeon (index built once, in slices)
+-------------------------------------------------------------------------------
+
+local index = { state = nil, byPlace = {}, count = 0 }
+local DUNGEON_TAGS = { [81] = true, [85] = true, [62] = true, [88] = true, [89] = true }
+local PLACE_ALIASES = { ["temple of atal'hakkar"] = "sunken temple", ["the temple of atal'hakkar"] = "sunken temple",
+  ["deadmines"] = "the deadmines", ["stockade"] = "the stockade" }
+
+-- A dungeon or instance name as both sides can match: lower case, no wing
+-- (": Library", " - East"), no "Lower"/"Upper", "The" kept only by alias.
+local function Place(name)
+  if type(name) ~= "string" then
+    return nil
+  end
+  local n = name:lower():gsub("\226\128\153", "'"):gsub("%s*:.*$", ""):gsub("%s+%-%s+.*$", "")
+  n = n:gsub("^lower%s+", ""):gsub("^upper%s+", ""):gsub("^the%s+", "")
+  return PLACE_ALIASES[n] or PLACE_ALIASES["the " .. n] or n
+end
+
+local function SpawnPlace(spawns, zones)
+  if type(spawns) == "table" then
+    for areaId in pairs(spawns) do
+      if zones[areaId] then
+        return zones[areaId]
+      end
+    end
+  end
+end
+
+-- Where a quest's work is: its objectives' creatures, objects, item droppers.
+local function ObjectivePlace(id, zones)
+  local obj = QDB.Quest(id, "objectives")
+  if type(obj) ~= "table" then
+    return nil
+  end
+  for _, c in ipairs(type(obj[1]) == "table" and obj[1] or {}) do
+    local found = type(c) == "table" and SpawnPlace(QDB.Npc(c[1], "spawns"), zones)
+    if found then
+      return found
+    end
+  end
+  for _, o in ipairs(type(obj[2]) == "table" and obj[2] or {}) do
+    local found = type(o) == "table" and SpawnPlace(QDB.Object(o[1], "spawns"), zones)
+    if found then
+      return found
+    end
+  end
+  for _, it in ipairs(type(obj[3]) == "table" and obj[3] or {}) do
+    local drops = type(it) == "table" and QDB.Item(it[1], "npcDrops")
+    for i, npc in ipairs(type(drops) == "table" and drops or {}) do
+      local found = i <= 5 and SpawnPlace(QDB.Npc(npc, "spawns"), zones)
+      if found then
+        return found
+      end
+    end
+  end
+end
+
+local function IndexOne(id, zones)
+  local zone = QDB.Quest(id, "zoneOrSort")
+  local place
+  if type(zone) == "number" and zones[zone] then
+    place = zones[zone]
+  else
+    local classes = tonumber(QDB.Quest(id, "requiredClasses")) or 0
+    local tag = ARLE.Bridge.Questie and ARLE.Bridge.Questie.QuestTag and ARLE.Bridge.Questie.QuestTag(id)
+    -- (class quests are filed under their class; tagged ones under a zone)
+    if (classes > 0 and type(zone) == "number" and zone < 0) or DUNGEON_TAGS[tag or 0] then
+      place = ObjectivePlace(id, zones)
+    end
+  end
+  place = Place(place)
+  if place then
+    local list = index.byPlace[place] or {}
+    index.byPlace[place] = list
+    list[#list + 1] = id
+  end
+end
+
+-- Sliced with mod:After (dropped if the feature goes off: the next enable
+-- starts again from the top).
+local function BuildIndex()
+  if index.state == "building" or index.state == "ready" then
+    return
+  end
+  local zones = QDB.Ready() and QDB.InstanceZones()
+  if not zones then
+    index.state = nil -- (QuestieDB still loading: tried again later)
+    return
+  end
+  local ids = QDB.AllQuestIds()
+  index.state, index.byPlace, index.count = "building", {}, 0
+  local i = 0
+  local function Step()
+    local stop = math.min(#ids, i + SLICE)
+    for j = i + 1, stop do
+      pcall(IndexOne, ids[j], zones)
+    end
+    i = stop
+    index.count = i
+    if i < #ids then
+      mod:After(0, Step)
+    else
+      index.state = "ready"
+      mod:Debug("quest index: %d quests read", #ids)
+      H.Render()
+    end
+  end
+  Step()
+end
+
+local CLASS_IDS = { WARRIOR = 1, PALADIN = 2, HUNTER = 3, ROGUE = 4, PRIEST = 5, DEATHKNIGHT = 6, SHAMAN = 7,
+  MAGE = 8, WARLOCK = 9, MONK = 10, DRUID = 11 }
+
+local function HasBit(mask, bitIndex)
+  return math.floor(mask / 2 ^ (bitIndex - 1)) % 2 == 1
+end
+
+local extraCache = {}
+-- QuestieDB's quests for the dungeon that DungeonJournal's list doesn't have,
+-- for this character's faction and class (no profession quests).
+local function Extras(dungeon, known)
+  if not mod.db.questExtras or not QDB.Ready() then
+    return {}
+  end
+  if index.state ~= "ready" then
+    BuildIndex()
+    return {}
+  end
+  if extraCache[dungeon] then
+    return extraCache[dungeon]
+  end
+  local class = PlayerClass()
+  local myBit = class and CLASS_IDS[class]
+  local list = {}
+  for _, id in ipairs(index.byPlace[Place(dungeon)] or {}) do
+    local classes = tonumber(QDB.Quest(id, "requiredClasses")) or 0
+    local forClass = classes == 0 or (myBit and HasBit(classes, myBit))
+    local skill = QDB.Quest(id, "requiredSkill")
+    local name = ARLE.Lib.Str(QDB.Quest(id, "name"))
+    if name and not known[id] and forClass and not (type(skill) == "table" and skill[1])
+        and LQ.ForMySide(id) then
+      list[#list + 1] = { id = id, name = name, level = tonumber(QDB.Quest(id, "questLevel")),
+        requires = tonumber(QDB.Quest(id, "requiredLevel")), source = "questie",
+        classOnly = (classes > 0 and class) or nil }
+    end
+  end
+  extraCache[dungeon] = list
+  return list
+end
+
+function tab:ClearCaches()
+  wipe(extraCache)
+end
+
 local function Quests(dungeon)
   local fdj = H.FDJ()
   local d = fdj and dungeon and fdj.DB[dungeon]
   local faction = UnitFactionGroup and UnitFactionGroup("player")
-  local list = {}
+  local list, known = {}, {}
   for _, q in ipairs(d and d.quests or {}) do
     local id = type(q) == "table" and tonumber(q.id)
+    if id then
+      known[id] = true
+    end
     if id and q.name
         and (not q.faction or q.faction == "Both" or q.faction == "Neutral" or not faction or q.faction == faction)
         and ForMe(q, id) then
+      list[#list + 1] = q
+    end
+  end
+  if dungeon then
+    for _, q in ipairs(Extras(dungeon, known)) do
       list[#list + 1] = q
     end
   end
@@ -182,6 +355,31 @@ local function Info(id, fallbackName)
     note = Str(q.note),
     startsInDungeon = (q.startsInDungeon or det.startsInDungeon) and true or false,
   }
+  -- Who starts and ends it, from QuestieDB, when DungeonJournal doesn't say.
+  local function Giver(field)
+    local by = QDB.Quest(id, field)
+    if type(by) ~= "table" then
+      return nil
+    end
+    local npc = type(by[1]) == "table" and by[1][1]
+    local obj = type(by[2]) == "table" and by[2][1]
+    local nameOf = (npc and Str(QDB.Npc(npc, "name"))) or (obj and Str(QDB.Object(obj, "name")))
+    if not nameOf then
+      return nil
+    end
+    local spawns = npc and QDB.Npc(npc, "spawns") or (obj and QDB.Object(obj, "spawns"))
+    local zoneName
+    if type(spawns) == "table" then
+      for areaId in pairs(spawns) do
+        zoneName = Str((ARLE.Lib.Call(C_Map and C_Map.GetAreaInfo, areaId)))
+        break
+      end
+    end
+    return nameOf .. (zoneName and (", " .. zoneName) or "")
+  end
+  info.pickup = info.pickup or Giver("startedBy")
+  info.turnin = info.turnin or Giver("finishedBy")
+  info.classes = tonumber(QDB.Quest(id, "requiredClasses"))
   if not info.startsInDungeon and info.pickup then
     local ok, inside = FDJCall("StartsInsideDungeon", info.pickup)
     info.startsInDungeon = ok and inside and true or false
@@ -249,7 +447,7 @@ local function Money(id)
   end
   if GetQuestLogRewardMoney then
     local ok, value = pcall(GetQuestLogRewardMoney, id)
-    if ok and not (issecretvalue and issecretvalue(value)) and type(value) == "number" and value > 0 then
+    if ok and not ARLE.Lib.IsSecret(value) and type(value) == "number" and value > 0 then
       return value
     end
   end
@@ -379,23 +577,132 @@ local function After(id)
   return afterCache[id] or nil
 end
 
--- How many of the quests before this one aren't done (a guide chain is
--- how to do it, not what unlocks it: it never blocks).
-local function Missing(id)
+-- The whole tree of quests that unlock this one, as rows top to bottom
+-- (oldest first): { id, depth, alt (one of a "one of" group), head (the
+-- group's header: n alternatives), current }. A step with one prerequisite
+-- keeps its depth (a plain chain stays flat); a step with several puts each
+-- line one deeper. DungeonJournal's curated chain (not a guide) is the
+-- trunk; QuestieDB fills in what each step needs in turn.
+local treeCache = {}
+local function Tree(id)
+  id = tonumber(id)
+  if treeCache[id] ~= nil then
+    return treeCache[id] or nil
+  end
+  local rows, seen = {}, { [id] = true }
+  local function Needs(qid)
+    local group, single = {}, {}
+    if QDB.Ready() then
+      for _, pre in ipairs(IDs(QDB.Quest(qid, "preQuestGroup"))) do
+        if not seen[pre] then
+          group[#group + 1] = pre
+        end
+      end
+      for _, pre in ipairs(IDs(QDB.Quest(qid, "preQuestSingle"))) do
+        if not seen[pre] then
+          single[#single + 1] = pre
+        end
+      end
+    end
+    return group, single
+  end
+  local Emit
+  -- qid's prerequisites, then qid itself.
+  Emit = function(qid, depth, alt, budget)
+    if #rows >= TREE_MAX then
+      return
+    end
+    seen[qid] = true
+    if budget > 0 then
+      local group, single = Needs(qid)
+      local lines = #group + (#single > 0 and 1 or 0)
+      local inner = lines > 1 and depth + 1 or depth
+      for _, pre in ipairs(group) do
+        if not seen[pre] then
+          Emit(pre, inner, false, budget - 1)
+        end
+      end
+      if #single == 1 then
+        Emit(single[1], inner, false, budget - 1)
+      elseif #single > 1 then
+        -- One of several: the one done (else the first) with its own chain,
+        -- the others as single rows under a header.
+        local pick = single[1]
+        for _, pre in ipairs(single) do
+          if IsDone(pre) then
+            pick = pre
+          end
+        end
+        rows[#rows + 1] = { head = #single, depth = inner + 1 }
+        Emit(pick, inner + 1, true, budget - 1)
+        for _, pre in ipairs(single) do
+          if pre ~= pick and not seen[pre] then
+            seen[pre] = true
+            rows[#rows + 1] = { id = pre, depth = inner + 1, alt = true }
+          end
+        end
+      end
+    end
+    rows[#rows + 1] = { id = qid, depth = depth, alt = alt, current = qid == id }
+  end
   local steps, source = Before(id)
-  if not steps or source == "guide" then
+  if steps and source ~= "guide" then
+    for _, step in ipairs(steps) do
+      seen[step.id] = true
+    end
+    for _, step in ipairs(steps) do
+      Emit(step.id, 0, false, WALK_MAX)
+    end
+    rows[#rows + 1] = { id = id, depth = 0, current = true }
+  else
+    Emit(id, 0, false, WALK_MAX)
+  end
+  -- (a quest with nothing before it has no tree)
+  if #rows <= 1 then
+    rows = nil
+  end
+  treeCache[id] = rows or false
+  return rows
+end
+tab.Tree = Tree
+
+-- Optional quests that point to this one (QuestieDB breadcrumbs).
+local function LeadIns(id)
+  local list = {}
+  for _, b in ipairs(IDs(QDB.Quest(id, "breadcrumbs"))) do
+    if LQ.ForMySide(b) then
+      list[#list + 1] = b
+    end
+  end
+  return list
+end
+
+-- How many of the quests before this one aren't done (a guide chain is
+-- how to do it, not what unlocks it: it never blocks). A "one of" group
+-- counts once, and not at all when one of it is done.
+local function Missing(id)
+  local rows = Tree(id)
+  if not rows then
     return 0
   end
   local n = 0
-  for _, step in ipairs(steps) do
-    if not IsDone(step.id) then
-      local alt = false
-      for _, other in ipairs(step.anyOf or {}) do
-        alt = alt or IsDone(other)
+  for i, r in ipairs(rows) do
+    if r.head then
+      local done = false
+      for j = i + 1, #rows do
+        local o = rows[j]
+        if o.depth < r.depth then
+          break
+        end
+        if o.alt and o.depth == r.depth and o.id and IsDone(o.id) then
+          done = true
+        end
       end
-      if not alt then
+      if not done then
         n = n + 1
       end
+    elseif r.id and not r.current and not r.alt and not IsDone(r.id) then
+      n = n + 1
     end
   end
   return n
@@ -627,7 +934,7 @@ local function Select(id)
     selected[H.shown] = id
     H.DetailToTop()
   end
-  H.Render()
+  H.Picked()
 end
 
 -- A line with a small picture on its left: where it starts, an objective...
@@ -721,9 +1028,10 @@ end
 
 function tab:Create(bar, list, detailFrame)
   self.filters = H.FilterButtons(bar, {
-    { key = "all", label = "All", tip = "Every quest of this dungeon for your character" },
-    { key = "todo", label = "To do", tip = "Quests you haven't done yet" },
-    { key = "party", label = "Party", tip = "Quests someone in the party (you too) has in their quest log" },
+    { key = "all", label = "All", width = 32, tip = "Every quest of this dungeon for your character" },
+    { key = "todo", label = "To do", width = 42, tip = "Quests you haven't done yet" },
+    { key = "party", label = "Party", width = 42, tip = "Quests someone in the party (you too) has in their quest log" },
+    { key = "class", label = "Class", width = 42, tip = "Your class's quests for this dungeon" },
   }, Filter, function(key)
     mod.db.questFilter = key
   end)
@@ -872,6 +1180,7 @@ function tab:RenderList(width)
       anyLog = anyLog or s == "l" or s == "r"
     end
     local keep = filter == "all" or (filter == "todo" and e.code ~= "d") or (filter == "party" and anyLog)
+      or (filter == "class" and q.classOnly ~= nil)
     if e.code == "d" and not mod.db.questShowDone then
       keep = false
     end
@@ -923,6 +1232,19 @@ function tab:RenderList(width)
           dim = e.code == "n",
         })
         r.pic:SetAlpha((e.code == "n" or e.code == "d") and 0.6 or 1)
+        if e.q.classOnly then
+          r.pic.corner:SetTexture("Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes")
+          local c = CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[tostring(e.q.classOnly):upper()]
+          if c then
+            r.pic.corner:SetTexCoord(c[1], c[2], c[3], c[4])
+            r.pic.corner:Show()
+          else
+            r.pic.corner:Hide()
+          end
+        else
+          r.pic.corner:SetTexCoord(0, 1, 0, 1)
+          r.pic.corner:Hide()
+        end
         y = H.Place(r, y, ROW_H)
       end
     end
@@ -945,7 +1267,8 @@ function tab:RenderList(width)
     if not H.shown then
       text = "Not in a dungeon"
     elseif #quests == 0 then
-      text = "No quests here\nfor your character"
+      text = index.state == "building" and ("Reading QuestieDB...\n|cff888888" .. index.count .. " quests|r")
+        or "No quests here\nfor your character"
     else
       text = "No quests match\n|cff888888try All|r"
     end
@@ -1182,77 +1505,90 @@ function tab:RenderDetail(width)
     end
   end
 
-  -- The chain as a track: the quests before, this one, the quests after.
-  local before, source = Before(id)
-  local after = After(id)
-  if before or after then
-    local track = {}
-    local nextShown = false
-    for _, step in ipairs(before or {}) do
-      track[#track + 1] = step
-    end
-    local guide = source == "guide"
-    if not guide then
-      track[#track + 1] = { id = id, current = true }
-    end
-    for _, step in ipairs(after or {}) do
-      track[#track + 1] = step
-    end
-    local at = 0
-    for i, step in ipairs(track) do
-      if step.current then
-        at = i
-      end
-    end
-    if guide then
-      Section("How to do it", "|cff888888" .. #before .. " steps|r")
+  -- The chain as a tree: every quest that unlocks this one (branches
+  -- indented, "one of" groups), this one, then what follows; lead-ins apart.
+  local function Step(stepId, depth, opts)
+    local r = detail.steps:Get()
+    local sInfo = Info(stepId)
+    r.id, r.stepName, r.anyOf, r.source = stepId, nil, nil, opts.source
+    r.listed = not opts.current and view.byID[stepId] ~= nil
+    local code, note
+    if opts.current then
+      code, note = e.code, "|cffffffffthis quest|r"
     else
-      local left = Missing(id)
-      Section("Quest chain", (left > 0 and (H.Inline(H.ICON.lock, 11) .. " |cffff7359" .. left .. " to go|r  ") or "")
-        .. "|cff888888step " .. at .. " of " .. #track .. "|r")
+      code, note = StepState(stepId, opts.nextUp)
     end
-    for i, step in ipairs(track) do
-      local r = detail.steps:Get()
-      local sInfo = Info(step.id, step.name)
-      r.id, r.stepName, r.anyOf, r.source = step.id, step.name, step.anyOf, source
-      r.listed = not step.current and view.byID[step.id] ~= nil
-      local done = IsDone(step.id)
-      for _, other in ipairs(step.anyOf or {}) do
-        done = done or IsDone(other)
-      end
-      local code, note
-      if step.current then
-        code, note = e.code, "|cffffffffthis quest|r"
+    SetStateIcon(r.pic, code)
+    H.SetEdge(r.pic, ar, ag, ab, opts.current and 0.9 or 0.15)
+    local slr, slg, slb = DifficultyColor(sInfo.level)
+    local name = (sInfo.level and ("|cff888888" .. sInfo.level .. "|r  ") or "") .. sInfo.name
+      .. (sInfo.startsInDungeon and (" " .. H.Inline(H.ICON.dungeon, 12)) or "")
+      .. (opts.alt and " |cff888888(or)|r" or "")
+    H.PaintRow(r, {
+      name = name,
+      note = note,
+      color = code == "d" and { 0.55, 0.55, 0.55 } or { slr, slg, slb },
+      tint = opts.current and { ar, ag, ab, 0.14 } or nil,
+      dim = code == "n",
+    })
+    r.pic:SetAlpha(code == "n" and 0.55 or 1)
+    local doneC, todoC = { 0.4, 1, 0.45, 0.6 }, { 1, 1, 1, 0.15 }
+    local upC = opts.prevDone and doneC or todoC
+    local downC = code == "d" and doneC or todoC
+    r.up:SetColorTexture(upC[1], upC[2], upC[3], upC[4])
+    r.down:SetColorTexture(downC[1], downC[2], downC[3], downC[4])
+    r.up:SetShown(opts.first ~= true)
+    r.down:SetShown(opts.last ~= true)
+    H.Place(r, y, STEP_H, 0)
+    r:ClearAllPoints()
+    r:SetPoint("TOPLEFT", depth * INDENT, -y)
+    r:SetPoint("RIGHT")
+    y = y + STEP_H
+    return code == "d"
+  end
+  local rows = Tree(id)
+  local _, source = Before(id)
+  local after = After(id)
+  local leads = LeadIns(id)
+  if source == "guide" then
+    local steps = Before(id)
+    Section("How to do it", "|cff888888" .. #steps .. " steps|r")
+    local prev = false
+    for i, st in ipairs(steps) do
+      prev = Step(st.id, 0, { source = "guide", first = i == 1, last = i == #steps, prevDone = prev })
+    end
+  end
+  if rows or after then
+    local left = Missing(id)
+    local total = (rows and #rows or 1) + (after and #after or 0)
+    Section("Quest chain", (left > 0 and (H.Inline(H.ICON.lock, 11) .. " |cffff7359" .. left .. " to go|r  ") or "")
+      .. "|cff888888" .. total .. " quests|r")
+    local nextShown, prev = false, false
+    local list = rows or { { id = id, depth = 0, current = true } }
+    for i, r in ipairs(list) do
+      if r.head then
+        local h = detail.lines:Get()
+        local y0 = y
+        y = PlaceLine(h, y, width - r.depth * INDENT, H.ICON.waiting, "|cff99ccffone of these " .. r.head .. ":|r")
+        h:ClearAllPoints()
+        h:SetPoint("TOPLEFT", r.depth * INDENT, -y0)
+        h:SetPoint("RIGHT")
       else
-        code, note = StepState(step.id, not done and not nextShown)
-        if done and code ~= "d" then
-          code, note = "d", ""
-        end
+        local done = IsDone(r.id)
+        prev = Step(r.id, r.depth, { current = r.current, alt = r.alt, source = rows and "tree" or nil,
+          nextUp = not done and not nextShown and not r.current, first = i == 1,
+          last = i == #list and not after, prevDone = prev })
+        nextShown = nextShown or (not done and not r.current)
       end
-      nextShown = nextShown or not done
-      SetStateIcon(r.pic, code)
-      H.SetEdge(r.pic, ar, ag, ab, step.current and 0.9 or 0.15)
-      local slr, slg, slb = DifficultyColor(sInfo.level)
-      local name = (sInfo.level and ("|cff888888" .. sInfo.level .. "|r  ") or "") .. sInfo.name
-        .. (step.anyOf and (" |cff888888(or " .. #step.anyOf .. " other)|r") or "")
-        .. (sInfo.startsInDungeon and (" " .. H.Inline(H.ICON.dungeon, 12)) or "")
-      H.PaintRow(r, {
-        name = name,
-        note = note,
-        color = code == "d" and { 0.55, 0.55, 0.55 } or { slr, slg, slb },
-        tint = step.current and { ar, ag, ab, 0.14 } or nil,
-        dim = code == "n",
-      })
-      r.pic:SetAlpha(code == "n" and 0.55 or 1)
-      local doneC = { 0.4, 1, 0.45, 0.6 }
-      local todoC = { 1, 1, 1, 0.15 }
-      local upC = (i > 1 and IsDone(track[i - 1].id)) and doneC or todoC
-      local downC = (code == "d") and doneC or todoC
-      r.up:SetColorTexture(upC[1], upC[2], upC[3], upC[4])
-      r.down:SetColorTexture(downC[1], downC[2], downC[3], downC[4])
-      r.up:SetShown(i > 1)
-      r.down:SetShown(i < #track)
-      y = H.Place(r, y, STEP_H, 0)
+    end
+    for i, st in ipairs(after or {}) do
+      prev = Step(st.id, 0, { last = i == #after, prevDone = prev })
+    end
+  end
+  if #leads > 0 then
+    Section("Lead-ins", "|cff888888optional, point you here|r")
+    for _, lid in ipairs(leads) do
+      Step(lid, 0, { first = true, last = true })
     end
   end
 
@@ -1295,6 +1631,24 @@ function tab:RenderDetail(width)
     end
   end
   return Finish(y + 6)
+end
+
+-- For the dungeon picker: quests in your log there, ready to turn in, and
+-- available to pick up.
+function tab.CountFor(dungeon)
+  local inLog, ready, avail = 0, 0, 0
+  for _, q in ipairs(Quests(dungeon)) do
+    local code = MyState(q)
+    if code == "r" then
+      ready = ready + 1
+      inLog = inLog + 1
+    elseif code == "l" then
+      inLog = inLog + 1
+    elseif code == "a" then
+      avail = avail + 1
+    end
+  end
+  return inLog, ready, avail
 end
 
 function tab:Status()

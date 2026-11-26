@@ -303,7 +303,7 @@ local function Select(name)
     selected[H.shown] = name
     H.DetailToTop()
   end
-  H.Render()
+  H.Picked()
 end
 
 -------------------------------------------------------------------------------
@@ -322,6 +322,13 @@ local function ItemTooltip(row)
     return
   end
   GameTooltip:AddLine(" ")
+  local rank = GQRank(row.item)
+  if rank then
+    GameTooltip:AddDoubleLine("GearQuest", rank == 1 and "|cffffd100its best for you|r" or ("#" .. rank .. " for you"),
+      0.3, 0.76, 1, 1, 1, 1)
+  elseif H.GQ() then
+    GameTooltip:AddDoubleLine("GearQuest", "not in its list for you", 0.3, 0.76, 1, 0.6, 0.6, 0.6)
+  end
   local slots = INV_SLOTS[row.item.loc] or {}
   for _, m in ipairs(Members()) do
     local p = party[m.name]
@@ -370,6 +377,11 @@ local function PartyTooltip(owner)
   end
   GameTooltip:AddLine(" ")
   GameTooltip:AddLine("ARL members with Leveling BiS share their numbers.", 0.8, 0.8, 0.8)
+  if H.GQ() then
+    GameTooltip:AddLine("|cff4dc3ffGQ #1|r: GearQuest's pick for you (#1 = its best for the slot)", 0.8, 0.8, 0.8)
+  elseif not FLB() then
+    GameTooltip:AddLine("No BiS numbers: install Forever Leveling BiS or GearQuest Forever.", 1, 0.5, 0.4, true)
+  end
   GameTooltip:AddLine("|cffffd100Gold-edged class icon|r: BiS from this dungeon for that slot", 0.8, 0.8, 0.8)
   GameTooltip:AddLine("Plain class icon: an upgrade", 0.8, 0.8, 0.8)
   GameTooltip:AddLine(H.Inline(H.ICON.star) .. " and |cff66ff66+12.3|r on a drop: what it gains you", 0.8, 0.8, 0.8)
@@ -409,13 +421,24 @@ local STAR = H.Inline(H.ICON.star, 12)
 
 -- What a boss's drops hold for the filter: visible items, BiS and upgrade
 -- counts, and the members it has something for (strong: BiS for them).
+-- GearQuest's rank of a drop for the player (1 = its best), or nil.
+local function GQRank(item)
+  return item.loc and H.GQRank(item.id, item.loc) or nil
+end
+
 local function Summary(items, marks, filter)
   local me = Me()
   local visible, bis, ups, who, order = {}, 0, 0, {}, {}
-  local myBis, myUps = 0, 0
+  local myBis, myUps, gq, gqBis, myAny = 0, 0, 0, 0, 0
   for _, item in ipairs(items) do
     local mk = marks[item.id] or {}
-    local mine = false
+    local rank = GQRank(item)
+    local mine = rank ~= nil
+    local mineBis = rank == 1
+    if rank then
+      gq = gq + 1
+      gqBis = gqBis + (rank == 1 and 1 or 0)
+    end
     for _, m in ipairs(mk) do
       if m.bis then
         bis = bis + 1
@@ -424,6 +447,7 @@ local function Summary(items, marks, filter)
       end
       if m.member.name == me then
         mine = true
+        mineBis = mineBis or m.bis
         if m.bis then
           myBis = myBis + 1
         else
@@ -442,11 +466,15 @@ local function Summary(items, marks, filter)
         w.ups = w.ups + 1
       end
     end
-    if filter == "all" or (filter == "party" and #mk > 0) or (filter == "mine" and mine) then
+    if mineBis then
+      myAny = myAny + 1
+    end
+    if filter == "all" or (filter == "party" and (#mk > 0 or rank)) or (filter == "mine" and mine) then
       visible[#visible + 1] = item
     end
   end
-  return { visible = visible, bis = bis, ups = ups, who = order, myBis = myBis, myUps = myUps }
+  return { visible = visible, bis = bis, ups = ups, who = order, myBis = myBis, myUps = myUps, gq = gq,
+    gqBis = gqBis, myAny = myAny }
 end
 
 -- "*2  +1  · 6 drops": BiS (a star), upgrades (green), the drops.
@@ -457,6 +485,9 @@ local function CountText(sum, drops)
   end
   if sum.ups > 0 then
     parts[#parts + 1] = "|cff66ff66+" .. sum.ups .. "|r"
+  end
+  if sum.gq and sum.gq > 0 then
+    parts[#parts + 1] = "|cff4dc3ffGQ " .. (sum.gqBis > 0 and (sum.gqBis .. "/") or "") .. sum.gq .. "|r"
   end
   if drops then
     parts[#parts + 1] = "|cff888888" .. drops .. (drops == 1 and " drop" or " drops") .. "|r"
@@ -588,7 +619,7 @@ local function View()
   local marks = (H.shown and FLB()) and Marks(H.shown, members) or {}
   local filter = Filter()
   local list, rares, other = {}, {}, nil
-  if H.shown and FLB() then
+  if H.shown then
     list, rares, other = Entries(marks, filter)
   end
   local byKey = {}
@@ -596,7 +627,7 @@ local function View()
   for _, group in ipairs({ list, rares, other and { other } or {} }) do
     for _, e in ipairs(group) do
       byKey[e.key] = e
-      myBis = myBis + e.sum.myBis
+      myBis = myBis + e.sum.myAny
     end
   end
   local sel = H.shown and selected[H.shown]
@@ -697,9 +728,7 @@ function tab:RenderList(width)
 
   if #v.list == 0 and #v.rares == 0 and not v.other then
     local text
-    if not FLB() then
-      text = "Needs Forever Leveling BiS\n(v1.3 or newer)"
-    elseif not H.shown then
+    if not H.shown then
       text = "Not in a dungeon"
     else
       text = "No bosses listed here"
@@ -750,7 +779,7 @@ function tab:RenderDetail(width)
     b:Hide()
     detail.items:Done()
     detail.hint:Hide()
-    if H.shown and FLB() then
+    if H.shown then
       return H.ShowEmpty(detail.note, 20, width, "Pick a boss", SKULL)
     end
     detail.note:Hide()
@@ -789,6 +818,11 @@ function tab:RenderDetail(width)
     tags[#tags + 1] = { text = e.sum.bis .. " BiS", color = H.GOLD, icon = H.ICON.star,
       tip = { "Best in slot", "Drops that are the best this dungeon has for that slot, for someone in the party." } }
   end
+  if e.sum.gq > 0 then
+    tags[#tags + 1] = { text = "GQ " .. e.sum.gq, color = { 0.3, 0.76, 1 },
+      tip = { "GearQuest", "Drops in GearQuest's top list for your character (" .. e.sum.gqBis .. " its best for "
+        .. "the slot)." } }
+  end
   if e.sum.ups > 0 then
     tags[#tags + 1] = { text = "+" .. e.sum.ups .. " upgrade" .. (e.sum.ups == 1 and "" or "s"), color = H.GREEN,
       tip = { "Upgrades", "Drops that gain someone in the party something, but aren't their best here." } }
@@ -811,6 +845,17 @@ function tab:RenderDetail(width)
       helpsMe = helpsMe or m.member.name == me
     end
     local note, noteSub, mineBis = MyGain(mk)
+    local rank = GQRank(item)
+    if rank then
+      helpsMe = true
+      if note then
+        noteSub = (noteSub or "") .. "  |cff4dc3ffGQ #" .. rank .. "|r"
+      else
+        note = "|cff4dc3ffGQ #" .. rank .. "|r"
+        noteSub = rank == 1 and "|cffffd100GearQuest's best|r" or "GearQuest pick"
+      end
+      mineBis = mineBis or rank == 1
+    end
     local sub = SlotText(item)
     if item.sources and #item.sources > 0 then
       sub = (sub ~= "" and (sub .. "  ·  ") or "") .. item.sources[1] .. (#item.sources > 1 and " +" .. (#item.sources - 1) or "")
@@ -850,6 +895,47 @@ function tab:RenderDetail(width)
   return y + 4
 end
 
+-- For the dungeon picker: how many of a dungeon's drops are upgrades for
+-- you (Forever Leveling BiS gain, or in GearQuest's list), and how many of
+-- those are the best (GearQuest's #1, or FLB's biggest gain for the slot in
+-- that dungeon). Worked out once per dungeon until gear or level changes.
+local forMe = {}
+function tab.ForMe(dungeon)
+  local c = forMe[dungeon]
+  if c and c.gen == H.gearGen then
+    return c.ups, c.bis
+  end
+  local api = FLB()
+  local best, gains = {}, {}
+  local ups, bis = 0, 0
+  local items = H.GearItems(dungeon)
+  for _, item in ipairs(items) do
+    local gain = 0
+    if api and api.GetGain then
+      local ok, g, loading = pcall(api.GetGain, item.id)
+      gain = ok and not loading and tonumber(g) or 0
+    end
+    gains[item.id] = gain
+    local slot = SLOT_OF[item.loc] or item.loc
+    if gain > (best[slot] or 0) then
+      best[slot] = gain
+    end
+  end
+  for _, item in ipairs(items) do
+    local rank = item.loc and H.GQRank(item.id, item.loc)
+    local gain = gains[item.id]
+    if gain > 0 or rank then
+      ups = ups + 1
+      local slot = SLOT_OF[item.loc] or item.loc
+      if rank == 1 or (gain > 0 and gain >= (best[slot] or math.huge)) then
+        bis = bis + 1
+      end
+    end
+  end
+  forMe[dungeon] = { gen = H.gearGen, ups = ups, bis = bis }
+  return ups, bis
+end
+
 function tab:Status()
   local n = 0
   for name, p in pairs(party) do
@@ -857,8 +943,13 @@ function tab:Status()
       n = n + 1
     end
   end
-  if not FLB() then
-    return "Bosses & Loot off (needs Forever Leveling BiS)"
+  local sources = {}
+  if FLB() then
+    sources[#sources + 1] = "Leveling BiS"
   end
-  return "party: " .. n .. " ARL member(s) sharing loot"
+  if H.GQ() then
+    sources[#sources + 1] = "GearQuest"
+  end
+  return (#sources > 0 and ("BiS from " .. table.concat(sources, " + ")) or "no BiS addon (drops only)")
+    .. ", party: " .. n .. " ARL member(s) sharing loot"
 end

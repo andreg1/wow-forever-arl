@@ -1,27 +1,36 @@
--- Dungeon Helper: the window, the events that drive the tabs, the /arl dh
--- command, and the records pane on the module's options page.
+-- Dungeon Helper: the window, when it shows, the events that drive the tabs,
+-- the /arl dh command, and the records pane on the module's options page.
 --
--- The window is a tooltip-style box (ARL's skin):
---
---   [-] ARL Dungeon Helper ............................. [v][x]
---   +- banner: the dungeon's art (DungeonJournal's) ----------------+
---   | [icon] Scholomance                                   12:34    |
---   |        Level 58-60 · Western Plaguelands            3/7 bosses |
---   +---------------------------------------------------------------+
---   [skull Bosses & Loot *2][! Quests 1][watch Clear Times]
---   toolbar of the tab (filters, party, reset...)
---   +- list ----------------+- details of the selected entry --------+
---   | [face] Kirtonos       | [ face ] Kirtonos the Herald           |
---   |        *2  +1     [c] |          [6 drops] [*2 BiS]            |
---   +-----------------------+----------------------------------------+
---
+-- Two layouts (db.layout), both ARL's tooltip-style box:
+--   compact (default)              full
+--   [ic] Scholomance 12:34 [*][<>][v][x]   [-] Dungeon Helper ........ [*][<>][v][x]
+--   [Quests 2][Loot *1][Times]             banner: art, name, level, clock
+--   toolbar (filters, party)               [Quests][Bosses & Loot][Clear Times]
+--   list (300 px wide)    -> details       toolbar
+--                            open beside   list | details
+--                            it on a pick
 -- Each tab (Loot.lua, Quests.lua, Times.lua) draws its own list and details
 -- (tab:Create(bar, list, detail), tab:RenderList(w), tab:RenderDetail(w),
--- both returning their height; tab:Badge() the count on its tab). The
--- window folds to its title bar, and follows the current dungeon unless one
--- is picked with the v button. Everything here is our own frames: nothing is
--- secure, so it all works in combat. Scripts go through mod:Script
--- (H.Script), so their errors are caught.
+-- both returning their height; tab:Badge() the count on its tab). Nothing is
+-- secure, so it all works in combat. Scripts go through mod:Script (H.Script).
+--
+-- With no dungeon (outside, nothing picked) the list is a dungeon picker:
+-- every dungeon with what the open tab is about there (your quests, your
+-- upgrades, your best time and the guild's record), suggested ones first
+-- (quests in your log, your level); a click shows that dungeon.
+--
+-- When it shows (0.15.0; it used to pop up at random):
+--   * it opens by itself once per visit to a dungeon (autoOpen), and closes
+--     by itself on leaving only if it opened by itself;
+--   * the player's x keeps it closed until they leave (stayClosed): no pull
+--     or kill reopens it;
+--   * DungeonJournal's current dungeon is nil in some rooms of Dire Maul,
+--     Stratholme and the Scarlet Monastery: inside the same instance the last
+--     known dungeon stays (H.CurrentDungeon is wrapped below), so a room
+--     change no longer counts as leaving and coming back;
+--   * kills of rares and optional bosses never open it; a boss kill does as
+--     set (onKill), a pull only with openOnPull;
+--   * in combat it hides (back after), fades, or stays (combat).
 local _, ns = ...
 local ARLE = _G.ARLExtensions
 local H = ns.H
@@ -32,19 +41,18 @@ local mod = H.mod
 local Skin, Kit = ARLE.Skin, ARLE.UI.Kit
 local S = H.Script
 
-local WIDTH, LIST_W = 660, 260
-local HEADER_H, BANNER_H, TABS_H, TOOL_H = 22, 54, 26, 26
-local TOP = HEADER_H + BANNER_H + TABS_H + TOOL_H + 8
-local MIN_H = 300
-local LIST_CHILD_W = LIST_W - 24 -- the list's scroll bar sits in the gap
-local DETAIL_X = LIST_W + 6
-local DETAIL_CHILD_W = WIDTH - DETAIL_X - 28
+local FULL_W, FULL_LIST_W = 660, 260
+local COMPACT_W, SIDE_W = 300, 360
+local HEADER_H, BANNER_H, TABS_H, TOOL_H = 24, 54, 24, 26
+local MIN_H = 180
+local FADED = 0.3
 
 local TAB_ICONS = {
   bis = H.ICON.bossSkull,
   quests = H.ICON.available,
   times = H.ICON.watch,
 }
+local SHORT = { bis = "Loot", quests = "Quests", times = "Times" }
 
 local tabs = {}
 for _, t in ipairs(H.tabs) do
@@ -53,8 +61,49 @@ end
 H.byKey = tabs
 H.auto = true -- follow the current dungeon
 
-local frame, listScroll, detailScroll, placeFrame
-local comeBack = false -- hidden for a fight (Hide in combat): shown again when it ends
+local frame, side, listScroll, detailScroll, placeFrame
+
+-- visit: the instance we're in ({ key, dungeon }); by: "auto" or "player"
+-- (who opened it); dismissed: the player closed it this visit; combatHidden:
+-- hidden for the fight; pending: an automatic opening waiting for the fight
+-- to end (its tab).
+local vis = { visit = nil, by = nil, dismissed = false, combatHidden = false, pending = nil }
+
+local Plain = H.Plain
+
+local function InInstance()
+  return IsInInstance and Plain(IsInInstance()) and true or false
+end
+
+local function InstanceKey()
+  if not InInstance() then
+    return nil
+  end
+  local name, _, _, _, _, _, _, id = GetInstanceInfo()
+  id, name = Plain(id), Plain(name)
+  return tostring(id or name or "?")
+end
+
+-- DungeonJournal's dungeon, or the last one it named in this same instance.
+local RawCurrent = H.CurrentDungeon
+function H.CurrentDungeon()
+  local d = RawCurrent()
+  if d then
+    if vis.visit then
+      vis.visit.dungeon = d
+    end
+    return d
+  end
+  return vis.visit and vis.visit.dungeon or nil
+end
+
+local function Compact()
+  return mod.db.layout ~= "full"
+end
+
+local function Scale()
+  return math.max(0.5, (tonumber(mod.db.scale) or 100) / 100)
+end
 
 local function CurrentTab()
   return tabs[mod.db.tab] or H.tabs[1]
@@ -62,6 +111,9 @@ end
 
 local function SetTab(key)
   if tabs[key] then
+    if tabs[key].OnShown and mod.db.tab ~= key then
+      tabs[key]:OnShown()
+    end
     mod.db.tab = key
     if listScroll then
       listScroll:SetVerticalScroll(0)
@@ -79,17 +131,23 @@ function H.DetailToTop()
   end
 end
 
--- The run time: big in the banner, in the title bar when folded.
+-- The player picked an entry: in the compact layout its details open beside.
+function H.Picked()
+  H.sideOpen = true
+  H.Render()
+end
+
+-- The run time: in the header (compact, or folded), in the banner (full).
 local function UpdateClock()
   if not frame then
     return
   end
   local text, done = tabs.times:Clock()
   local shown = text and mod.db.timerInTitle
-  local folded = mod.db.listCollapsed
-  frame.clock:SetText((shown and folded) and (done and ("|cffffd100" .. text .. "|r") or text) or "")
+  local inHeader = Compact() or mod.db.listCollapsed
+  frame.clock:SetText((shown and inHeader) and (done and ("|cffffd100" .. text .. "|r") or text) or "")
   local b = frame.banner
-  if shown and not folded then
+  if shown and not inHeader then
     b.clock:SetText(text)
     if done then
       b.clock:SetTextColor(1, 0.82, 0)
@@ -111,13 +169,16 @@ local function DungeonArt(dungeon)
   return art, type(tc) == "table" and tc or nil
 end
 
+local function DungeonInfo()
+  local fdj = H.FDJ()
+  return H.shown and fdj and fdj.DB[H.shown] or nil
+end
+
 local function PaintBanner()
   local b = frame.banner
-  local fdj = H.FDJ()
-  local d = H.shown and fdj and fdj.DB[H.shown]
+  local d = DungeonInfo()
   local art, tc = DungeonArt(H.shown)
   if art then
-    -- A strip across the middle of the card art.
     local l, r, t, bt = 0, 1, 0, 1
     if tc then
       l, r, t, bt = tc[1] or 0, tc[2] or 1, tc[3] or 0, tc[4] or 1
@@ -152,10 +213,32 @@ local function PaintBanner()
   b.sub:SetText(table.concat(sub, "  ·  "))
 end
 
+-- The header: the dungeon (compact) or the window's name (full).
+local function PaintHeader()
+  local d = DungeonInfo()
+  local compact = Compact()
+  frame.dicon:SetShown(compact)
+  if compact then
+    H.SetIcon(frame.dicon, d and type(d.icon) == "string" and d.icon or H.ICON.dungeon,
+      d and d.icon and true or false)
+    local name = H.shown or "Dungeon Helper"
+    local lv = d and d.level and ("  |cff888888" .. tostring(d.level) .. "|r") or ""
+    frame.title:SetText((H.auto or not H.shown) and (name .. lv) or ("|cffffd100" .. name .. "|r" .. lv))
+  else
+    local folded = mod.db.listCollapsed
+    frame.title:SetText(folded and H.shown and ("Dungeon Helper - " .. H.shown) or "Dungeon Helper")
+  end
+  frame.collapse:SetText(mod.db.listCollapsed and "+" or "-")
+  frame.pick:SetText(H.auto and "v" or "|cffffd100v|r")
+  frame.layout:SetText(compact and ">" or "<")
+end
+
 local function PaintTabs(current)
   local ar, ag, ab = Skin:Accent()
+  local compact = Compact()
   for _, b in ipairs(frame.tabButtons) do
     local on = b.tab == current
+    b.text:SetText(compact and SHORT[b.tab.key] or b.tab.label)
     b.text:SetTextColor(on and 1 or 0.7, on and 1 or 0.7, on and 1 or 0.7)
     b.bg:SetColorTexture(on and ar or 1, on and ag or 1, on and ab or 1, on and 0.18 or 0.04)
     b.bar:SetColorTexture(ar, ag, ab, 1)
@@ -179,46 +262,358 @@ local function PaintTabs(current)
   end
 end
 
+-- Where everything goes, for the layout and the fold.
+local function Layout()
+  local compact, folded = Compact(), mod.db.listCollapsed
+  local s = Scale()
+  if frame:GetScale() ~= s then
+    frame:SetScale(s)
+    side:SetScale(s)
+    placeFrame()
+  end
+  local width = compact and COMPACT_W or FULL_W
+  frame:SetWidth(width)
+  local bannerH = compact and 0 or BANNER_H
+  frame.banner:SetShown(not compact and not folded)
+  local stripY = HEADER_H + bannerH + 1
+  frame.tabStrip:ClearAllPoints()
+  frame.tabStrip:SetPoint("TOPLEFT", 4, -stripY)
+  frame.tabStrip:SetPoint("TOPRIGHT", -4, -stripY)
+  local tabW = (width - 8 - (#H.tabs - 1) * 3) / #H.tabs
+  for i, b in ipairs(frame.tabButtons) do
+    b:SetWidth(tabW)
+    b:ClearAllPoints()
+    b:SetPoint("LEFT", (i - 1) * (tabW + 3), 0)
+  end
+  frame.toolbars:ClearAllPoints()
+  frame.toolbars:SetPoint("TOPLEFT", 6, -(stripY + TABS_H + 1))
+  frame.toolbars:SetPoint("TOPRIGHT", -6, -(stripY + TABS_H + 1))
+  local top = stripY + TABS_H + TOOL_H + 6
+  frame.top = top
+
+  listScroll:ClearAllPoints()
+  detailScroll:ClearAllPoints()
+  if compact then
+    frame.listW = width - 32
+    listScroll:SetPoint("TOPLEFT", 4, -top)
+    listScroll:SetPoint("BOTTOMRIGHT", -26, 6)
+    if detailScroll:GetParent() ~= side then
+      detailScroll:SetParent(side)
+    end
+    detailScroll:SetPoint("TOPLEFT", 6, -(HEADER_H + 2))
+    detailScroll:SetPoint("BOTTOMRIGHT", -26, 6)
+    frame.detailW = SIDE_W - 36
+    frame.listBack:Hide()
+    frame.divider:Hide()
+  else
+    frame.listW = FULL_LIST_W - 24
+    local detailX = FULL_LIST_W + 6
+    listScroll:SetPoint("TOPLEFT", 4, -top)
+    listScroll:SetPoint("BOTTOMLEFT", 4, 6)
+    listScroll:SetWidth(frame.listW)
+    if detailScroll:GetParent() ~= frame then
+      detailScroll:SetParent(frame)
+    end
+    detailScroll:SetPoint("TOPLEFT", detailX, -top)
+    detailScroll:SetPoint("BOTTOMRIGHT", -24, 6)
+    frame.detailW = FULL_W - detailX - 28
+    frame.listBack:ClearAllPoints()
+    frame.listBack:SetPoint("TOPLEFT", 4, -top + 2)
+    frame.listBack:SetPoint("BOTTOMLEFT", 4, 4)
+    frame.listBack:SetWidth(FULL_LIST_W - 4)
+    frame.divider:ClearAllPoints()
+    frame.divider:SetPoint("TOPLEFT", detailX - 3, -top + 2)
+    frame.divider:SetPoint("BOTTOMLEFT", detailX - 3, 4)
+    frame.listBack:SetShown(not folded)
+    frame.divider:SetShown(not folded)
+  end
+  for _, tab in ipairs(H.tabs) do
+    if tab.party then
+      H.LayoutPartyStrip(tab.party, compact)
+    end
+  end
+  for _, f in ipairs({ listScroll, frame.tabStrip, frame.toolbars }) do
+    f:SetShown(not folded)
+  end
+  detailScroll:SetShown(not folded)
+end
+
+-- The details beside the compact list: right of it, or left when there's no
+-- room on the right.
+local function PlaceSide()
+  side:ClearAllPoints()
+  local right = (frame:GetRight() or 0) * frame:GetEffectiveScale()
+  local screen = UIParent:GetWidth() * UIParent:GetEffectiveScale()
+  if right + SIDE_W * side:GetEffectiveScale() > screen then
+    side:SetPoint("TOPRIGHT", frame, "TOPLEFT", -2, 0)
+  else
+    side:SetPoint("TOPLEFT", frame, "TOPRIGHT", 2, 0)
+  end
+end
+
+-------------------------------------------------------------------------------
+-- The dungeon picker (no dungeon shown)
+-------------------------------------------------------------------------------
+
+local pick = {}
+local PICK_ROW = 34
+local ShowDungeon
+
+-- "58-60" -> 58, 60 (a single "60" -> 60, 60).
+local function LevelRange(text)
+  local lo, hi = tostring(text or ""):match("(%d+)%s*%-%s*(%d+)")
+  lo, hi = tonumber(lo), tonumber(hi)
+  if not lo then
+    lo = tonumber(tostring(text or ""):match("(%d+)"))
+    hi = lo
+  end
+  return lo, hi
+end
+
+-- What a dungeon holds for the tab, as the row's note and a sort weight.
+local function PickNote(key, name)
+  if key == "quests" then
+    local inLog, ready, avail = tabs.quests.CountFor(name)
+    local parts = {}
+    if ready > 0 then
+      parts[#parts + 1] = "|cff66ff66" .. ready .. " ready|r"
+    end
+    if inLog - ready > 0 then
+      parts[#parts + 1] = "|cffffd100" .. (inLog - ready) .. " in log|r"
+    end
+    if avail > 0 then
+      parts[#parts + 1] = H.Inline(H.ICON.available, 11) .. avail
+    end
+    return table.concat(parts, "  "), inLog > 0, inLog * 10 + avail
+  elseif key == "bis" then
+    local ups, bis = tabs.bis.ForMe(name)
+    if ups == 0 then
+      return "", false, 0
+    end
+    return (bis > 0 and (H.Inline(H.ICON.star, 11) .. "|cffffd100" .. bis .. "|r  ") or "")
+      .. "|cff66ff66+" .. ups .. "|r", false, bis * 10 + ups
+  else
+    local mine, guild, who, isMe = tabs.times.BestFor(name)
+    local parts = {}
+    if mine then
+      parts[#parts + 1] = H.FormatTime(mine)
+    end
+    if guild and not isMe then
+      parts[#parts + 1] = "|cff888888guild " .. H.FormatTime(guild) .. " " .. tostring(who) .. "|r"
+    elseif guild and isMe then
+      parts[#parts + 1] = "|cffffd100guild record|r"
+    end
+    return table.concat(parts, "  "), false, mine and 1 or 0
+  end
+end
+
+local function CreatePicker(listParent, barParent)
+  pick.list = CreateFrame("Frame", nil, listParent)
+  pick.list:SetSize(COMPACT_W - 32, 1)
+  pick.list:Hide()
+  pick.bar = CreateFrame("Frame", nil, barParent)
+  pick.bar:SetAllPoints()
+  pick.bar:Hide()
+  pick.filters = H.FilterButtons(pick.bar, {
+    { key = "suggested", label = "For me", width = 54, tip = "Dungeons with quests in your log, and those for your "
+      .. "level" },
+    { key = "all", label = "All", width = 36, tip = "Every dungeon DungeonJournal knows" },
+  }, function()
+    return mod.db.pickFilter or "suggested"
+  end, function(key)
+    mod.db.pickFilter = key
+  end)
+  pick.hint = Kit.Text(pick.bar, "GameFontDisableSmall")
+  pick.hint:SetPoint("RIGHT", 0, 0)
+  pick.hint:SetJustifyH("RIGHT")
+  pick.rows = H.Pool(function()
+    local r = H.Row(pick.list, PICK_ROW, PICK_ROW - 8)
+    S(r, "OnClick", function(row)
+      ShowDungeon(row.dungeon)
+    end)
+    H.Tip(r, function(row)
+      return row.dungeon
+    end, function(row)
+      return (row.tip or "") .. "\nClick: show this dungeon. The v button goes back to this list."
+    end)
+    return r
+  end)
+  pick.sections = H.Pool(function()
+    return H.Section(pick.list)
+  end)
+  pick.empty = H.Empty(pick.list)
+end
+
+local function RenderPicker(width, key)
+  pick.filters.Paint()
+  local level = UnitLevel and Plain(UnitLevel("player")) or 1
+  local fdj = H.FDJ()
+  local mineList, levelList, rest = {}, {}, {}
+  for _, name in ipairs(H.Dungeons()) do
+    local d = fdj and fdj.DB[name] or {}
+    local lo, hi = LevelRange(d.level)
+    local note, hasLog, weight = PickNote(key, name)
+    local e = { name = name, d = d, lo = lo or 0, hi = hi or 0, note = note, weight = weight }
+    if hasLog then
+      mineList[#mineList + 1] = e
+    elseif lo and level >= lo - 3 and level <= (hi or lo) + 2 then
+      levelList[#levelList + 1] = e
+    else
+      rest[#rest + 1] = e
+    end
+  end
+  local function ByLevel(a, b)
+    if a.lo ~= b.lo then
+      return a.lo < b.lo
+    end
+    return a.name < b.name
+  end
+  table.sort(mineList, ByLevel)
+  table.sort(levelList, ByLevel)
+  table.sort(rest, ByLevel)
+  local groups = { { "Your quests are here", mineList }, { "For your level (" .. level .. ")", levelList } }
+  if (mod.db.pickFilter or "suggested") == "all" or (#mineList == 0 and #levelList == 0) then
+    groups[#groups + 1] = { "Other dungeons", rest }
+  end
+  local ar, ag, ab = Skin:Accent()
+  local y = 2
+  local shown = 0
+  for _, g in ipairs(groups) do
+    if #g[2] > 0 then
+      local h = pick.sections:Get()
+      H.PaintSection(h, g[1], "|cff888888" .. #g[2] .. "|r")
+      y = H.Place(h, y + (y > 2 and 6 or 0), 20, 2)
+      for _, e in ipairs(g[2]) do
+        local r = pick.rows:Get()
+        r.dungeon = e.name
+        H.SetIcon(r.pic, type(e.d.icon) == "string" and e.d.icon or H.ICON.dungeon, e.d.icon and true or false)
+        H.SetEdge(r.pic, ar, ag, ab, 0.3)
+        local cr, cg, cb = 0.9, 0.9, 0.9
+        if e.lo > 0 then
+          if level < e.lo - 3 then
+            cr, cg, cb = 1, 0.35, 0.3 -- too high for you
+          elseif level > e.hi + 4 then
+            cr, cg, cb = 0.55, 0.55, 0.55 -- grey
+          elseif level >= e.lo then
+            cr, cg, cb = 0.4, 1, 0.45
+          else
+            cr, cg, cb = 1, 0.82, 0
+          end
+        end
+        local lv = e.d.level and ("Lv " .. tostring(e.d.level)) or ""
+        local where = type(e.d.location) == "string" and e.d.location or ""
+        r.tip = (lv ~= "" and (lv .. (where ~= "" and (" · " .. where) or "")) or where)
+        H.PaintRow(r, {
+          name = e.name,
+          sub = "|cff999999" .. lv .. "|r",
+          note = e.note ~= "" and e.note or nil,
+          color = { cr, cg, cb },
+          dim = level > e.hi + 4,
+        })
+        y = H.Place(r, y, PICK_ROW)
+        shown = shown + 1
+      end
+    end
+  end
+  pick.rows:Done()
+  pick.sections:Done()
+  pick.hint:SetText(key == "quests" and "quests for you" or key == "bis" and "upgrades for you" or "best times")
+  if shown == 0 then
+    y = H.ShowEmpty(pick.empty, 8, width, fdj and "No dungeons known" or "DungeonJournal isn't loaded",
+      H.ICON.dungeon)
+  else
+    pick.empty:Hide()
+  end
+  return y
+end
+
 local renderQueued = false
 local function DoRender()
   renderQueued = false
   if not frame or not frame:IsShown() then
+    if side then
+      side:Hide()
+    end
     return
   end
   local db = mod.db
   local tab = CurrentTab()
   local folded = db.listCollapsed
-  frame.title:SetText(folded and H.shown and ("ARL Dungeon Helper - " .. H.shown) or "ARL Dungeon Helper")
-  frame.collapse:SetText(folded and "+" or "-")
-  frame.pick:SetText(H.auto and "v" or "|cffffd100v|r")
-  PaintBanner()
+  Layout()
+  PaintHeader()
+  if not Compact() then
+    PaintBanner()
+  end
   UpdateClock()
 
   local ar, ag, ab = Skin:Accent()
   frame.divider:SetColorTexture(ar, ag, ab, 0.25)
+
+  -- No dungeon: the picker, the tab as what to show for each.
+  local picking = not H.shown
+  pick.bar:SetShown(picking and not folded)
+  if picking then
+    for _, t in ipairs(H.tabs) do
+      t.bar:Hide()
+      t.list:Hide()
+      t.detail:Hide()
+    end
+    if frame.scrolled ~= pick then
+      frame.scrolled = pick
+      listScroll:SetScrollChild(pick.list)
+    end
+    local w = Compact() and frame.listW or (FULL_W - 32)
+    listScroll:ClearAllPoints()
+    listScroll:SetPoint("TOPLEFT", 4, -frame.top)
+    listScroll:SetPoint("BOTTOMRIGHT", -26, 6)
+    detailScroll:Hide()
+    frame.divider:Hide()
+    frame.listBack:Hide()
+    pick.list:SetWidth(w)
+    pick.list:Show()
+    local ly = RenderPicker(w, tab.key)
+    pick.list:SetHeight(math.max(ly, 1))
+    PaintTabs(tab)
+    for _, t in ipairs(H.tabs) do
+      t.bar:Hide()
+      t.list:Hide()
+      t.detail:Hide()
+    end
+    local maxH = math.min(math.max(tonumber(db.maxHeight) or 460, MIN_H), 900)
+    frame:SetHeight(folded and (HEADER_H + 4) or math.max(math.min(frame.top + 8 + ly, maxH), MIN_H))
+    side:Hide()
+    return
+  end
+  pick.list:Hide()
   if frame.scrolled ~= tab then
     frame.scrolled = tab
     listScroll:SetScrollChild(tab.list)
     detailScroll:SetScrollChild(tab.detail)
   end
-  tab.list:SetWidth(LIST_CHILD_W)
-  tab.detail:SetWidth(DETAIL_CHILD_W)
-  local ly = tab:RenderList(LIST_CHILD_W) or 1
-  local dy = tab:RenderDetail(DETAIL_CHILD_W) or 1
+  tab.list:SetWidth(frame.listW)
+  tab.detail:SetWidth(frame.detailW)
+  local ly = tab:RenderList(frame.listW) or 1
+  local dy = tab:RenderDetail(frame.detailW) or 1
   tab.list:SetHeight(math.max(ly, 1))
   tab.detail:SetHeight(math.max(dy, 1))
   PaintTabs(tab) -- (after the render: the badges count what it worked out)
 
-  -- Folded: just the title bar, like a collapsed tooltip.
-  for _, f in ipairs({ listScroll, detailScroll, frame.tabStrip, frame.toolbars, frame.divider, frame.banner,
-    frame.listBack }) do
-    f:SetShown(not folded)
-  end
-  if not folded then
-    local maxH = math.min(math.max(tonumber(db.maxHeight) or 540, MIN_H), 900)
-    frame:SetHeight(math.max(math.min(TOP + 8 + math.max(ly, dy), maxH), MIN_H))
-  else
+  local maxH = math.min(math.max(tonumber(db.maxHeight) or 460, MIN_H), 900)
+  if folded then
     frame:SetHeight(HEADER_H + 4)
+  elseif Compact() then
+    frame:SetHeight(math.max(math.min(frame.top + 8 + ly, maxH), MIN_H))
+  else
+    frame:SetHeight(math.max(math.min(frame.top + 8 + math.max(ly, dy), maxH), MIN_H + 120))
+  end
+  local wantSide = Compact() and not folded and H.sideOpen and dy > 2
+  if wantSide then
+    side:SetHeight(math.max(frame:GetHeight(), math.min(HEADER_H + 10 + dy, maxH)))
+    side.title:SetText(SHORT[tab.key] and tab.label or "")
+    PlaceSide()
+    side:Show()
+  else
+    side:Hide()
   end
 end
 
@@ -232,13 +627,14 @@ function H.Render()
   end)
 end
 
-local function ShowDungeon(name, keepAuto)
+ShowDungeon = function(name, keepAuto)
   if not keepAuto then
     H.auto = name == nil
   end
   local was = H.shown
   H.shown = name or H.CurrentDungeon()
   if H.shown ~= was then
+    H.sideOpen = false
     for _, tab in ipairs(H.tabs) do
       if tab.OnDungeon then
         tab:OnDungeon(H.shown)
@@ -254,7 +650,7 @@ local function DungeonMenu(owner)
   local names = H.Dungeons()
   if MenuUtil and MenuUtil.CreateContextMenu then
     MenuUtil.CreateContextMenu(owner, function(_, root)
-      root:CreateRadio("Current dungeon (automatic)", function()
+      root:CreateRadio("Current dungeon (outside: the dungeon list)", function()
         return H.auto
       end, function()
         ShowDungeon(nil)
@@ -269,7 +665,6 @@ local function DungeonMenu(owner)
       end
     end)
   else
-    -- Older clients: step through the list.
     local idx = 0
     for i, name in ipairs(names) do
       if name == H.shown then
@@ -280,8 +675,8 @@ local function DungeonMenu(owner)
   end
 end
 
-local function Pane(name)
-  local scroll = CreateFrame("ScrollFrame", name, frame, "UIPanelScrollFrameTemplate")
+local function Pane(name, parent)
+  local scroll = CreateFrame("ScrollFrame", name, parent, "UIPanelScrollFrameTemplate")
   Skin:ScrollBar(scroll)
   return scroll
 end
@@ -297,7 +692,6 @@ local function CreateBanner()
   b.art = b:CreateTexture(nil, "BACKGROUND", nil, 1)
   b.art:SetAllPoints()
   b.art:SetAlpha(0.6)
-  -- Darker on the left (the name) and the right (the clock).
   b.shade = b:CreateTexture(nil, "BACKGROUND", nil, 2)
   b.shade:SetAllPoints()
   b.shade:SetColorTexture(0, 0, 0, 0.45)
@@ -333,57 +727,95 @@ local function CreateBanner()
   frame.banner = b
 end
 
+local Close
+
+-- A small icon button for the header (the cog).
+local function IconButton(parent, path, size)
+  local b = CreateFrame("Button", nil, parent)
+  b:SetSize(size, size)
+  b.tex = b:CreateTexture(nil, "ARTWORK")
+  b.tex:SetAllPoints()
+  b.tex:SetTexture(path)
+  b.tex:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+  local hl = b:CreateTexture(nil, "HIGHLIGHT")
+  hl:SetAllPoints()
+  hl:SetColorTexture(1, 1, 1, 0.2)
+  return b
+end
+
 local function CreateWindow()
   frame = Skin:CreateTooltipWindow("ARLEDungeonHelperFrame", UIParent)
-  frame:SetSize(WIDTH, MIN_H)
+  frame:SetSize(COMPACT_W, MIN_H)
   frame:SetFrameStrata("MEDIUM")
-  -- Kept where it's dragged (char.position: the Reset position preset
-  -- clears it). Up to 0.7.0 it was db.pos, an anchor: dropped.
   mod.db.pos = nil
-  placeFrame = Kit.Movable(frame, mod, { x = 330, y = 60 })
+  placeFrame = Kit.Movable(frame, mod, { x = 360, y = 80, onMoved = function()
+    if side and side:IsShown() then
+      PlaceSide()
+    end
+  end })
 
-  -- Title bar: [-] ARL Dungeon Helper .... (12:34 when folded) [v][x]
+  -- Header: [-][icon] name ... clock [cog][<>][v][x]
   frame.collapse = H.SmallButton(frame, "-", 18)
-  frame.collapse:SetPoint("TOPLEFT", 4, -3)
+  frame.collapse:SetPoint("TOPLEFT", 4, -4)
   S(frame.collapse, "OnClick", function()
     mod.db.listCollapsed = not mod.db.listCollapsed or nil
     H.Render()
   end)
+  H.Tip(frame.collapse, "Fold", "Folds the window to this line (the clock stays).")
   frame.close = H.SmallButton(frame, "x", 18)
-  frame.close:SetPoint("TOPRIGHT", -4, -3)
+  frame.close:SetPoint("TOPRIGHT", -4, -4)
   S(frame.close, "OnClick", function()
-    comeBack = false
-    frame:Hide()
+    Close("player")
+  end)
+  H.Tip(frame.close, "Close", function()
+    return mod.db.stayClosed and InInstance() and "It stays closed until you leave this dungeon (/arl dh opens it)."
+      or "/arl dh opens it again."
   end)
   frame.pick = H.SmallButton(frame, "v", 18)
   frame.pick:SetPoint("RIGHT", frame.close, "LEFT", -2, 0)
   S(frame.pick, "OnClick", DungeonMenu)
   H.Tip(frame.pick, "Pick a dungeon", function()
-    return H.auto and "Following the dungeon you are in." or "Showing a dungeon you picked. Pick \"Current "
-      .. "dungeon\" to follow where you are again."
+    return H.auto and "Following the dungeon you are in (outside one: the dungeon list)." or "Showing a dungeon "
+      .. "you picked. Pick \"Current dungeon\" to follow where you are again (outside: back to the list)."
   end)
+  frame.layout = H.SmallButton(frame, ">", 18)
+  frame.layout:SetPoint("RIGHT", frame.pick, "LEFT", -2, 0)
+  S(frame.layout, "OnClick", function()
+    ARLE:SetOption(mod.id, "layout", Compact() and "full" or "compact")
+  end)
+  H.Tip(frame.layout, function()
+    return Compact() and "Full size" or "Compact"
+  end, function()
+    return Compact() and "List and details side by side, with the dungeon's banner."
+      or "One narrow list; details open beside it when you pick something."
+  end)
+  frame.cog = IconButton(frame, H.ICON.cog, 16)
+  frame.cog:SetPoint("RIGHT", frame.layout, "LEFT", -3, 0)
+  S(frame.cog, "OnClick", function()
+    ARLE:Open(mod.id)
+  end)
+  H.Tip(frame.cog, "Settings", "When it opens and hides (dungeons, groups, combat, boss kills), its size, and "
+    .. "each tab's options.")
   frame.clock = Kit.Text(frame, "GameFontHighlightSmall")
-  frame.clock:SetPoint("RIGHT", frame.pick, "LEFT", -6, 0)
+  frame.clock:SetPoint("RIGHT", frame.cog, "LEFT", -6, 0)
   frame.clock:SetJustifyH("RIGHT")
-  frame.title = Kit.Text(frame, "GameFontNormalSmall")
-  frame.title:SetPoint("LEFT", frame.collapse, "RIGHT", 4, 0)
+  frame.dicon = H.Pic(frame, 18)
+  frame.dicon:SetPoint("LEFT", frame.collapse, "RIGHT", 4, 0)
+  frame.title = Kit.Text(frame, "GameFontNormal")
+  frame.title:SetPoint("LEFT", frame.dicon, "RIGHT", 5, 0)
   frame.title:SetPoint("RIGHT", frame.clock, "LEFT", -4, 0)
   frame.title:SetWordWrap(false)
 
   CreateBanner()
 
-  -- Tab strip: [icon Bosses & Loot n][icon Quests n][icon Clear Times]
+  -- Tab strip: [icon Label badge] x3 (laid out by Layout)
   local strip = CreateFrame("Frame", nil, frame)
-  strip:SetPoint("TOPLEFT", 4, -(HEADER_H + BANNER_H + 3))
-  strip:SetPoint("TOPRIGHT", -4, -(HEADER_H + BANNER_H + 3))
   strip:SetHeight(TABS_H - 2)
   frame.tabStrip = strip
   frame.tabButtons = {}
-  local tabW = (WIDTH - 8 - (#H.tabs - 1) * 3) / #H.tabs
   for i, tab in ipairs(H.tabs) do
     local b = CreateFrame("Button", nil, strip)
-    b:SetSize(tabW, TABS_H - 2)
-    b:SetPoint("LEFT", (i - 1) * (tabW + 3), 0)
+    b:SetHeight(TABS_H - 2)
     b.bg = b:CreateTexture(nil, "BACKGROUND")
     b.bg:SetAllPoints()
     b.bar = b:CreateTexture(nil, "ARTWORK")
@@ -394,11 +826,11 @@ local function CreateWindow()
     b.text:SetPoint("CENTER", 9, 0)
     b.text:SetText(tab.label)
     b.icon = b:CreateTexture(nil, "ARTWORK")
-    b.icon:SetSize(18, 18)
-    b.icon:SetPoint("RIGHT", b.text, "LEFT", -5, 0)
+    b.icon:SetSize(16, 16)
+    b.icon:SetPoint("RIGHT", b.text, "LEFT", -4, 0)
     b.icon:SetTexture(TAB_ICONS[tab.key] or H.ICON.scroll)
     b.badge = H.Badge(b)
-    b.badge:SetPoint("LEFT", b.text, "RIGHT", 6, 0)
+    b.badge:SetPoint("LEFT", b.text, "RIGHT", 5, 0)
     b.badge:Hide()
     b.hl = b:CreateTexture(nil, "HIGHLIGHT")
     b.hl:SetAllPoints()
@@ -407,49 +839,59 @@ local function CreateWindow()
     S(b, "OnClick", function(self)
       SetTab(self.tab.key)
     end)
+    H.Tip(b, tab.label, (mod.pages and (function()
+      for _, p in ipairs(mod.pages) do
+        if p.key == tab.key then
+          return p.notes
+        end
+      end
+    end)()) or nil)
     frame.tabButtons[i] = b
   end
 
-  -- One toolbar per tab; two scroll panes whose children switch with the tab.
   local toolbars = CreateFrame("Frame", nil, frame)
-  toolbars:SetPoint("TOPLEFT", 6, -(HEADER_H + BANNER_H + TABS_H + 4))
-  toolbars:SetPoint("TOPRIGHT", -6, -(HEADER_H + BANNER_H + TABS_H + 4))
   toolbars:SetHeight(TOOL_H - 2)
   frame.toolbars = toolbars
 
-  -- The list sits on a darker backing, like a journal's index.
   frame.listBack = frame:CreateTexture(nil, "BACKGROUND", nil, 1)
-  frame.listBack:SetPoint("TOPLEFT", 4, -TOP + 2)
-  frame.listBack:SetPoint("BOTTOMLEFT", 4, 4)
-  frame.listBack:SetWidth(LIST_W - 4)
   frame.listBack:SetColorTexture(0, 0, 0, 0.22)
 
-  listScroll = Pane("ARLEDungeonHelperList")
-  listScroll:SetPoint("TOPLEFT", 4, -TOP)
-  listScroll:SetPoint("BOTTOMLEFT", 4, 6)
-  listScroll:SetWidth(LIST_CHILD_W)
-  detailScroll = Pane("ARLEDungeonHelperDetail")
-  detailScroll:SetPoint("TOPLEFT", DETAIL_X, -TOP)
-  detailScroll:SetPoint("BOTTOMRIGHT", -24, 6)
+  -- The details' own box, for the compact layout.
+  side = Skin:CreateTooltipWindow("ARLEDungeonHelperSide", UIParent)
+  side:SetSize(SIDE_W, 300)
+  side:SetFrameStrata("MEDIUM")
+  side:EnableMouse(true)
+  side.close = H.SmallButton(side, "x", 18)
+  side.close:SetPoint("TOPRIGHT", -4, -4)
+  S(side.close, "OnClick", function()
+    H.sideOpen = false
+    H.Render()
+  end)
+  side.title = Kit.Text(side, "GameFontNormalSmall")
+  side.title:SetPoint("TOPLEFT", 8, -8)
+  side.title:SetPoint("RIGHT", side.close, "LEFT", -4, 0)
+  side:Hide()
+
+  listScroll = Pane("ARLEDungeonHelperList", frame)
+  detailScroll = Pane("ARLEDungeonHelperDetail", frame)
   frame.divider = frame:CreateTexture(nil, "ARTWORK")
   frame.divider:SetWidth(1)
-  frame.divider:SetPoint("TOPLEFT", DETAIL_X - 3, -TOP + 2)
-  frame.divider:SetPoint("BOTTOMLEFT", DETAIL_X - 3, 4)
 
   for _, tab in ipairs(H.tabs) do
     tab.bar = CreateFrame("Frame", nil, toolbars)
     tab.bar:SetAllPoints()
     tab.list = CreateFrame("Frame", nil, listScroll)
-    tab.list:SetSize(LIST_CHILD_W, 1)
+    tab.list:SetSize(COMPACT_W - 32, 1)
     tab.detail = CreateFrame("Frame", nil, detailScroll)
-    tab.detail:SetSize(DETAIL_CHILD_W, 1)
+    tab.detail:SetSize(SIDE_W - 36, 1)
     tab:Create(tab.bar, tab.list, tab.detail)
     tab.bar:Hide()
     tab.list:Hide()
     tab.detail:Hide()
   end
 
-  -- Keep the clock (and the Clear Times tab) running.
+  CreatePicker(listScroll, toolbars)
+
   local elapsed = 0
   S(frame, "OnUpdate", function(_, dt)
     elapsed = elapsed + (dt or 0)
@@ -463,47 +905,90 @@ local function CreateWindow()
     end
   end)
   S(frame, "OnShow", H.Render)
+  S(frame, "OnHide", function()
+    side:Hide()
+  end)
   frame:Hide()
+  Layout()
 end
 
--- Hide in combat: the window goes when a fight starts and comes back when
--- it ends; automatic openings during a fight wait for its end (comeBack).
--- Our own frame, nothing secure: hiding it in combat is allowed.
+-------------------------------------------------------------------------------
+-- Showing and hiding
+-------------------------------------------------------------------------------
 
-local function HiddenForCombat()
-  return mod.db.hideInCombat and InCombatLockdown() and true or false
+local function InCombat()
+  return InCombatLockdown and InCombatLockdown() and true or false
 end
 
--- auto: opened by the feature itself (dungeon entered, pull, kill), not by
--- the player: waits for the end of the fight when it's hidden in combat.
-local function Open(tabKey, auto)
+local function ApplyCombat()
+  if not frame then
+    return
+  end
+  local fade = mod.db.combat == "fade" and InCombat()
+  frame:SetAlpha(fade and FADED or 1)
+  side:SetAlpha(fade and FADED or 1)
+end
+
+local function Show(tabKey)
   if not frame then
     CreateWindow()
   end
-  if tabKey then
+  if tabKey and tabKey ~= "last" then
     SetTab(tabKey)
   end
-  if auto and HiddenForCombat() then
-    comeBack = true
-    mod:Debug("opening after combat (hidden in combat)")
-    return
-  end
   frame:Show()
-  -- Item data that came while it was closed: gains catch up now.
+  ApplyCombat()
   if tabs.bis:WantsItemInfo() then
     tabs.bis:OnItemInfo()
   end
   H.Render()
 end
 
+-- The player asked for it (command, cog's page button, a binding).
+local function Open(tabKey)
+  vis.by, vis.dismissed, vis.pending = "player", false, nil
+  if not H.shown then
+    ShowDungeon(nil)
+  end
+  Show(tabKey)
+end
+
+-- The feature wants it shown (a visit, a kill, a pull). False when it stays
+-- closed: dismissed this visit, or waiting for the fight to end.
+local function AutoOpen(tabKey, why)
+  if vis.dismissed and mod.db.stayClosed then
+    mod:Debug("%s: stays closed (you closed it this visit)", why)
+    return false
+  end
+  if mod.db.combat == "hide" and InCombat() then
+    vis.pending = tabKey or vis.pending or "last"
+    mod:Debug("%s: opens after the fight", why)
+    return false
+  end
+  if not (frame and frame:IsShown()) then
+    vis.by = "auto"
+    mod:Debug("%s: opened", why)
+  end
+  Show(tabKey)
+  return true
+end
+
+-- why: "player" (the x) or "left" (the visit ended).
+Close = function(why)
+  if why == "player" then
+    vis.dismissed = vis.visit ~= nil or vis.group == true
+  end
+  vis.by, vis.pending, vis.combatHidden = nil, nil, false
+  if frame then
+    frame:Hide()
+  end
+  mod:Debug("closed (%s)", why)
+end
+
 local function Toggle(tabKey)
   if frame and frame:IsShown() and (not tabKey or tabKey == mod.db.tab) then
-    comeBack = false
-    frame:Hide()
+    Close("player")
   else
-    if not H.shown then
-      ShowDungeon(nil)
-    end
     Open(tabKey)
   end
 end
@@ -512,24 +997,37 @@ end
 -- Boss fights
 -------------------------------------------------------------------------------
 
--- Opens Bosses & Loot with a boss selected (a fight starts: pulling, or it
--- died).
-local function FocusBoss(dungeon, bossName, pulling)
+local function IsOptional(dungeon, name)
+  for _, boss in ipairs(H.Bosses(dungeon)) do
+    if boss.name == name or boss.group == name then
+      return boss.optional
+    end
+  end
+  return true -- (not a listed boss)
+end
+
+-- Bosses & Loot on a boss. auto: may open the window (as set); otherwise it
+-- only switches when it's shown.
+local function FocusBoss(dungeon, bossName, pulling, open)
   if dungeon and dungeon ~= H.shown and H.auto then
     ShowDungeon(dungeon, true)
   end
   if dungeon ~= H.shown then
     return
   end
-  if not H.FLB() then
-    -- (Bosses & Loot needs Forever Leveling BiS: no jump to an empty tab)
-    mod:Debug("%s: no jump to Bosses & Loot, Forever Leveling BiS isn't loaded", tostring(bossName))
+  tabs.bis:Focus(bossName, pulling)
+  local shown = frame and frame:IsShown()
+  if not shown and not open then
     return
   end
-  tabs.bis:Focus(bossName, pulling)
-  mod.db.listCollapsed = nil
-  mod.db.tab = "bis"
-  Open(nil, true)
+  if shown then
+    mod.db.listCollapsed = nil
+    H.sideOpen = true
+    Show("bis")
+  elseif AutoOpen("bis", pulling and "pull" or "kill") then
+    mod.db.listCollapsed = nil
+    H.sideOpen = true
+  end
   H.DetailToTop()
   H.Render()
 end
@@ -539,26 +1037,54 @@ mod.FocusBoss = FocusBoss
 -- Events
 -------------------------------------------------------------------------------
 
-local autoOpened = false
-local recentKills = {} -- "dungeon\0boss" -> GetTime() of the kill handled (several events per kill)
+local recentKills = {}
 local KILL_DEDUPE = 30
-local lastCurrent = false -- the dungeon the zone logic last ran for (false: never)
-local rosterKey -- the group's member names when the group was last asked
-local Plain = H.Plain
+local rosterKey
+local lastDungeon
 
+-- The visit: entering an instance starts one (and may open the window),
+-- leaving ends it (and closes what opened by itself). Group outside
+-- dungeons: the same with showInGroup.
 local function ZoneChanged()
+  local key = InstanceKey()
+  local newVisit = false
+  if key then
+    if not vis.visit or vis.visit.key ~= key then
+      vis.visit = { key = key, dungeon = RawCurrent() }
+      vis.dismissed, vis.group = false, nil
+      H.auto = true -- (a dungeon picked from the list outside gives way to the one you entered)
+      newVisit = true
+    end
+  elseif vis.visit then
+    vis.visit = nil
+    vis.dismissed = false
+    if vis.by == "auto" then
+      Close("left")
+    end
+  end
   local current = H.CurrentDungeon()
-  lastCurrent = current
-  tabs.times:OnZone(current)
+  if current ~= lastDungeon or newVisit then
+    lastDungeon = current
+    tabs.times:OnZone(current)
+  end
   if H.auto then
     ShowDungeon(nil)
   end
-  if current and mod.db.autoOpen and not (frame and frame:IsShown()) then
-    autoOpened = true
-    Open(nil, true)
-  elseif not current and autoOpened and frame then
-    autoOpened, comeBack = false, false
-    frame:Hide()
+  if newVisit and current and mod.db.autoOpen then
+    AutoOpen(mod.db.openTab or "quests", "entered " .. current)
+  end
+  -- Grouped in the open world.
+  if not key then
+    local grouped = IsInGroup and IsInGroup() and true or false
+    if grouped and mod.db.showInGroup and H.shown and not vis.group then
+      vis.group = true
+      AutoOpen(mod.db.openTab or "quests", "in a group")
+    elseif not grouped and vis.group then
+      vis.group, vis.dismissed = nil, false
+      if vis.by == "auto" then
+        Close("left")
+      end
+    end
   end
   H.Render()
 end
@@ -580,31 +1106,26 @@ local QUEST_EVENTS = {
   PLAYER_LEVEL_UP = true,
 }
 
-local function InInstance()
-  return IsInInstance and Plain(IsInInstance()) and true or false
-end
-
--- One boss kill, however many events tell it (ENCOUNTER_END, BOSS_KILL,
--- PARTY_KILL, UNIT_DIED): handled once. True when it was (now or before)
--- and the window jumped to it.
+-- One boss kill, however many events tell it: handled once.
 local function Killed(dungeon, boss)
   if not dungeon or not boss then
     return false
   end
   local key, now = dungeon .. "\0" .. boss, GetTime()
   if recentKills[key] and now - recentKills[key] < KILL_DEDUPE then
-    return mod.db.openOnKill and true or false
+    return true
   end
   recentKills[key] = now
   tabs.times:OnKill(dungeon, boss)
-  if mod.db.openOnKill then
-    FocusBoss(dungeon, boss)
-    return true
+  local how = mod.db.onKill or "open"
+  if how == "never" or IsOptional(dungeon, boss) then
+    mod:Debug("%s died: %s", boss, how == "never" and "set to do nothing" or "rare or optional, no jump")
+    return false
   end
-  return false
+  FocusBoss(dungeon, boss, false, how == "open")
+  return true
 end
 
--- The instance copy and the NPC of a creature GUID (kills, the target).
 local function SeenGUID(guid)
   local npc, zone, map = H.ParseGUID(guid)
   if zone and InInstance() then
@@ -613,10 +1134,7 @@ local function SeenGUID(guid)
   return npc
 end
 
--- A death told by GUID (PARTY_KILL, UNIT_DIED): bosses with no encounter
--- (all of Scholomance, most rares) are known by their NPC ID. Forever hides
--- the GUIDs of some deaths (secret values): those are skipped.
-local kidDeaths = {} -- "dungeon|group" -> { [guid] = true }: a group's guardians down so far
+local kidDeaths = {}
 
 local function GUIDDied(guid)
   if not InInstance() then
@@ -626,7 +1144,6 @@ local function GUIDDied(guid)
   if npc then
     local dungeon, boss = H.BossForNPC(npc)
     if boss then
-      -- A group of guardians (the Altar) is killed with its last guardian.
       local need = H.Bosses(dungeon).kids[boss]
       if need and need > 1 and type(guid) == "string" then
         local key = dungeon .. "|" .. boss
@@ -650,36 +1167,34 @@ end
 
 local function OnEvent(_, event, ...)
   if event == "ENCOUNTER_START" then
-    -- Encounter details can be "secret" values on newer clients; a failed
-    -- lookup just leaves everything as it was.
     local encounterID, encounterName = ...
     local ok, dungeon, boss = pcall(H.BossFor, Plain(encounterID), Plain(encounterName))
     if ok and boss then
       tabs.times:OnPull(dungeon, boss)
       if mod.db.openOnPull then
-        FocusBoss(dungeon, boss, true)
+        FocusBoss(dungeon, boss, true, true)
+      else
+        tabs.bis:Focus(boss, true)
+        H.Render()
       end
     end
   elseif event == "ENCOUNTER_END" or event == "BOSS_KILL" then
-    -- ENCOUNTER_END: id, name, difficulty, size, success; BOSS_KILL: id, name.
     local encounterID, encounterName, _, _, success = ...
     encounterID, encounterName, success = Plain(encounterID), Plain(encounterName), Plain(success)
     local killed = event == "BOSS_KILL" or success == 1 or success == true
-    local focused = false
     if killed and InInstance() then
       local ok, dungeon, boss, also = pcall(H.BossFor, encounterID, encounterName)
       if ok and boss then
-        focused = Killed(dungeon, boss)
-        -- The encounter's other bosses (Gyth with Rend).
+        Killed(dungeon, boss)
         for _, extra in ipairs(also or {}) do
           local name = H.ResolveBoss(dungeon, extra)
           if name then
-            tabs.times:OnKill(dungeon, name) -- (no jump: the window stays on the main boss)
+            tabs.times:OnKill(dungeon, name)
           end
         end
       end
     end
-    if event == "ENCOUNTER_END" and not focused then
+    if event == "ENCOUNTER_END" then
       tabs.bis.fighting = nil
       H.Render()
     end
@@ -689,7 +1204,6 @@ local function OnEvent(_, event, ...)
   elseif event == "UNIT_DIED" then
     GUIDDied((...))
   elseif event == "PLAYER_TARGET_CHANGED" then
-    -- (mobs only, the way DungeonJournal's run log reads the instance copy)
     if InInstance() and UnitGUID and UnitCanAttack and Plain(UnitCanAttack("player", "target")) then
       SeenGUID(UnitGUID("target"))
     end
@@ -699,15 +1213,25 @@ local function OnEvent(_, event, ...)
     end
   elseif event == "PLAYER_REGEN_DISABLED" then
     tabs.times:OnCombat()
-    if mod.db.hideInCombat and frame and frame:IsShown() then
-      comeBack = true
+    if mod.db.combat == "hide" and frame and frame:IsShown() then
+      vis.combatHidden = true
       frame:Hide()
     end
+    ApplyCombat()
   elseif event == "PLAYER_REGEN_ENABLED" then
-    if comeBack then
-      comeBack = false
-      if frame and mod.db.hideInCombat then
+    ApplyCombat()
+    if vis.combatHidden then
+      vis.combatHidden = false
+      if frame and not (vis.dismissed and mod.db.stayClosed) then
         frame:Show()
+        H.Render()
+      end
+    end
+    if vis.pending then
+      local tab = vis.pending
+      vis.pending = nil
+      if AutoOpen(tab, "after the fight") and tab == "bis" then
+        H.sideOpen = true -- (a kill during the fight: its loot, beside the list)
         H.Render()
       end
     end
@@ -715,9 +1239,10 @@ local function OnEvent(_, event, ...)
     mod:Debounce("quests", 0.5, function()
       tabs.quests:OnQuestChange()
     end)
+    if event == "PLAYER_LEVEL_UP" then
+      H.ClearGQ()
+    end
   elseif event == "GROUP_ROSTER_UPDATE" then
-    -- Comes in bursts (and for every change of a member's state): once
-    -- the group settles, and only when its members changed.
     mod:Debounce("roster", 2, function()
       local names = {}
       for _, m in ipairs(H.Members()) do
@@ -729,17 +1254,20 @@ local function OnEvent(_, event, ...)
         rosterKey = key
         PruneParty()
         H.Request()
+        if not InInstance() then
+          ZoneChanged()
+        end
         H.Render()
       end
     end)
   elseif event == "PLAYER_EQUIPMENT_CHANGED" then
     mod:Debounce("gear", 1, function()
+      H.ClearGQ()
       tabs.bis.RefreshMine()
       H.QueueSend(H.shown, "bis")
       H.Render()
     end)
   elseif event == "GET_ITEM_INFO_RECEIVED" then
-    -- Many come at once; only while the player's own gains wait for them.
     if tabs.bis:WantsItemInfo() then
       mod:Debounce("iteminfo", 1, function()
         tabs.bis:OnItemInfo()
@@ -747,9 +1275,10 @@ local function OnEvent(_, event, ...)
       end)
     end
   elseif event == "ZONE_CHANGED" or event == "ZONE_CHANGED_INDOORS" then
-    -- Moving between rooms: only a new wing (Lower to Upper Spire, Dire
-    -- Maul, Stratholme) runs the zone logic.
-    if H.CurrentDungeon() ~= lastCurrent then
+    -- Rooms: only a different wing (or a first name for this instance)
+    -- runs the zone logic.
+    local raw = RawCurrent()
+    if raw and raw ~= lastDungeon then
       ZoneChanged()
     end
   else
@@ -763,13 +1292,16 @@ local TAB_WORDS = {
   times = "times", time = "times", timer = "times", timers = "times",
 }
 
--- "/arl dh [tab|reset]" is the feature's main command (Shared.lua declares
--- command = "dh"); these are the shortcuts per tab, on while it's on.
 local function Command(rest)
   local word = ((rest or ""):match("^(%S+)") or ""):lower()
   if word == "reset" then
     tabs.times:Reset()
     mod:Print("Clear Times: run reset.")
+    return
+  end
+  if word == "compact" or word == "full" then
+    ARLE:SetOption(mod.id, "layout", word)
+    Open()
     return
   end
   if word ~= "" and not TAB_WORDS[word] then
@@ -785,7 +1317,6 @@ end
 
 local SHORTCUTS = {
   {
-    -- (not "loot": that's Quick Loot's command)
     name = "bis", aliases = { "bosses" },
     help = "opens or closes it on Bosses & Loot",
     fn = function()
@@ -812,8 +1343,6 @@ local SHORTCUTS = {
   },
 }
 
--- DungeonJournal's internals this feature reads are not a public API: one
--- chat warning naming what an update took away (the rest keeps working).
 local toldMissing = false
 local function CheckFDJ(fdj)
   if toldMissing then
@@ -841,9 +1370,35 @@ local function CheckFDJ(fdj)
   end
 end
 
+-- Settings from before 0.15.0.
+local function Migrate(db)
+  if db.hideInCombat ~= nil then
+    db.combat = db.hideInCombat and "hide" or "keep"
+    db.hideInCombat = nil
+  end
+  if db.openOnKill ~= nil then
+    db.onKill = db.openOnKill and "open" or "shown"
+    db.openOnKill = nil
+  end
+  if not db.compactSeen then
+    -- The big window was what hogged the screen: everyone starts compact once.
+    db.compactSeen = true
+    db.layout = "compact"
+    if (tonumber(db.maxHeight) or 0) > 600 or db.maxHeight == 540 then
+      db.maxHeight = 460
+    end
+  end
+  db.run, db.specs, db.roomy = nil, nil, nil
+  if db.onlyUpgrades ~= nil then
+    if db.onlyUpgrades then
+      db.filter = "party"
+    end
+    db.onlyUpgrades = nil
+  end
+end
+
 local flbHooked = false
 function mod:OnEnable()
-  -- (waits dropped when it was last turned off)
   renderQueued = false
   H.ResetSends()
   H.RegisterComms()
@@ -852,28 +1407,11 @@ function mod:OnEnable()
     error("DungeonJournal (ForeverDungeonJournal) is not loaded; it provides the bosses, loot and quests", 0)
   end
   CheckFDJ(fdj)
-  -- Up to 0.1.0 the run in progress was account-wide (another character
-  -- could carry it on); it is per character now, and the old one is dropped.
-  self.db.run = nil
-  -- Up to 0.7.0: party members without ARL were inspected and scored with a
-  -- picked spec; only ARL members' own numbers count now.
-  self.db.specs = nil
-  -- 0.9.0 made the window roomier: the old default height (420) grows with it.
-  if not self.db.roomy then
-    if self.db.maxHeight == 420 then
-      self.db.maxHeight = 540
-    end
-    self.db.roomy = true
-  end
-  lastCurrent, rosterKey = false, nil
+  Migrate(self.db)
+  vis.visit, vis.by, vis.dismissed, vis.combatHidden, vis.pending, vis.group = nil, nil, false, false, nil, nil
+  rosterKey, lastDungeon = nil, nil
   wipe(recentKills)
-  -- 0.2.0 had an "only upgrades" switch; it is the Party filter now.
-  if self.db.onlyUpgrades ~= nil then
-    if self.db.onlyUpgrades then
-      self.db.filter = "party"
-    end
-    self.db.onlyUpgrades = nil
-  end
+  H.ClearGQ()
   if not flbHooked and H.FLB() and H.FLB().OnChanged then
     flbHooked = true
     H.FLB().OnChanged(function()
@@ -886,8 +1424,6 @@ function mod:OnEnable()
       end
     end)
   end
-  -- self:On pcalls each registration (an event this client lacks is
-  -- skipped) and drops them all when the feature is turned off.
   for _, e in ipairs({
     "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "ZONE_CHANGED", "ZONE_CHANGED_INDOORS",
     "ENCOUNTER_START", "ENCOUNTER_END", "BOSS_KILL", "PARTY_KILL", "UNIT_DIED", "PLAYER_TARGET_CHANGED",
@@ -910,9 +1446,8 @@ function mod:OnEnable()
 end
 
 function mod:OnDisable()
-  -- (the events registered with self:On are dropped by the host)
-  ARLE:QueuePresence() -- partymates see "Dungeon Helper off" (still sharing, if set)
-  comeBack = false
+  ARLE:QueuePresence()
+  vis.by, vis.pending, vis.combatHidden = nil, nil, false
   if frame then
     frame:Hide()
   end
@@ -930,22 +1465,39 @@ function mod:OnResetPosition()
 end
 
 function mod:OnOptionChanged(key)
-  if key == "hideInCombat" and not self.db.hideInCombat and comeBack and frame then
-    comeBack = false -- switched off mid-fight: back now
-    frame:Show()
-  end
-  if key == "showShared" or key == "showOther" then
+  if key == "combat" then
+    if self.db.combat ~= "hide" and vis.combatHidden and frame then
+      vis.combatHidden = false
+      frame:Show()
+    end
+    ApplyCombat()
+  elseif key == "showShared" or key == "showOther" then
     H.ClearBossCache()
     tabs.bis.RefreshMine()
     H.QueueSend(H.shown, "bis", true)
+  elseif key == "useGearQuest" then
+    H.ClearGQ()
   elseif key == "guildBoard" and self.db.guildBoard then
     tabs.times:ShareAll()
+  elseif key == "questExtras" and tabs.quests.ClearCaches then
+    tabs.quests:ClearCaches()
+  elseif key == "showInGroup" then
+    ZoneChanged()
   end
   H.Render()
 end
 
 function mod:GetStatus()
   local parts = { "Active", H.shown or "not in a dungeon" }
+  local shown = frame and frame:IsShown()
+  if vis.dismissed and mod.db.stayClosed then
+    parts[#parts + 1] = "closed for this visit"
+  elseif vis.pending then
+    parts[#parts + 1] = "opens after the fight"
+  elseif shown then
+    parts[#parts + 1] = (Compact() and "compact" or "full") .. ", " .. (vis.by == "auto" and "opened by itself"
+      or "opened by you")
+  end
   if H.shown then
     parts[#parts + 1] = tabs.bis:Status()
     parts[#parts + 1] = tabs.quests:Status()
@@ -954,6 +1506,21 @@ function mod:GetStatus()
   return table.concat(parts, "  ·  ")
 end
 
+function mod:ReportDetails()
+  return {
+    string.format("visit %s (dungeon %s), opened by %s, dismissed %s, pending %s, combat hidden %s",
+      tostring(vis.visit and vis.visit.key), tostring(vis.visit and vis.visit.dungeon), tostring(vis.by),
+      tostring(vis.dismissed), tostring(vis.pending), tostring(vis.combatHidden)),
+    string.format("shown %s, layout %s, tab %s, raw current %s, auto %s", tostring(H.shown),
+      tostring(self.db.layout), tostring(self.db.tab), tostring(RawCurrent()), tostring(H.auto)),
+    string.format("settings: autoOpen %s, openTab %s, showInGroup %s, combat %s, stayClosed %s, onKill %s, "
+      .. "openOnPull %s", tostring(self.db.autoOpen), tostring(self.db.openTab), tostring(self.db.showInGroup),
+      tostring(self.db.combat), tostring(self.db.stayClosed), tostring(self.db.onKill),
+      tostring(self.db.openOnPull)),
+  }
+end
+
+-- (the options page's records pane follows; it opens the window with Open)
 -------------------------------------------------------------------------------
 -- Options page: the player's records, a button to open the window, and one
 -- to clear the records (click twice: no game popups).

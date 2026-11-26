@@ -50,20 +50,28 @@ local mod = {
     { "dh loot | quests | timers", "opens it on that tab" },
     { "dh reset", "restarts the run timer" },
   },
-  description = "A dungeon window: bosses and their loot (BiS and upgrades for you and your ARL partymates), "
-    .. "quests with their prerequisites and chains, and clear times with a guild leaderboard.",
+  description = "Everything about the dungeon you're in, in one small window: its quests (with every quest "
+    .. "that leads to them, class quests too), its bosses and their loot (BiS for you from Forever Leveling BiS "
+    .. "or GearQuest, and for your ARL partymates), and clear times with the guild's leaderboard.",
   defaults = {
+    layout = "compact",
     autoOpen = true,
-    hideInCombat = true,
-    openOnPull = true,
-    openOnKill = true,
-    maxHeight = 540,
-    tab = "bis",
+    openTab = "quests",
+    showInGroup = false,
+    combat = "hide",
+    stayClosed = true,
+    openOnPull = false,
+    onKill = "open",
+    scale = 100,
+    maxHeight = 460,
+    tab = "quests",
     showShared = true,
     showOther = true,
+    useGearQuest = true,
     filter = "all",
     questFilter = "all",
     questShowDone = true,
+    questExtras = true,
     timerStart = "pull",
     timerInTitle = true,
     announceRecords = true,
@@ -74,12 +82,11 @@ local mod = {
       key = "bis",
       label = "Bosses & Loot",
       notes = "Each boss's drops, and who in the party each one is BiS or an upgrade for.",
-      requires = "ForeverLevelingBiS",
     },
     {
       key = "quests",
       label = "Quests",
-      notes = "The dungeon's quests, what unlocks them, what follows, and the party's progress.",
+      notes = "The dungeon's quests and class quests, every quest that leads to them, and the party's progress.",
     },
     {
       key = "times",
@@ -89,40 +96,74 @@ local mod = {
   },
   panePage = "times", -- the records list goes on the Clear Times entry
   options = {
-    { type = "header", label = "Window" },
-    { key = "autoOpen", type = "boolean", label = "Open automatically inside dungeons" },
+    { type = "info", text = function(def) return def:GetStatus() end },
+    { type = "header", label = "When it shows" },
+    { key = "autoOpen", type = "boolean", label = "Open when I enter a dungeon",
+      tooltip = "Once per visit: closing it keeps it closed until you leave (see below)." },
     {
-      key = "hideInCombat",
-      type = "boolean",
-      label = "Hide in combat",
-      tooltip = "Hides the window while you are in combat and brings it back when the fight is over. Anything "
-        .. "that would open it during a fight (a pull, a boss kill) opens it once the fight is over; /arl dh "
-        .. "still opens it at once.",
-    },
-    {
-      key = "openOnPull",
-      type = "boolean",
-      label = "Jump to the boss when a fight starts",
-      tooltip = "Opens the window on Bosses & Loot with the boss you are fighting selected.",
-    },
-    {
-      key = "openOnKill",
-      type = "boolean",
-      label = "Open when a boss dies",
-      tooltip = "When a boss dies inside a dungeon, opens Bosses & Loot on that boss (even if you closed or folded "
-        .. "the window), so you can see what it drops and who it's for while the loot is rolled.",
-    },
-    { key = "maxHeight", type = "number", label = "Window height (300-900)", min = 300, max = 900 },
-    {
-      key = "tab",
+      key = "openTab",
       type = "select",
-      label = "Tab",
-      tooltip = "The tab the window shows. Clicking a tab in the window changes this too.",
+      label = "Open on",
       values = {
-        { value = "bis", label = "Bosses & Loot" },
         { value = "quests", label = "Quests" },
+        { value = "bis", label = "Bosses & Loot" },
         { value = "times", label = "Clear Times" },
+        { value = "last", label = "The last tab I used" },
       },
+    },
+    { key = "showInGroup", type = "boolean", label = "Also open in a group outside dungeons",
+      tooltip = "Shows the dungeon your group is going to (pick it with the dungeon menu) while you're grouped "
+        .. "in the open world, e.g. to check quests before you go in." },
+    {
+      key = "combat",
+      type = "select",
+      label = "In combat",
+      values = {
+        { value = "hide", label = "Hide it, back after the fight" },
+        { value = "fade", label = "Fade it out" },
+        { value = "keep", label = "Leave it as it is" },
+      },
+    },
+    { key = "stayClosed", type = "boolean", label = "Closing it keeps it closed until I leave the dungeon",
+      tooltip = "Nothing opens it again by itself (a pull, a boss kill) after you closed it, until your next "
+        .. "visit. /arl dh still opens it." },
+    { type = "header", label = "Key moments" },
+    {
+      key = "onKill",
+      type = "select",
+      label = "When a boss dies",
+      tooltip = "Rares and optional bosses never open it. Its loot shows on Bosses & Loot while it's rolled.",
+      values = {
+        { value = "open", label = "Open it on that boss's loot" },
+        { value = "shown", label = "Only switch to its loot if it's open" },
+        { value = "never", label = "Do nothing" },
+      },
+    },
+    { key = "openOnPull", type = "boolean", label = "Open on the boss when a fight starts",
+      tooltip = "Selects the boss you pull on Bosses & Loot (and opens the window, unless it's hidden in "
+        .. "combat: then once the fight is over)." },
+    { type = "header", label = "Window" },
+    {
+      key = "layout",
+      type = "select",
+      label = "Size",
+      tooltip = "Compact: one narrow list; picking an entry opens its details beside it. Full: list and "
+        .. "details side by side with the dungeon's banner. The window's arrows button switches too.",
+      values = {
+        { value = "compact", label = "Compact" },
+        { value = "full", label = "Full" },
+      },
+    },
+    { key = "scale", type = "range", label = "Scale (%)", min = 70, max = 150, step = 5 },
+    { key = "maxHeight", type = "range", label = "Highest it grows (pixels)", min = 240, max = 900, step = 20 },
+    ARLE.Options.Preset.ResetPosition(),
+    {
+      page = "bis",
+      key = "useGearQuest",
+      type = "boolean",
+      label = "Use GearQuest's picks too",
+      tooltip = "With GearQuest Forever installed, drops in its top list for your character are marked (its #1 "
+        .. "for a slot counts as best in slot), next to Forever Leveling BiS's numbers.",
     },
     {
       page = "bis",
@@ -159,9 +200,13 @@ local mod = {
         { value = "all", label = "All" },
         { value = "todo", label = "To do: not done yet" },
         { value = "party", label = "Party: in someone's quest log" },
+        { value = "class", label = "Class quests only" },
       },
     },
     { page = "quests", key = "questShowDone", type = "boolean", label = "List quests you have done (at the bottom)" },
+    { page = "quests", key = "questExtras", type = "boolean", label = "Add QuestieDB's quests for the dungeon",
+      tooltip = "Quests DungeonJournal doesn't list whose work is in the dungeon: class quests and others, for "
+        .. "your class and faction (needs QuestieDB)." },
     {
       page = "times",
       key = "timerStart",
@@ -177,7 +222,6 @@ local mod = {
       key = "timerInTitle",
       type = "boolean",
       label = "Show the running time on the window",
-      tooltip = "In the dungeon banner on every tab, and in the title bar when the window is folded.",
     },
     {
       page = "times",
@@ -221,6 +265,97 @@ end
 
 H.FDJ = ARLE.Bridge.FDJ
 H.FLB = ARLE.Bridge.FLB
+
+-- GearQuest Forever (Henrik8210; no license, so only its public tables are
+-- read): its ranked upgrade list per paper-doll slot for this character.
+-- GQ.Data:GetTopUpgradesForSlot(slot) -> { { itemId, pipelineScore, ... }, ... },
+-- best first (its #1 counts as best in slot here).
+local GQ_SLOT = {
+  INVTYPE_HEAD = "Head", INVTYPE_NECK = "Neck", INVTYPE_SHOULDER = "Shoulder", INVTYPE_CLOAK = "Back",
+  INVTYPE_CHEST = "Chest", INVTYPE_ROBE = "Chest", INVTYPE_WRIST = "Wrist", INVTYPE_HAND = "Hands",
+  INVTYPE_WAIST = "Waist", INVTYPE_LEGS = "Legs", INVTYPE_FEET = "Feet", INVTYPE_FINGER = "Finger",
+  INVTYPE_TRINKET = "Trinket", INVTYPE_WEAPON = "MainHand", INVTYPE_2HWEAPON = "MainHand",
+  INVTYPE_WEAPONMAINHAND = "MainHand", INVTYPE_WEAPONOFFHAND = "SecondaryHand", INVTYPE_SHIELD = "SecondaryHand",
+  INVTYPE_HOLDABLE = "SecondaryHand", INVTYPE_RANGED = "Ranged", INVTYPE_RANGEDRIGHT = "Ranged",
+  INVTYPE_THROWN = "Ranged", INVTYPE_RELIC = "Ranged",
+}
+local gqRanks, gqWarned = nil, false
+
+function H.GQ()
+  if not mod.db.useGearQuest or not ARLE:IsAddonLoaded("GearQuestForever") then
+    return nil
+  end
+  local gq = rawget(_G, "GearQuest")
+  local data = type(gq) == "table" and gq.Data
+  if type(data) ~= "table" or type(data.GetTopUpgradesForSlot) ~= "function" then
+    if not gqWarned then
+      gqWarned = true
+      mod:Print("GearQuest Forever has changed (GearQuest.Data.GetTopUpgradesForSlot is missing): its picks "
+        .. "aren't shown.")
+    end
+    return nil
+  end
+  return data
+end
+
+-- GearQuest's rank of an item for this character (1 = its best), or nil.
+-- Ranks are read once per slot until H.ClearGQ (gear, level or spec changed).
+function H.GQRank(itemID, loc)
+  local data = H.GQ()
+  local slot = data and GQ_SLOT[loc or ""]
+  if not slot then
+    return nil
+  end
+  gqRanks = gqRanks or {}
+  local ranks = gqRanks[slot]
+  if not ranks then
+    ranks = {}
+    local ok, list = pcall(data.GetTopUpgradesForSlot, data, slot)
+    if ok and type(list) == "table" then
+      for i, entry in ipairs(list) do
+        local id = type(entry) == "table" and tonumber(entry.itemId)
+        if id and not ranks[id] then
+          ranks[id] = i
+        end
+      end
+    else
+      mod:Debug("GearQuest: no list for %s (%s)", slot, tostring(list))
+    end
+    gqRanks[slot] = ranks
+  end
+  return ranks[itemID]
+end
+
+function H.ClearGQ()
+  gqRanks = nil
+  H.gearGen = (H.gearGen or 0) + 1 -- (the picker's per-dungeon counts are worked out again)
+end
+
+-- A line in the player's chat box, sent by their own Enter (addons can't
+-- post chat on live Forever). Only an empty box is used. chatType: "PARTY",
+-- "GUILD", "INSTANCE_CHAT"...
+function H.PrefillChat(text, chatType)
+  local util = rawget(_G, "ChatFrameUtil")
+  local active = (type(util) == "table" and util.GetActiveWindow) or rawget(_G, "ChatEdit_GetActiveWindow")
+  local typing = type(active) == "function" and active() or nil
+  if typing and (typing:GetText() or "") ~= "" then
+    return false
+  end
+  local open = (type(util) == "table" and util.OpenChat) or rawget(_G, "ChatFrame_OpenChat")
+  if type(open) ~= "function" or not pcall(open, text, DEFAULT_CHAT_FRAME) then
+    return false
+  end
+  local box = (type(active) == "function" and active()) or (DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.editBox)
+  if box and chatType then
+    pcall(box.SetAttribute, box, "chatType", chatType)
+    if box.UpdateHeader then
+      pcall(box.UpdateHeader, box)
+    elseif type(rawget(_G, "ChatEdit_UpdateHeader")) == "function" then
+      pcall(ChatEdit_UpdateHeader, box)
+    end
+  end
+  return true
+end
 
 local GetItemInfoInstant = (C_Item and C_Item.GetItemInfoInstant) or _G.GetItemInfoInstant
 H.GetItemInfo = (C_Item and C_Item.GetItemInfo) or _G.GetItemInfo
@@ -797,6 +932,8 @@ H.ICON = {
   watch = "Interface\\Icons\\INV_Misc_PocketWatch_01",
   bag = "Interface\\Icons\\INV_Misc_Bag_10",
   scroll = "Interface\\Icons\\INV_Misc_Note_01",
+  cog = "Interface\\Icons\\INV_Misc_Gear_01",
+  class = "Interface\\Icons\\INV_Misc_Book_09",
 }
 
 -- Inline art for a FontString: |T...|t.
@@ -1376,6 +1513,28 @@ function H.PartyStrip(parent)
     f.icons[k] = { edge = edge, icon = icon }
   end
   return f
+end
+
+-- Compact: no "Party" word and smaller icons (the compact toolbar is 288 px:
+-- four filter buttons and the full strip overlapped there).
+function H.LayoutPartyStrip(f, compact)
+  if f.compact == compact then
+    return
+  end
+  f.compact = compact
+  local size, step = compact and 14 or 18, compact and 16 or 21
+  f.label:SetShown(not compact)
+  for k, slot in ipairs(f.icons) do
+    slot.edge:SetSize(size, size)
+    slot.icon:SetSize(size - 2, size - 2)
+    slot.edge:ClearAllPoints()
+    if compact then
+      slot.edge:SetPoint("LEFT", f, "LEFT", (k - 1) * step, 0)
+    else
+      slot.edge:SetPoint("LEFT", f.label, "RIGHT", 6 + (k - 1) * step, 0)
+    end
+  end
+  f:SetWidth(compact and (5 * step) or 150)
 end
 
 -- has(member) -> true when that member shares (runs ARL).

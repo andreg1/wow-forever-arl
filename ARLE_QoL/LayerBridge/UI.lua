@@ -23,9 +23,11 @@ local ICON = {
   network = "Interface\\Icons\\INV_Misc_Spyglass_02",
   history = "Interface\\Icons\\INV_Misc_PocketWatch_01",
   options = "Interface\\Icons\\INV_Misc_Gear_01",
-  minimize = "Interface\\Buttons\\UI-MinusButton-Up",
-  expand = "Interface\\Buttons\\UI-PlusButton-Up",
-  close = "Interface\\Buttons\\UI-StopButton",
+  -- (themed text buttons: Blizzard's plus / minus / stop art looked out of
+  -- place in the ARL, EllesmereUI and ElvUI themes)
+  minimize = "text:-",
+  expand = "text:+",
+  close = "text:x",
 }
 -- status text colours, and the edge colour per state
 local TONE = {
@@ -54,6 +56,15 @@ local function Tip(frame, title, text)
 end
 
 local function Glyph(parent, file, title, text, onClick)
+  local label = file:match("^text:(.+)$")
+  if label then
+    -- The theme's own small button, like every other ARL window's.
+    local tb = Kit.SmallButton(parent, label, GLYPH + 2)
+    tb:SetHeight(GLYPH)
+    F:Script(tb, "OnClick", onClick)
+    Tip(tb, title, text)
+    return tb
+  end
   local b = CreateFrame("Button", nil, parent)
   b:SetSize(GLYPH, GLYPH)
   b.tex = b:CreateTexture(nil, "ARTWORK")
