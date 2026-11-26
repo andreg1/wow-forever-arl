@@ -1445,49 +1445,69 @@ local function SetStateIcon(pic, code)
   end
 end
 
--- A list's quests with chains kept together: each quest whose earlier step
--- (its nearest one in its tree) is also listed goes right under that one,
--- one step deeper. { { e, depth }, ... }; the roots keep the list's order.
+-- A list's quests with chains kept together, OneMoreQuest's quest-log way:
+-- a chain's last quest on top, the step it needs under it, the step that
+-- one needs under that, and so on. { { e, depth }, ... }. A chain sits where
+-- its most urgent step would (ready, in log, available... per the list's
+-- order); a step two later quests need shows under the first of them.
 local CHAIN_INDENT = 12
+local CHAIN_DEPTH = 3 -- (deeper steps keep this indent)
 local function ChainOrder(list)
-  local byId, parent, kids = {}, {}, {}
-  for _, e in ipairs(list) do
+  local byId, needs, neededBy, pos = {}, {}, {}, {}
+  for i, e in ipairs(list) do
     byId[e.id] = e
+    pos[e.id] = i
   end
+  -- needs[e] = the nearest earlier step of e's tree that is also listed.
   for _, e in ipairs(list) do
     local rows = Tree(e.id)
     if rows then
       for i = #rows, 1, -1 do
         local r = rows[i]
         if r.id and not r.current and byId[r.id] and r.id ~= e.id then
-          parent[e.id] = r.id
+          needs[e.id] = r.id
+          neededBy[r.id] = true
           break
         end
       end
     end
   end
+  -- Each chain (from its last quest down) at the place of its best member.
+  local function Best(id, seen)
+    local best = pos[id]
+    local nxt = needs[id]
+    if nxt and not seen[nxt] then
+      seen[nxt] = true
+      best = math.min(best, Best(nxt, seen))
+    end
+    return best
+  end
+  local tops = {}
   for _, e in ipairs(list) do
-    local p = parent[e.id]
-    if p then
-      kids[p] = kids[p] or {}
-      table.insert(kids[p], e)
+    if not neededBy[e.id] then
+      tops[#tops + 1] = { e = e, at = Best(e.id, { [e.id] = true }) }
     end
   end
+  table.sort(tops, function(x, y)
+    if x.at ~= y.at then
+      return x.at < y.at
+    end
+    return pos[x.e.id] < pos[y.e.id]
+  end)
   local out, placed = {}, {}
   local function Put(e, depth)
-    if placed[e.id] or depth > 8 then
+    if placed[e.id] or depth > 20 then
       return
     end
     placed[e.id] = true
     out[#out + 1] = { e = e, depth = depth }
-    for _, k in ipairs(kids[e.id] or {}) do
-      Put(k, depth + 1)
+    local nxt = needs[e.id] and byId[needs[e.id]]
+    if nxt then
+      Put(nxt, depth + 1)
     end
   end
-  for _, e in ipairs(list) do
-    if not parent[e.id] then
-      Put(e, 0)
-    end
+  for _, t in ipairs(tops) do
+    Put(t.e, 0)
   end
   for _, e in ipairs(list) do -- (a loop in the data: whatever is left, flat)
     Put(e, 0)
@@ -1579,7 +1599,7 @@ function tab:RenderList(width)
     H.PaintSection(h, g.label, note, g.icon)
     y = H.Place(h, y + (y > 2 and 6 or 0), 20, 2)
     for _, item in ipairs(ChainOrder(g.list)) do
-      local e, depth = item.e, math.min(item.depth, 2) -- (a long chain stays readable)
+      local e, depth = item.e, math.min(item.depth, CHAIN_DEPTH) -- (a long chain stays readable)
       first = first or e.id
       local r = listPool:Get()
       r.id, r.quest, r.code = e.id, e.q, e.code
