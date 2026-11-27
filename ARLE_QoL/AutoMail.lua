@@ -1,9 +1,11 @@
 -- Auto Mail: sends chosen bag items to chosen characters at a mailbox.
 --
 -- Our own code, against Blizzard's mail API only (no other addon needed).
--- Rules live in this character's settings (db.rules, a panel list), so
--- "Copy to all characters" gives every alt the same list; a rule naming the
--- character itself is skipped. A rule is "<item> = <character>" where <item>
+-- Settings are account-wide (shared.mailSettings, through the options'
+-- get/set): every character uses the same rules. The on/off switch stays per
+-- character (the host's). A rule naming the character you're on is skipped
+-- on that character, so one list can say "everything goes to the bank alt"
+-- and the bank alt keeps its own. A rule is "<item> = <character>" where <item>
 -- is an item ID, an exact item name, or a name with * wildcards ("* Cloth").
 --
 -- Names: Forever's mail needs "First Surname" (EllesmereUI's mail alts note
@@ -33,6 +35,38 @@ local SEND_TIMEOUT = 15    -- seconds to wait for the server's answer
 local AUTO_DELAY = 0.4     -- seconds after the mailbox opens before an auto run
 local ALT_DAYS = 120       -- a character's name is forgotten after this many days unseen
 local SUBJECT_MAX = 60
+local SETTINGS_KEY = "mailSettings" -- self.shared key (in SHARED_ONLY)
+local DEFAULTS = { rules = {}, auto = true, card = true, chat = true }
+
+-- The account-wide settings table.
+local function Store(def)
+  local shared = def and def.shared
+  if type(shared) ~= "table" then
+    return {}
+  end
+  local t = shared[SETTINGS_KEY]
+  if type(t) ~= "table" then
+    t = {}
+    shared[SETTINGS_KEY] = t
+  end
+  return t
+end
+
+-- An option whose value lives in the account-wide table.
+local function Account(opt)
+  opt.default = DEFAULTS[opt.key]
+  opt.get = function(def)
+    local v = Store(def)[opt.key]
+    if v == nil then
+      return DEFAULTS[opt.key]
+    end
+    return v
+  end
+  opt.set = function(value, def)
+    Store(def)[opt.key] = value
+  end
+  return opt
+end
 
 local F = {
   id = "AutoMail",
@@ -45,12 +79,13 @@ local F = {
     .. "(hold Shift to skip), or with the card's Send button. Soulbound and locked items stay.",
   options = {
     { type = "info", text = function(def) return def:GetStatus() end },
-    { key = "rules", type = "list", label = "Rules: item = character", add = "Add", default = {},
+    { type = "info", text = "These settings are the same on all your characters." },
+    Account({ key = "rules", type = "list", label = "Rules: item = character", add = "Add",
       empty = "(none: add e.g. \"Linen Cloth = Bank Alt\", \"* Cloth = Bank Alt\" or an item ID)",
-      format = function(v, def) return def:FormatRule(v) end },
-    { key = "auto", type = "boolean", label = "Send as soon as I open a mailbox", default = true },
-    { key = "card", type = "boolean", label = "Show a card at the mailbox with what goes where", default = true },
-    { key = "chat", type = "boolean", label = "Say in chat what was sent", default = true },
+      format = function(v, def) return def:FormatRule(v) end }),
+    Account({ key = "auto", type = "boolean", label = "Send as soon as I open a mailbox" }),
+    Account({ key = "card", type = "boolean", label = "Show a card at the mailbox with what goes where" }),
+    Account({ key = "chat", type = "boolean", label = "Say in chat what was sent" }),
   },
 }
 
@@ -62,6 +97,15 @@ local closedCard = false
 local card
 local lastRun = {}      -- lines for /arl report
 local MAIL_ERRORS = {}
+
+-- An account-wide setting.
+local function Get(key)
+  local v = Store(F)[key]
+  if v == nil then
+    return DEFAULTS[key]
+  end
+  return v
+end
 
 local function MaxAttach()
   return tonumber(_G.ATTACHMENTS_MAX_SEND) or MAX_ATTACH
@@ -125,8 +169,15 @@ local function Resolve(name)
   return name, false
 end
 
+-- The character you're on: by full name, or by first name when the rule
+-- gave no surname.
 local function IsMe(name)
-  return name:lower() == (ARLE:MyName() or ""):lower()
+  name = Lib.Trim(name):lower()
+  local me = (ARLE:MyName() or ""):lower()
+  if name == me then
+    return true
+  end
+  return not name:find(" ") and name == (me:match("^(%S+)") or "")
 end
 
 -------------------------------------------------------------------------------
@@ -169,7 +220,7 @@ end
 
 local function Rules()
   local list = {}
-  for _, text in ipairs(F.db.rules or {}) do
+  for _, text in ipairs(Get("rules") or {}) do
     local rule = ParseRule(text)
     if rule then
       list[#list + 1] = rule
@@ -300,7 +351,7 @@ local function Paint()
   if not card then
     return
   end
-  if not (mailOpen and F.db.card and not closedCard) then
+  if not (mailOpen and Get("card") and not closedCard) then
     card:Hide()
     return
   end
@@ -327,7 +378,7 @@ local function Paint()
       lines[#lines + 1] = entry.to .. ": " .. Summary(entry, 2)
     end
     card:SetLines(string.format("%s for %s", Lib.Plural(stacks, "stack"), Lib.Plural(people, "character")),
-      table.concat(lines, "\n"), F.db.auto and "Hold Shift at the mailbox to skip sending" or nil)
+      table.concat(lines, "\n"), Get("auto") and "Hold Shift at the mailbox to skip sending" or nil)
     card.send:SetText("Send")
   end
   local first = plan[1] and plan[1].stacks[1]
@@ -409,7 +460,7 @@ function F:Stop(why)
       parts[#parts + 1] = to .. " (" .. Lib.Plural(per[to], "stack") .. ")"
     end
     self.sentHere = "Sent to " .. table.concat(parts, ", ")
-    if self.db.chat then
+    if Get("chat") then
       self:Print(self.sentHere .. ".")
     end
   end
@@ -569,7 +620,7 @@ function F:OnMailShow()
   self.sentHere = nil
   BuildPlan()
   Paint()
-  if self.db.auto then
+  if Get("auto") then
     if IsShiftKeyDown() then
       self:Debug("auto: skipped (Shift held)")
       return
@@ -615,6 +666,7 @@ function F:OnEnable()
     end
   end
   NoteMe()
+  self:MoveOldRules()
   MakeCard()
   self:On("MAIL_SHOW", self.OnMailShow)
   self:On("MAIL_CLOSED", self.OnMailClosed)
@@ -627,6 +679,38 @@ function F:OnEnable()
   if mailOpen then
     BuildPlan()
     Paint()
+  end
+end
+
+-- 0.18.0 kept the rules per character: they're merged into the
+-- account-wide list once, and the old copy is dropped.
+function F:MoveOldRules()
+  local old = self.db.rules
+  if type(old) ~= "table" then
+    return
+  end
+  local list, have = { unpack(Get("rules")) }, {}
+  for _, v in ipairs(list) do
+    have[Lib.Key(v)] = true
+  end
+  local moved = 0
+  for _, v in ipairs(old) do
+    if type(v) == "string" and not have[Lib.Key(v)] then
+      list[#list + 1] = v
+      have[Lib.Key(v)] = true
+      moved = moved + 1
+    end
+  end
+  Store(self).rules = list
+  for _, key in ipairs({ "auto", "card", "chat" }) do
+    if Store(self)[key] == nil and self.db[key] ~= nil then
+      Store(self)[key] = self.db[key]
+    end
+    self.db[key] = nil
+  end
+  self.db.rules = nil
+  if moved > 0 then
+    self:Print(Lib.Plural(moved, "rule") .. " from this character now apply to all your characters.")
   end
 end
 
@@ -648,7 +732,7 @@ function F:OnOptionChanged()
 end
 
 function F:GetStatus()
-  local n = #(self.db.rules or {})
+  local n = #(Get("rules") or {})
   if n == 0 then
     return "Active · no rules yet: add one below, or /arl mail add <item> = <character>"
   end
@@ -662,7 +746,7 @@ function F:GetStatus()
     plan = saved
   end
   local stacks, people = PlanCounts(list)
-  local mode = self.db.auto and "sends when you open a mailbox" or "press Send at a mailbox"
+  local mode = Get("auto") and "sends when you open a mailbox" or "press Send at a mailbox"
   if stacks == 0 then
     return "Active · " .. Lib.Plural(n, "rule") .. ", nothing in your bags to send · " .. mode
   end
@@ -672,7 +756,7 @@ end
 
 function F:ReportDetails()
   local lines = { "Rules:" }
-  for _, text in ipairs(self.db.rules or {}) do
+  for _, text in ipairs(Get("rules") or {}) do
     local rule, why = ParseRule(text)
     lines[#lines + 1] = "  " .. text .. (rule and (" -> " .. rule.to .. (rule.known and "" or " (no surname)"))
       or (" (bad: " .. why .. ")"))
@@ -697,7 +781,7 @@ F.commands = {
       if rule.id then
         text = rule.id .. " = " .. rule.typed
       end
-      local list = { unpack(self.db.rules or {}) }
+      local list = { unpack(Get("rules") or {}) }
       list[#list + 1] = text
       ARLE:SetOption(self.id, "rules", list)
       self:Print("rule added: " .. self:FormatRule(text))
@@ -705,12 +789,12 @@ F.commands = {
   { name = "remove", args = "<number>", help = "removes rule number <n> (see /arl mail list)", run = function(self, rest)
     local n = tonumber(rest)
     local list = {}
-    for i, v in ipairs(self.db.rules or {}) do
+    for i, v in ipairs(Get("rules") or {}) do
       if i ~= n then
         list[#list + 1] = v
       end
     end
-    if not n or #list == #(self.db.rules or {}) then
+    if not n or #list == #(Get("rules") or {}) then
       self:Print("usage: /arl mail remove <number> (see /arl mail list)")
       return
     end
@@ -719,10 +803,10 @@ F.commands = {
   end },
   { name = "list", help = "your rules, and what in your bags would go to whom", run = function(self)
     self:Print("rules (the first that matches an item decides):")
-    for i, text in ipairs(self.db.rules or {}) do
+    for i, text in ipairs(Get("rules") or {}) do
       print("   " .. i .. ". " .. self:FormatRule(text))
     end
-    if #(self.db.rules or {}) == 0 then
+    if #(Get("rules") or {}) == 0 then
       print("   (none)")
     end
     local saved = plan
