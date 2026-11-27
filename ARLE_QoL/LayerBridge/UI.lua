@@ -421,6 +421,7 @@ local OPTIONS = {
   { "askAutoLayer", "Ask AutoLayer hosts too" },
   { "avoidVisited", "Don't go back to visited layers" },
   { "sound", "Sound when moved" },
+  { "forceTriple", "Triple-click: swap anyway on cooldown" },
   { "locked", "Lock position" },
 }
 
@@ -524,6 +525,23 @@ local function PlaceAll()
   end
 end
 
+-- Quick clicks in a row on Swap or the pill: the third one while the swap
+-- limit's wait runs asks anyway (forceTriple). Returns true when it forced.
+local TRIPLE_GAP = 0.5 -- s between two clicks of one triple-click
+local clicks = { n = 0, at = 0 }
+
+local function SwapClick()
+  local now = GetTime()
+  clicks.n = (now - clicks.at <= TRIPLE_GAP) and clicks.n + 1 or 1
+  clicks.at = now
+  if clicks.n >= 3 and F.db.forceTriple ~= false and LB.Limit.Left() and not LB.Swap.Busy() then
+    clicks.n = 0
+    LB.Swap.Click("button", nil, true)
+    return
+  end
+  LB.Swap.Click("button")
+end
+
 local function SwapTip()
   local lines = {}
   local key = ARLE.Secure:BoundKey("LayerSwap")
@@ -532,6 +550,9 @@ local function SwapTip()
   lines[#lines + 1] = "\nNetworks: " .. LB.Swap.NetList()
   local n, limit = LB.Limit.ThisHour()
   lines[#lines + 1] = string.format("Swaps this hour: %d of %d", n, limit)
+  if LB.Limit.Left() and F.db.forceTriple ~= false then
+    lines[#lines + 1] = "On cooldown: triple-click to try anyway."
+  end
   lines[#lines + 1] = key and ("Key: " .. key) or "Bind a key: Key Bindings > ARL Extensions > Layer Bridge: swap layer"
   return table.concat(lines, "\n")
 end
@@ -581,9 +602,7 @@ local function BuildBox()
   box.swapBtn:SetHeight(BTN_H)
   box.swapBtn:SetPoint("BOTTOMLEFT", box.hostBtn, "BOTTOMRIGHT", 4, 0)
   box.swapBtn:SetPoint("RIGHT", -C.pad, 0)
-  F:Script(box.swapBtn, "OnClick", function()
-    LB.Swap.Click("button")
-  end)
+  F:Script(box.swapBtn, "OnClick", SwapClick)
   Tip(box.swapBtn, "Swap layer", SwapTip)
 
   box.noticeBtn = Kit.Button(box, "", 100)
@@ -620,11 +639,13 @@ local function BuildHud()
     local d = self.downAt
     self.downAt = nil
     if button == "LeftButton" and d and d[1] == x and d[2] == y and self:IsMouseOver() then
-      LB.Swap.Click("button")
+      SwapClick()
     end
   end)
   Tip(hud, "Layer Bridge", function()
     return "Click: " .. (LB.Swap.Busy() and "stop / ask more" or "swap layer") .. ". Drag to move. + shows the box."
+      .. ((LB.Limit.Left() and F.db.forceTriple ~= false and not LB.Swap.Busy())
+        and "\nOn cooldown: triple-click to try anyway." or "")
   end)
 end
 

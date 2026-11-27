@@ -69,6 +69,11 @@ local F = {
       desc = "LayerSwap asks also name the layers you've been on in the last 6 hours (when ARL knows their "
         .. "id), so only hosts on a new layer invite. Click a layer in History to go back to it." },
     { key = "sound", type = "boolean", label = "Sound when moved", default = false, cmd = "sound" },
+    { key = "forceTriple", type = "boolean", label = "Triple-click Swap to try anyway while swaps are on cooldown",
+      default = true, cmd = "force",
+      desc = "While the box says \"Swaps reset in ...\", three quick clicks on Swap (or on the small pill) ask "
+        .. "anyway. The wait is ARL's guess of the game's hourly limit: if the move works, ARL learns the limit is "
+        .. "shorter; if the game refuses, the wait starts over." },
     { type = "header", label = "Hosting" },
     { key = "host", type = "boolean", label = "Host for others", default = false, cmd = "host",
       desc = "Invite players of every network who ask for another layer, and leave them be once they've moved. "

@@ -674,8 +674,9 @@ function Swap.Blocked()
 end
 
 -- The Swap button / key / command. via: "button", "key", "command", "panel",
--- "AutoLayer"; target: a History entry ({ id, host }).
-function Swap.Click(via, target)
+-- "AutoLayer"; target: a History entry ({ id, host }); force: asks although
+-- the hourly limit's wait isn't over (a triple-click, forceTriple).
+function Swap.Click(via, target, force)
   if cur then
     if target then
       return
@@ -690,10 +691,15 @@ function Swap.Click(via, target)
     return LB.Flash(why, nil, 4)
   end
   local left = Limit.Left()
-  if left then
-    return LB.Flash("Swap limit reached", "Reset in " .. LB.Countdown(left), 4)
+  if left and not (force and F.db.forceTriple ~= false) then
+    local hint = via == "button" and F.db.forceTriple ~= false and " · triple-click to try anyway" or ""
+    return LB.Flash("Swap limit reached", "Reset in " .. LB.Countdown(left) .. hint, 4)
   end
   Swap.Start(via, target)
+  if left then
+    cur.forced = true
+    LB.Step("forced past the swap limit (%s left of the wait)", LB.Countdown(left))
+  end
 end
 
 function Swap.Busy()
