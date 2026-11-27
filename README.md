@@ -16,7 +16,7 @@ Copy every folder of this repo (`ARLExtensions` and the `ARLE_*` packs) into `Wo
 | Quality of Life | XP Food: reminds you to eat your experience food when its buff is missing, weaker or ending, and when you run low; click the icon to eat | `/arl food` | Nothing |
 | Quality of Life | Fishing Pole Alert: warns when you fight with a fishing pole, with a key to put your weapons back on | `/arl fish` | Nothing |
 | Quality of Life | Spec Gear Swap: equips a spec's gear set on a spec switch, keeps the set saved, restores emptied action bars | `/arl gear` | Nothing |
-| Quality of Life | LFG Role Filter: filters the Group Browser by role, class and level 60, with Whisper / Invite and optional auto-invite | `/arl lfg` | Nothing |
+| Quality of Life | LFG Role Filter: filters the Group Browser by role, class, level 60 or for a class run (every class once), with Whisper / Invite and optional auto-invite; messages every tank, healer or group it shows (one at a time, each sent with your Enter) and sorts their replies into positive, neutral and negative, with an optional goodbye to the negative ones | `/arl lfg`, `/arl lfg replies`, `/arl lfg stop` | Nothing |
 | Quality of Life | Leveling BiS Spec: sets Forever Leveling BiS's Talent spec to the spec you play, and follows dual spec switches | `/arl spec` | Forever Leveling BiS |
 | Quality of Life | Auto Uprank: swaps lower spell ranks on your action bars for a new rank when you (or your pet) learn it | `/arl uprank` | Nothing |
 | Quality of Life | Quick Loot: loots everything at once (Shift opens the window normally); leaves rolls, bind-on-pickup confirms and items that don't fit | `/arl loot` | Nothing |

@@ -22,7 +22,15 @@
 -- dropped), reads LFGBrowseFrame:IsVisible() and LFGParentFrame's screen rect,
 -- and places its own UIParent-child panel by coordinates. The theme is applied
 -- to our panel only. The panel hides when combat starts.
-local ADDON = ...
+--
+-- Class run: a solo player is kept when nobody in your group (you included)
+-- has their class; a group when its members' classes all differ and none is
+-- yours or a groupmate's (an unreadable class is left out), so every class's
+-- loot has one taker. Works solo (only your class counts) and in a group.
+-- Messaging all of them, the reply sorter and the goodbye message are in
+-- LFGOutreach.lua (ns.LFGOutreach), which reads this file's lists through
+-- ns.LFGRoleFilter.
+local ADDON, ns = ...
 local ARLE = _G.ARLExtensions
 if not ARLE then
   return
@@ -57,8 +65,9 @@ local F = {
   title = "LFG Role Filter",
   group = "QualityOfLife",
   command = "lfg",
-  commandHelp = "filters the Looking For Group browser by role and class",
-  description = "Filters the Group Browser by role and class, with whisper, invite and auto-invite.",
+  commandHelp = "filters the Looking For Group browser by role and class, and messages the players it shows",
+  description = "Filters the Group Browser by role and class (or for a class run), with whisper, invite and "
+    .. "auto-invite; messages every tank, healer or group the filter shows, and sorts their replies.",
   options = {
     { type = "header", label = "Show" },
     { key = "roleTank", type = "boolean", label = "Tanks (and groups that need one)", default = false, cmd = "tank" },
@@ -69,6 +78,8 @@ local F = {
     { key = "showGroups", type = "boolean", label = "Groups", default = true, cmd = "groups" },
     { key = "maxLevelOnly", type = "boolean", label = "Only level 60 (solo players, and groups led by one)",
       default = false, cmd = "60" },
+    { key = "classRun", type = "boolean", label = "Class run: only classes nobody in your group has (you included)",
+      default = false, cmd = "classrun" },
     { type = "header", label = "Classes (solo players; none ticked = any)" },
   },
 }
@@ -76,6 +87,34 @@ for _, token in ipairs(CLASSES) do
   local opts = F.options
   opts[#opts + 1] = { key = ClassKey(token), type = "boolean", label = ClassLabel(token), default = false,
     cmd = token:lower() }
+end
+do
+  local opts = F.options
+  for _, o in ipairs({
+    { type = "header", label = "Messages (the Tanks / Healers / Groups buttons under the list)" },
+    { key = "askMax", type = "range", label = "At most this many players per click", min = 3, max = 30, step = 1,
+      default = 10 },
+    { key = "askGap", type = "range", label = "Seconds between two messages", min = 2, max = 15, step = 1,
+      default = 3 },
+    { key = "askAgain", type = "range", label = "Don't message the same player again within (minutes)", min = 10,
+      max = 240, step = 5, default = 60 },
+    { key = "autoSend", type = "boolean", default = false,
+      label = "Send them by itself where the game allows it (on live Forever each one waits for your Enter)" },
+    { key = "msgTank", type = "string", label = "Message to tanks",
+      default = "Hi {name}! Looking for a tank for {activity}, want to join?" },
+    { key = "msgHealer", type = "string", label = "Message to healers",
+      default = "Hi {name}! Looking for a healer for {activity}, want to join?" },
+    { key = "msgGroup", type = "string", label = "Message to groups",
+      default = "Hi {name}! Saw your group for {activity}. Level {level} {class} here, room for me?" },
+    { type = "info", text = "In messages: {name} their first name, {activity} what they listed, {level} and {class} "
+      .. "yours." },
+    { type = "header", label = "Replies" },
+    { key = "goodbye", type = "string", label = "Goodbye to negative replies",
+      default = "No worries, thanks for answering. Have a good one!" },
+    { key = "goodbyeAuto", type = "boolean", label = "Send the goodbye to every new negative reply", default = false },
+  }) do
+    opts[#opts + 1] = o
+  end
 end
 
 local panel, rows, content, scroll, countText, statusText
@@ -290,6 +329,17 @@ local function BuildEntry(id)
       end
     end
     e.filled = filled
+    -- Every member's class, for the class run (classesOK: all of them read).
+    e.classes, e.classesOK = {}, true
+    for i = 1, e.members do
+      local m = i == 1 and lead or MemberInfo(id, i)
+      local c = m and P(m.classFilename)
+      if c then
+        e.classes[#e.classes + 1] = c
+      else
+        e.classesOK = false
+      end
+    end
     -- (an activity can report 0 or nothing: a 5-player group then)
     local max = type(e.maxPlayers) == "number" and e.maxPlayers > 0 and e.maxPlayers or 5
     e.maxPlayers = max
@@ -329,13 +379,59 @@ local function AnyClassChecked()
   return false
 end
 
+-- The classes already in your group, you included (token -> true).
+local function MyClasses()
+  local set = {}
+  local function Add(unit)
+    if UnitExists(unit) then
+      local _, token = Lib.Call(UnitClass, unit)
+      if type(token) == "string" then
+        set[token] = true
+      end
+    end
+  end
+  Add("player")
+  if IsInRaid and IsInRaid() then
+    for i = 1, 40 do
+      Add("raid" .. i)
+    end
+  else
+    for i = 1, 4 do
+      Add("party" .. i)
+    end
+  end
+  return set
+end
+
+-- Class run: a solo player of a class nobody here has; a group whose classes
+-- all differ and miss every class here. Unreadable = left out.
+local function ClassRunOK(e, mine)
+  if e.solo then
+    return e.class ~= nil and not mine[e.class]
+  end
+  if not e.classesOK or not e.classes or #e.classes == 0 then
+    return false
+  end
+  local seen = {}
+  for _, c in ipairs(e.classes) do
+    if seen[c] or mine[c] then
+      return false
+    end
+    seen[c] = true
+  end
+  return true
+end
+
 -- The level cap (60 on Forever; the client's own number when it has one).
 local function MaxLevel()
   local n = (Lib.Call(rawget(_G, "GetMaxPlayerLevel")))
   return type(n) == "number" and n > 0 and n or 60
 end
 
-local function Passes(e)
+local function Passes(e, mine)
+  if F.db.classRun and not ClassRunOK(e, mine or MyClasses()) then
+    return false
+  end
   -- (a level that can't be read counts as not 60 while "only 60" is on)
   if F.db.maxLevelOnly and not (type(e.level) == "number" and e.level >= MaxLevel()) then
     return false
@@ -457,6 +553,14 @@ local function RowTooltip(row)
     GameTooltip:AddLine(("Group %d/%d  (T %d, H %d, D %d)"):format(e.members, e.maxPlayers, f.tank, f.healer, f.dps),
       0.6, 0.9, 1)
     GameTooltip:AddLine("Needs: " .. (#r > 0 and table.concat(r, ", ") or "nothing (full)"), 0.6, 0.9, 1)
+    if e.classes and #e.classes > 0 then
+      local names = {}
+      for _, c in ipairs(e.classes) do
+        local cr, cg, cb = ClassColor(c)
+        names[#names + 1] = ("|cff%02x%02x%02x%s|r"):format(cr * 255, cg * 255, cb * 255, ClassLabel(c))
+      end
+      GameTooltip:AddLine("Classes: " .. table.concat(names, ", ") .. (e.classesOK and "" or ", ?"), 1, 1, 1, true)
+    end
   end
   if e.title and e.title ~= "" then
     GameTooltip:AddLine(e.title, 1, 1, 1, true)
@@ -542,8 +646,9 @@ local function Redraw()
     return
   end
   wipe(shown)
+  local mine = MyClasses()
   for _, e in ipairs(results) do
-    if Passes(e) then
+    if Passes(e, mine) then
       shown[#shown + 1] = e
     end
   end
@@ -563,12 +668,17 @@ local function Redraw()
   elseif #results == 0 then
     statusText:SetText("Search in the Group Browser to see results.")
   elseif #shown == 0 then
-    statusText:SetText(F.db.maxLevelOnly and ("No level " .. MaxLevel() .. " matches the ticked roles"
+    statusText:SetText(F.db.classRun and "No one fits a class run with your group's classes."
+      or F.db.maxLevelOnly and ("No level " .. MaxLevel() .. " matches the ticked roles"
       .. (AnyClassChecked() and " and classes." or "."))
       or AnyClassChecked() and "No one matches the ticked roles and classes."
       or "No one matches the ticked roles.")
   else
     statusText:SetText("")
+  end
+  local O = ns.LFGOutreach
+  if O then
+    O.Redraw()
   end
   local ar, ag, ab = Skin:Accent()
   for _, r in ipairs(ROLES) do
@@ -593,6 +703,7 @@ local function Redraw()
     panel.playersCB:SetChecked(F.db.showPlayers ~= false)
     panel.groupsCB:SetChecked(F.db.showGroups ~= false)
     panel.maxCB:SetChecked(F.db.maxLevelOnly == true)
+    panel.runCB:SetChecked(F.db.classRun == true)
     panel.autoCB.tank:SetChecked(auto.tank)
     panel.autoCB.healer:SetChecked(auto.healer)
   end
@@ -730,8 +841,10 @@ local function AutoInvite()
       if GroupHasRole(ROLE_TOKEN[role]) then
         RoleFilled(role, "A group member")
       else
+        local mine = MyClasses()
         for _, e in ipairs(results) do
-          if e.solo and e.roles[role] and e.leader and not invited[e.leader] and not InGroupWith(e.leader) then
+          if e.solo and e.roles[role] and e.leader and not invited[e.leader] and not InGroupWith(e.leader)
+            and (not F.db.classRun or ClassRunOK(e, mine)) then
             local match = false
             for _, a in ipairs(e.activityIDs) do
               if set[a] then
@@ -893,6 +1006,11 @@ local function CreatePanel()
     ARLE:SetOption(F.id, "maxLevelOnly", v)
   end, "Solo players at level " .. MaxLevel() .. ", and groups whose leader is. A level the browser doesn't "
     .. "show counts as not " .. MaxLevel() .. ".")
+  panel.runCB = Check("Class run", 136, -110, function(v)
+    ARLE:SetOption(F.id, "classRun", v)
+  end, "Every class once, so each class's loot has one taker. Solo players: only classes nobody in your group "
+    .. "has (you included; solo, only yours). Groups: all members of different classes, none of them yours or your "
+    .. "group's.")
 
   statusText = Kit.Text(panel, "GameFontDisableSmall")
   statusText:SetPoint("TOPLEFT", 10, -136)
@@ -900,7 +1018,9 @@ local function CreatePanel()
 
   scroll = CreateFrame("ScrollFrame", nil, panel)
   scroll:SetPoint("TOPLEFT", 8, -152)
-  scroll:SetPoint("BOTTOMRIGHT", -8, 8)
+  local O = ns.LFGOutreach
+  local footer = O and O.CreateFooter(panel) or 0
+  scroll:SetPoint("BOTTOMRIGHT", -8, 8 + footer)
   scroll:EnableMouseWheel(true)
   content = CreateFrame("Frame", nil, scroll)
   content:SetSize(PANEL_W - 16, 1)
@@ -959,6 +1079,10 @@ local function Watch()
     end
   elseif panel and panel:IsShown() then
     panel:Hide()
+  end
+  local O = ns.LFGOutreach
+  if O then
+    O.Tick()
   end
 end
 
@@ -1039,8 +1163,17 @@ function F:OnEnable()
       end
       panel:Hide()
     end
+    local O = ns.LFGOutreach
+    if O then
+      O.Combat()
+    end
   end)
-  self:On("GROUP_ROSTER_UPDATE", CheckJoined)
+  self:On("GROUP_ROSTER_UPDATE", function()
+    CheckJoined()
+    if F.db.classRun then
+      self:Debounce("classrun", 0.3, Redraw)
+    end
+  end)
   pcall(self.On, self, "LFG_LIST_SEARCH_FAILED", function()
     wipe(results)
     Redraw()
@@ -1054,6 +1187,9 @@ function F:OnEnable()
   pcall(self.On, self, "LFG_LIST_SEARCH_RESULTS_RECEIVED", Results)
   pcall(self.On, self, "LFG_LIST_SEARCH_RESULT_UPDATED", Results)
   self:Ticker(0.25, Watch)
+  if ns.LFGOutreach then
+    ns.LFGOutreach.Enable()
+  end
 end
 
 function F:OnDisable()
@@ -1061,6 +1197,9 @@ function F:OnDisable()
   wipe(pending)
   if panel then
     panel:Hide()
+  end
+  if ns.LFGOutreach then
+    ns.LFGOutreach.Disable()
   end
 end
 
@@ -1107,7 +1246,13 @@ function F:GetStatus()
   return "Active · roles: " .. (#r > 0 and table.concat(r, ", ") or "any")
     .. " · classes: " .. (#c > 0 and table.concat(c, ", ") or "any")
     .. (self.db.maxLevelOnly and (" · level " .. MaxLevel() .. " only") or "")
+    .. (self.db.classRun and " · class run" or "")
     .. ((auto.tank or auto.healer) and " · auto-invite on" or "")
+    .. (ns.LFGOutreach and ns.LFGOutreach.Status() or "")
+end
+
+function F:ReportDetails()
+  return ns.LFGOutreach and ns.LFGOutreach.Report() or {}
 end
 
 F.commands = {
@@ -1129,8 +1274,33 @@ F.commands = {
       end
       self:SetAuto(role, (onoff == "" and not auto[role]) or onoff == "on")
     end },
+  { name = "replies", help = "shows or hides the replies panel", run = function()
+    if ns.LFGOutreach then
+      ns.LFGOutreach.ToggleReplies()
+    end
+  end },
+  { name = "stop", help = "stops sending the messages still waiting", run = function()
+    if ns.LFGOutreach then
+      ns.LFGOutreach.Stop("stopped")
+    end
+  end },
   { name = "probe", help = "prints the raw data of one result and your listing (troubleshooting)",
     run = function() Probe() end },
+}
+
+-- What LFGOutreach.lua reads.
+ns.LFGRoleFilter = {
+  F = F,
+  shown = shown,
+  ROLE_LABEL = ROLE_LABEL,
+  ClassColor = ClassColor,
+  ClassLabel = ClassLabel,
+  InGroupWith = InGroupWith,
+  Invite = Invite,
+  Whisper = Whisper,
+  Panel = function()
+    return panel
+  end,
 }
 
 ARLE:RegisterModule(F)

@@ -216,6 +216,16 @@ function L.StripRealm(name)
   return name and (name:match("^([^%-]+)") or name) or nil
 end
 
+-- The chat box the player is typing in (or the last one opened), or nil.
+function L.ActiveChatBox()
+  local util = rawget(_G, "ChatFrameUtil")
+  if type(util) == "table" and type(util.GetActiveWindow) == "function" then
+    return (L.Call(util.GetActiveWindow))
+  end
+  local get = rawget(_G, "ChatEdit_GetActiveWindow")
+  return type(get) == "function" and (L.Call(get)) or nil
+end
+
 -- Talents ----------------------------------------------------------------------
 -- Forever has no GetNumTalentTabs / GetTalentTabInfo any more (calling them
 -- gives "attempt to call a nil value", ForeverDungeonJournal's notes, 20 Nov
