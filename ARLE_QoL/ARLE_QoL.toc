@@ -1,15 +1,15 @@
 ## Interface: 16001, 120105, 120107
 ## Title: ARL Extensions: Quality of Life
-## Notes: Sleeping Bag reminders, XP Food, Fishing Pole Alert, Spec Gear Swap, LFG Role Filter, Leveling BiS Spec, Auto Uprank, Quick Loot, Loot Sparkles, Buff Back, Layer Bridge, Share Location, PallyPower Auto-Hide and Soulstone Reminder.
+## Notes: Sleeping Bag reminders, XP Food, Fishing Pole Alert, Spec Gear Swap, LFG Role Filter, Leveling BiS Spec, Auto Uprank, Quick Loot, Loot Sparkles, Buff Back, Layer Bridge, Share Location, PallyPower Auto-Hide, Soulstone Reminder and Auto Mail.
 ## Author: aredpanda, andreg1
-## Version: 0.17.1
+## Version: 0.18.0
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
 ## OptionalDeps: ForeverLevelingBiS, AutoLayer, LayerSwap, LayerAnarchy, ForeverLayerHop, VoidLayer, PallyPower
 ## LoadOnDemand: 1
 ## X-ARLE-Pack: QoL
 ## X-ARLE-Group: QualityOfLife
-## X-ARLE-Features: SleepingBag, XPFood, FishingPoleAlert, SpecGearSwap, LFGRoleFilter, LevelingBiSSpec, AutoUprank, QuickLoot, LootSparkles, BuffBack, LayerBridge, ShareLocation, PallyPowerHide, SoulstoneReminder
+## X-ARLE-Features: SleepingBag, XPFood, FishingPoleAlert, SpecGearSwap, LFGRoleFilter, LevelingBiSSpec, AutoUprank, QuickLoot, LootSparkles, BuffBack, LayerBridge, ShareLocation, PallyPowerHide, SoulstoneReminder, AutoMail
 ## X-ARLE-Feature-SleepingBag: title=Sleeping Bag; cmd=bag; default=off; replaces=ForeverSleepingBag
 ## X-ARLE-Feature-XPFood: title=XP Food; cmd=food; default=off; replaces=ForeverSnackTrack
 ## X-ARLE-Feature-FishingPoleAlert: title=Fishing Pole Alert; cmd=fish; default=off; replaces=FishingPoleAlert
@@ -24,6 +24,7 @@
 ## X-ARLE-Feature-ShareLocation: title=Share Location; cmd=share
 ## X-ARLE-Feature-PallyPowerHide: title=PallyPower Auto-Hide; extends=PallyPower; group=PallyPower; cmd=pally; default=off
 ## X-ARLE-Feature-SoulstoneReminder: title=Soulstone Reminder; cmd=soulstone; default=off
+## X-ARLE-Feature-AutoMail: title=Auto Mail; cmd=mail; default=off
 
 SleepingBag.lua
 XPFood.lua
@@ -48,3 +49,4 @@ LayerBridge\Feature.lua
 ShareLocation.lua
 PallyPowerHide.lua
 SoulstoneReminder.lua
+AutoMail.lua
