@@ -3,7 +3,7 @@
 --   FLB          Forever Leveling BiS (ForeverLevelingBiS_API v2+: gains, specs,
 --                weights). Public API only: its license forbids copying its code.
 --   Auctionator  Auctionator.API.v1 (prices, ages, DB update callback, searches)
---   EUI          EllesmereUI's plugin surfaces (quest tracker rows, bags)
+--   EUI          EllesmereUI's plugin surfaces (quest tracker rows, bags) and character roster
 local _, ns = ...
 local ARLE = ns.ARLE
 local B = ARLE.Bridge
@@ -94,4 +94,31 @@ end
 
 function E.CategoryManager()
   return type(_G.EUI_CategoryManager) == "table" and _G.EUI_CategoryManager or nil
+end
+
+-- The account's other characters from EllesmereUI's roster (EllesmereUI.Chars(),
+-- by GUID: name ("First Surname" on Forever), class, faction, realmKey, written
+-- at every login), only those on this character's realm group and faction:
+-- { { name, class } }. Empty without EllesmereUI or when it can't be read.
+function E.Characters()
+  local eui = E.Get()
+  local out = {}
+  if not (eui and type(eui.Chars) == "function") then
+    return out
+  end
+  local ok, chars = pcall(eui.Chars)
+  if not ok or not ARLE.Lib.Readable(chars) then
+    return out
+  end
+  local me = type(eui.CharGUID) == "function" and ARLE.Lib.Call(eui.CharGUID) or ARLE.Lib.Plain(UnitGUID("player"))
+  local mine = me and chars[me]
+  local realm = type(mine) == "table" and mine.realmKey or nil
+  local faction = ARLE.Lib.Plain((UnitFactionGroup("player")))
+  for guid, c in pairs(chars) do
+    if guid ~= me and type(c) == "table" and type(c.name) == "string" and not c.mailAltRemoved
+      and (not realm or c.realmKey == realm) and (not faction or not c.faction or c.faction == faction) then
+      out[#out + 1] = { name = c.name, class = c.class }
+    end
+  end
+  return out
 end
