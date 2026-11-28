@@ -20,13 +20,15 @@
 --
 -- A browse row is one item: its lowest price (each) and the quantity listed.
 -- An item whose lowest price is under its vendor price (GetItemInfo's 11th
--- value) by enough that all it lists could make the minimum profit is a
--- candidate; then each candidate (most profit first,
--- DETAIL_MAX of them) is looked up on its own (SendSearchQuery, price order,
--- our own auctions apart: ITEM_ / COMMODITY_SEARCH_RESULTS_UPDATED), which
--- gives the exact auctions under vendor price, without our own. A search that
--- comes back empty is sent again (like Auctionator's own search scan does);
--- one that never answers (DETAIL_WAIT) keeps the browse row ("approx").
+-- value) by enough that all it lists could make the minimum profit is listed
+-- right away from that (profit "up to": as if all were at the lowest price).
+-- 0.21.1-pre looked every one up on its own after the scan, one server search
+-- each, and 70 took minutes (the user: "too slow"); now that's on demand:
+-- "Check top N" (`S.CheckTop`) looks the top rows up (SendSearchQuery, price
+-- order, our own auctions apart: ITEM_ / COMMODITY_SEARCH_RESULTS_UPDATED) and
+-- puts their exact auctions under vendor price in their place ("exact"); a
+-- search that comes back empty is sent again (like Auctionator's own search
+-- scan does), one that never answers (DETAIL_WAIT) keeps its row.
 --
 -- Results, per item (cheapest auctions first, most profit first), go to
 -- `shared.snipeScans[realm]` (in SHARED_ONLY). Buying goes through
@@ -47,7 +49,7 @@ local MAX_AUCTIONS = 25 -- auctions kept per item
 local PASSIVE_MIN = 1000 -- browse items seen before Auctionator's "done" counts as its full scan
 local PUMP = 0.2 -- seconds between our query steps
 local BROWSE_WAIT = 20 -- seconds without a browse page before our scan gives up on the rest
-local DETAIL_MAX = 80 -- candidates looked up one by one
+local CHECK_TOP = 20 -- rows "Check top" looks up one by one
 local DETAIL_WAIT = 8 -- seconds for one lookup's answer
 local DETAIL_TRIES = 3 -- sends of one lookup that comes back empty
 local DETAIL_PAGES = 3 -- pages of one item's auctions, while they're all still under vendor price
@@ -67,7 +69,7 @@ local F = {
   group = "Auctionator",
   extends = "Auctionator",
   command = "snipes",
-  commandArgs = "[scan|stop|read|list [n]]",
+  commandArgs = "[scan|stop|check [n]|read|list [n]]",
   commandHelp = "auctions selling below vendor price, from a full scan (ours or Auctionator's)",
   mainHelp = "says what the last scan found",
   description = "Lists the auctions selling for less than a vendor pays for the same items, so buying and vendoring "
@@ -175,8 +177,8 @@ end
 -- Results
 -------------------------------------------------------------------------------
 
--- hits = { { id, link, count, buyout, vendor, profit, approx } } -> rows per item, stored, said.
-local function Publish(hits, total, source, partial)
+-- Exact rows from auctions: hits = { { id, link, count, buyout, vendor, profit } } -> one row per item.
+local function ExactRows(hits)
   local byItem = {}
   for _, a in ipairs(hits) do
     local row = byItem[a.id]
@@ -185,9 +187,8 @@ local function Publish(hits, total, source, partial)
       byItem[a.id] = row
     end
     row.link = row.link or a.link
-    row.approx = row.approx or a.approx
     row.auctions[#row.auctions + 1] = { count = a.count, buyout = a.buyout, unit = a.buyout / a.count,
-      profit = a.profit, approx = a.approx }
+      profit = a.profit }
     row.count, row.cost, row.profit = row.count + a.count, row.cost + a.buyout, row.profit + a.profit
   end
   local rows = {}
@@ -200,8 +201,25 @@ local function Publish(hits, total, source, partial)
     for i = MAX_AUCTIONS + 1, #row.auctions do
       row.auctions[i] = nil
     end
+    row.exact = true
+    row.each = row.vendor - row.best
     rows[#rows + 1] = row
   end
+  return rows
+end
+
+-- Rows straight from a browse: candidates = { { id, key, price, qty, vendor, edge, own } }.
+local function BrowseRows(candidates)
+  local rows = {}
+  for _, c in ipairs(candidates) do
+    rows[#rows + 1] = { id = c.id, key = c.key, vendor = c.vendor, best = c.price, count = c.qty, each = c.edge,
+      cost = c.price * c.qty, profit = c.edge * c.qty, own = c.own, exact = false }
+  end
+  return rows
+end
+
+-- Sorted, cut, stored and said.
+local function Save(rows, total, source, partial, quiet)
   table.sort(rows, function(x, y)
     if x.profit ~= y.profit then
       return x.profit > y.profit
@@ -213,15 +231,16 @@ local function Publish(hits, total, source, partial)
   end
   local s = Store()
   s.at, s.total, s.rows, s.source, s.partial = time(), total, rows, source, partial
-  local profit = 0
+  local profit, upTo = 0, false
   for _, row in ipairs(rows) do
     profit = profit + row.profit
+    upTo = upTo or not row.exact
   end
-  job.last = ("%d items below vendor price, %s profit%s"):format(#rows, Lib.FormatMoney(profit),
-    partial and " (partial)" or "")
+  job.last = ("%d items below vendor price, %s%s profit%s"):format(#rows, upTo and "up to " or "",
+    Lib.FormatMoney(math.floor(profit)), partial and " (partial)" or "")
   Diag().lastEnd = ("%s %s: %s"):format(date("%H:%M:%S"), source, job.last)
   F:Debug("published from %s: %s", source, job.last)
-  if F.db.chat ~= false then
+  if F.db.chat ~= false and not quiet then
     if #rows > 0 then
       F:Print(("Snipes: %s. See the ARL tab on the auction house."):format(job.last))
     else
@@ -229,6 +248,10 @@ local function Publish(hits, total, source, partial)
     end
   end
   Notify()
+end
+
+local function Publish(hits, total, source, partial)
+  Save(ExactRows(hits), total, source, partial)
 end
 
 local function Stop(reason)
@@ -268,26 +291,6 @@ local function TakeBrowse(results)
   end
 end
 
-local function StartDetail()
-  local list = {}
-  for _, c in ipairs(job.candidates) do
-    list[#list + 1] = c
-  end
-  table.sort(list, function(a, b)
-    return a.edge > b.edge
-  end)
-  for i = DETAIL_MAX + 1, #list do
-    -- (past the lookups: the browse row stands)
-    local c = list[i]
-    job.hits[#job.hits + 1] = { id = c.id, count = 1, buyout = c.price, vendor = c.vendor, profit = c.edge,
-      approx = true }
-    list[i] = nil
-  end
-  job.queue, job.phase, job.done, job.total = list, "detail", 0, #list
-  F:Debug("%d candidates to look up", #list)
-  Notify()
-end
-
 -- Every item seen: those under vendor price become candidates; unloaded items are read again (RETRIES).
 local function Check()
   local minProfit = MinProfit()
@@ -299,7 +302,7 @@ local function Check()
     elseif vendor > s.price and (vendor - s.price) * s.qty >= minProfit then
       -- (each one's edge times all listed: the most it could be; the lookup finds the real auctions)
       job.candidates[#job.candidates + 1] = { id = id, key = s.key, price = s.price, qty = s.qty, vendor = vendor,
-        edge = vendor - s.price }
+        edge = vendor - s.price, own = s.own }
     end
   end
   job.pool = waiting
@@ -318,19 +321,8 @@ local function Check()
   end
   job.skipped = left
   F:Debug("%d of %d items under vendor price (%d without item data)", #job.candidates, job.seen, left)
-  if #job.candidates == 0 then
-    job.phase = nil
-    Publish({}, job.seen, job.source)
-  elseif AHOpen() and C_AuctionHouse.SendSearchQuery then
-    StartDetail()
-  else
-    for _, c in ipairs(job.candidates) do
-      job.hits[#job.hits + 1] = { id = c.id, count = 1, buyout = c.price, vendor = c.vendor, profit = c.edge,
-        approx = true }
-    end
-    job.phase = nil
-    Publish(job.hits, job.seen, job.source)
-  end
+  job.phase = nil
+  Save(BrowseRows(job.candidates), job.seen, job.source)
 end
 
 -- A full browse is in (ours, or Auctionator's): from here on it's ours to finish.
@@ -407,10 +399,8 @@ local function DetailDone(q, ok)
       job.hits[#job.hits + 1] = h
     end
   else
-    local c = q.c
-    F:Debug("no answer for item %d: keeping its browse row", c.id)
-    job.hits[#job.hits + 1] = { id = c.id, count = 1, buyout = c.price, vendor = c.vendor, profit = c.edge,
-      approx = true }
+    F:Debug("no answer for item %d: keeping its row", q.c.id)
+    job.failed[q.c.id] = true
   end
   job.query = nil
   job.done = job.done + 1
@@ -428,11 +418,43 @@ local function SendDetail(q)
   end
 end
 
+-- The lookups are done: the rows looked up are replaced by their exact auctions (gone when none is left under
+-- vendor price), the ones without an answer stay as they were.
+local function Merge()
+  local s = Store()
+  local exact = ExactRows(job.hits)
+  local found = {}
+  for _, row in ipairs(exact) do
+    found[row.id] = row
+  end
+  local rows, gone = {}, 0
+  for _, row in ipairs(s.rows) do
+    if not job.looked[row.id] or job.failed[row.id] then
+      rows[#rows + 1] = row
+    elseif found[row.id] then
+      found[row.id].key = row.key
+      rows[#rows + 1] = found[row.id]
+    else
+      gone = gone + 1
+    end
+  end
+  job.phase = nil
+  Save(rows, s.total, s.source, s.partial, true)
+  if F.db.chat ~= false then
+    local silent = 0
+    for _ in pairs(job.failed) do
+      silent = silent + 1
+    end
+    F:Print(("Snipes: checked %d items, %d still under vendor price%s%s."):format(job.total, #exact,
+      gone > 0 and (", %d sold or gone"):format(gone) or "",
+      silent > 0 and (", %d didn't answer (kept as they were)"):format(silent) or ""))
+  end
+end
+
 local function NextDetail()
   local c = table.remove(job.queue, 1)
   if not c then
-    job.phase = nil
-    Publish(job.hits, job.seen, job.source)
+    Merge()
     return
   end
   local status = C_AuctionHouse.GetItemCommodityStatus and Lib.Call(C_AuctionHouse.GetItemCommodityStatus, c.id)
@@ -498,17 +520,15 @@ local function Pump()
     end
   elseif job.phase == "detail" then
     if not AHOpen() then
-      -- (the rest keep their browse rows)
+      -- (the rest keep their rows)
       for _, c in ipairs(job.queue) do
-        job.hits[#job.hits + 1] = { id = c.id, count = 1, buyout = c.price, vendor = c.vendor, profit = c.edge,
-          approx = true }
+        job.failed[c.id] = true
       end
       if job.query then
         DetailDone(job.query, false)
       end
       job.queue = {}
-      job.phase = nil
-      Publish(job.hits, job.seen, job.source, true)
+      Merge()
       return
     end
     local q = job.query
@@ -585,6 +605,36 @@ function S.Scan()
   Notify()
   return true
 end
+
+-- Look the top rows (not exact yet, not hidden) up one by one for their exact auctions.
+function S.CheckTop(n)
+  if job.phase then
+    return false, "a scan is already running"
+  end
+  if not (AHOpen() and C_AuctionHouse.SendSearchQuery) then
+    return false, "open the auction house first"
+  end
+  local hidden, queue, looked = S.Hidden(), {}, {}
+  for _, row in ipairs(Store().rows) do
+    if #queue >= (n or CHECK_TOP) then
+      break
+    end
+    if not row.exact and row.key and not hidden[row.id] then
+      queue[#queue + 1] = { id = row.id, key = row.key, price = row.best, qty = row.count, vendor = row.vendor,
+        edge = row.each }
+      looked[row.id] = true
+    end
+  end
+  if #queue == 0 then
+    return false, "nothing left to check: every row shown is already exact"
+  end
+  job.phase, job.queue, job.looked, job.failed, job.hits = "detail", queue, looked, {}, {}
+  job.done, job.total, job.query = 0, #queue, nil
+  F:Debug("checking %d rows", #queue)
+  Notify()
+  return true
+end
+S.CHECK_TOP = CHECK_TOP
 
 -- Seen in the current browse (for the panel while scanning).
 function S.Seen()
@@ -794,6 +844,13 @@ F.commands = {
       self:Print("no scan is running.")
     end
   end },
+  { name = "check", args = "[n]", help = "looks the top n rows up for their exact auctions (default 20)",
+    run = function(self, rest)
+      local ok, err = S.CheckTop(tonumber(rest))
+      if not ok then
+        self:Print("can't: " .. err .. ".")
+      end
+    end },
   { name = "read", help = "reads Auctionator's replicate list (its \"replicate scan\" option)", run = function(self)
     local ok, err = S.Read("command")
     if not ok then
@@ -812,8 +869,9 @@ F.commands = {
       if i > n then
         break
       end
-      print(("   %d. %s x%d: buy %s, vendor %s, profit %s"):format(i, row.link or Items.Link(row.id), row.count,
-        Lib.FormatMoney(row.cost), Lib.FormatMoney(row.vendor * row.count), Lib.FormatMoney(row.profit)))
+      print(("   %d. %s x%d at %s each, vendor %s each: profit %s%s"):format(i, row.link or Items.Link(row.id),
+        row.count, Lib.FormatMoney(math.floor(row.best)), Lib.FormatMoney(row.vendor),
+        row.exact and "" or "up to ", Lib.FormatMoney(math.floor(row.profit))))
     end
   end },
 }
@@ -825,7 +883,7 @@ function S.Doing()
   elseif job.phase == "check" then
     return ("Checking %d items against vendor prices"):format(job.seen or 0)
   elseif job.phase == "detail" then
-    return ("Looking up the cheap ones: %d / %d"):format(job.done or 0, math.max(job.total or 0, 1))
+    return ("Checking each auction: %d / %d items"):format(job.done or 0, math.max(job.total or 0, 1))
   elseif job.phase == "replicate" then
     return ("Reading the full scan: %d / %d auctions"):format(job.done or 0, math.max(job.total or 0, 1))
   end

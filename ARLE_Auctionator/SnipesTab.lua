@@ -23,7 +23,7 @@ local COLS = { -- x, width, justify
 }
 local LABELS = { rank = "#", item = "Item", best = "Cheapest each", vendor = "Vendor each", cost = "Buy all",
   profit = "Profit", pct = "Return" }
-local TIPS = {
+local TIPS = { -- (a row not checked yet says "up to": as if all listed were at the cheapest price)
   best = "The lowest buyout per item among the auctions below vendor price.",
   vendor = "What a vendor pays for one.",
   cost = "What buying every auction listed here costs.",
@@ -93,22 +93,31 @@ local function ShowTip(r)
     GameTooltip:SetText(Colored(row))
   end
   GameTooltip:AddLine(" ")
-  GameTooltip:AddLine(("%d auction%s below vendor price (%s each at a vendor):"):format(row.n,
-    row.n == 1 and "" or "s", Money(row.vendor)), 1, 0.82, 0)
-  for _, a in ipairs(row.auctions) do
-    GameTooltip:AddDoubleLine(("   %d x  %s each"):format(a.count, Money(a.unit)),
-      ("|cff40ff40+%s|r"):format(Money(a.profit)), 1, 1, 1, 1, 1, 1)
+  if row.exact then
+    GameTooltip:AddLine(("%d auction%s below vendor price (%s each at a vendor):"):format(row.n,
+      row.n == 1 and "" or "s", Money(row.vendor)), 1, 0.82, 0)
+    for _, a in ipairs(row.auctions) do
+      GameTooltip:AddDoubleLine(("   %d x  %s each"):format(a.count, Money(a.unit)),
+        ("|cff40ff40+%s|r"):format(Money(a.profit)), 1, 1, 1, 1, 1, 1)
+    end
+    if row.n > #row.auctions then
+      GameTooltip:AddLine(("   and %d more"):format(row.n - #row.auctions), 0.7, 0.7, 0.7)
+    end
+    GameTooltip:AddLine(" ")
+    GameTooltip:AddDoubleLine("Buy them all", Money(row.cost), 1, 0.82, 0, 1, 1, 1)
+    GameTooltip:AddDoubleLine("A vendor pays", Money(row.vendor * row.count), 1, 0.82, 0, 1, 1, 1)
+    GameTooltip:AddDoubleLine("Profit", Money(row.profit), 1, 0.82, 0, 0.25, 1, 0.25)
+  else
+    GameTooltip:AddDoubleLine("Cheapest", Money(row.best) .. " each", 1, 0.82, 0, 1, 1, 1)
+    GameTooltip:AddDoubleLine("A vendor pays", Money(row.vendor) .. " each", 1, 0.82, 0, 1, 1, 1)
+    GameTooltip:AddDoubleLine("Profit", Money(row.each) .. " each", 1, 0.82, 0, 0.25, 1, 0.25)
+    GameTooltip:AddDoubleLine("Listed", tostring(row.count), 1, 0.82, 0, 1, 1, 1)
+    GameTooltip:AddLine(("Up to %s if all %d are at the cheapest price: the scan only gives the cheapest. Click "
+      .. "to see each auction in Auctionator, or Check top %d."):format(Money(row.profit), row.count,
+      S.CHECK_TOP or 20), 1, 0.6, 0.25, true)
   end
-  if row.n > #row.auctions then
-    GameTooltip:AddLine(("   and %d more"):format(row.n - #row.auctions), 0.7, 0.7, 0.7)
-  end
-  GameTooltip:AddLine(" ")
-  GameTooltip:AddDoubleLine("Buy them all", Money(row.cost), 1, 0.82, 0, 1, 1, 1)
-  GameTooltip:AddDoubleLine("A vendor pays", Money(row.vendor * row.count), 1, 0.82, 0, 1, 1, 1)
-  GameTooltip:AddDoubleLine("Profit", Money(row.profit), 1, 0.82, 0, 0.25, 1, 0.25)
-  if row.approx then
-    GameTooltip:AddLine("Only its cheapest price was seen (its own auctions weren't looked up): there's at least "
-      .. "one at that price.", 1, 0.6, 0.25, true)
+  if row.own then
+    GameTooltip:AddLine("You have auctions of this too.", 0.6, 0.8, 1, true)
   end
   GameTooltip:AddLine("From the last scan: some may be sold already.", 0.6, 0.6, 0.6, true)
   GameTooltip:AddLine("Click: look it up in Auctionator · Shift-click: link · Right-click: hide this item", 0.5, 0.5,
@@ -183,13 +192,18 @@ local function Paint(r, row, i)
   r.rank:SetText(tostring(i))
   r.icon:SetTexture(Items.GetIcon and Items.GetIcon(row.id) or 134400)
   r.item:SetText(Colored(row))
-  r.sub:SetText(row.approx and "at least 1 at this price" or ("%d auction%s · %d item%s"):format(row.n,
-    row.n == 1 and "" or "s", row.count, row.count == 1 and "" or "s"))
+  if row.exact then
+    r.sub:SetText(("|cff80ff80checked|r · %d auction%s · %d item%s"):format(row.n, row.n == 1 and "" or "s",
+      row.count, row.count == 1 and "" or "s"))
+  else
+    r.sub:SetText(("%d listed · %s profit each"):format(row.count, Money(row.each)))
+  end
+  local upTo = row.exact and "" or "|cff909090up to|r "
   r.best:SetText(Money(row.best))
   r.vendor:SetText(Money(row.vendor))
-  r.cost:SetText(Money(row.cost))
-  r.profit:SetText("|cff40ff40" .. Money(row.profit):gsub("|r", "|r|cff40ff40") .. "|r")
-  r.pct:SetText(row.cost > 0 and ("%d%%"):format(math.floor(row.profit / row.cost * 100 + 0.5)) or "")
+  r.cost:SetText(upTo .. Money(row.cost))
+  r.profit:SetText(upTo .. "|cff40ff40" .. Money(row.profit):gsub("|r", "|r|cff40ff40") .. "|r")
+  r.pct:SetText(row.best > 0 and ("%d%%"):format(math.floor(row.each / row.best * 100 + 0.5)) or "")
   r:Show()
 end
 
@@ -204,11 +218,12 @@ RealRefresh = function()
     nHidden = nHidden + 1
   end
   wipe(shown)
-  local profit, cost = 0, 0
+  local profit, cost, upTo = 0, 0, false
   for _, row in ipairs(s.rows) do
     if not hidden[row.id] then
       shown[#shown + 1] = row
       profit, cost = profit + row.profit, cost + row.cost
+      upTo = upTo or not row.exact
     end
   end
   local doing = S.Doing()
@@ -220,10 +235,17 @@ RealRefresh = function()
   else
     frame.status:SetText("|cffff9040Not scanned yet|r")
   end
-  frame.summary:SetText(#shown > 0 and ("|cffffffff%d item%s|r · buy all for |cffffffff%s|r · vendor profit "
-    .. "|cff40ff40%s|r"):format(#shown, #shown == 1 and "" or "s", Lib.FormatMoney(cost), Lib.FormatMoney(profit))
-    or "")
+  frame.summary:SetText(#shown > 0 and ("|cffffffff%d item%s|r · buy all for %s|cffffffff%s|r · vendor profit "
+    .. "%s|cff40ff40%s|r"):format(#shown, #shown == 1 and "" or "s", upTo and "up to " or "",
+    Lib.FormatMoney(math.floor(cost)), upTo and "up to " or "", Lib.FormatMoney(math.floor(profit))) or "")
   frame.shopBtn:SetShown(#shown > 0)
+  local unchecked = 0
+  for _, row in ipairs(shown) do
+    if not row.exact and row.key then
+      unchecked = unchecked + 1
+    end
+  end
+  frame.checkBtn:SetShown(unchecked > 0 and not S.Busy())
   frame.unhide:SetShown(nHidden > 0)
   frame.unhide:SetText(("Unhide %d"):format(nHidden))
   frame.scanBtn:SetText(S.Busy() and "Stop" or "Scan")
@@ -292,6 +314,17 @@ local function Create(parent)
   F():Script(f.shopBtn, "OnClick", function()
     Shop(shown)
   end)
+  f.checkBtn = Kit.Button(f, ("Check top %d"):format(S.CHECK_TOP or 20), 100)
+  f.checkBtn:SetPoint("RIGHT", f.shopBtn, "LEFT", -6, 0)
+  F():Script(f.checkBtn, "OnClick", function()
+    local ok, err = S.CheckTop()
+    if not ok then
+      F():Print("can't: " .. tostring(err) .. ".")
+    end
+    RealRefresh()
+  end)
+  Tip(f.checkBtn, "Check top", "Looks the top rows up one by one to see each auction under vendor price (and leave "
+    .. "yours out). The scan alone only knows each item's cheapest price; this takes a second or two per item.")
   Tip(f.shopBtn, "Shop all", "Searches Auctionator's Shopping tab for every item listed here; buy the auctions "
     .. "under the vendor price shown.")
 
