@@ -2,7 +2,7 @@
 ## Title: ARL Extensions: Auctionator
 ## Notes: The ARL tab on the auction house: Darkmoon (the Faire's whereabouts, the cheapest Prize Tickets and reputation), Logistics (the cheapest supply camp reputation and Merchant's Favor) and Snipes (auctions below vendor price), a Buy next button for their plans, and one Auction House settings entry.
 ## Author: aredpanda, andreg1
-## Version: 0.23.0
+## Version: 0.23.1
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
 ## OptionalDeps: Auctionator, ItemTree

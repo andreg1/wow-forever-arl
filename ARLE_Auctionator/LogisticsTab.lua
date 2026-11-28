@@ -887,7 +887,7 @@ local function Create(parent)
   f.scanText:SetPoint("RIGHT", f.scanBtn, "LEFT", -8, 0)
 
   -- the plan
-  f.shopBtn = Kit.Button(f, "Shop the plan", 110)
+  f.shopBtn = Kit.Button(f, "Shopping List", 110)
   f.shopBtn:SetPoint("TOPRIGHT", -10, -40)
   F():Script(f.shopBtn, "OnClick", function()
     local picked = {}
@@ -898,7 +898,7 @@ local function Create(parent)
     end
     Shop(picked)
   end)
-  Tip(f.shopBtn, "Shop the plan", "Searches Auctionator's Shopping tab for what the plan buys (writs or crates, and "
+  Tip(f.shopBtn, "Shopping List", "Searches Auctionator's Shopping tab for what the plan buys (writs or crates, and "
     .. "the items, or the materials of the ones you craft).")
   f.buyBtn = Kit.Button(f, "Buy the plan", 100)
   f.buyBtn:SetPoint("RIGHT", f.shopBtn, "LEFT", -6, 0)

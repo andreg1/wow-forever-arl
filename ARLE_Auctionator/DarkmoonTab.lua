@@ -594,7 +594,7 @@ local function Create(parent)
   Tip(f.goalBtn, "Ticket goal", "Pick a prize from Gelvas Grimegate: the plan counts the cheapest turn-ins to it.")
 
   -- the plan
-  f.shopBtn = Kit.Button(f, "Shop the plan", 110)
+  f.shopBtn = Kit.Button(f, "Shopping List", 110)
   f.shopBtn:SetPoint("TOPRIGHT", -10, -72)
   F():Script(f.shopBtn, "OnClick", function()
     local picked = {}
@@ -605,7 +605,7 @@ local function Create(parent)
     end
     Shop(picked)
   end)
-  Tip(f.shopBtn, "Shop the plan", "Searches Auctionator's Shopping tab for what the plan buys (the items, the "
+  Tip(f.shopBtn, "Shopping List", "Searches Auctionator's Shopping tab for what the plan buys (the items, the "
     .. "materials of the ones you craft, or a deck's cards).")
   f.buyBtn = Kit.Button(f, "Buy the plan", 100)
   f.buyBtn:SetPoint("RIGHT", f.shopBtn, "LEFT", -6, 0)
