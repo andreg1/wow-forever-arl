@@ -636,6 +636,59 @@ function S.CheckTop(n)
 end
 S.CHECK_TOP = CHECK_TOP
 
+-- The buy list (Buyer.lua) bought some of a row: what's left of it, at the cheapest left. Exact rows drop the
+-- auctions that bought; a browse row only counts down, its numbers stay "up to".
+local function FindRow(id)
+  for i, row in ipairs(Store().rows) do
+    if row.id == id then
+      return row, i
+    end
+  end
+end
+
+function S.Bought(id, qty, cost)
+  local row, i = FindRow(id)
+  if not row then
+    return
+  end
+  row.count = row.count - qty
+  row.cost = math.max(0, row.cost - cost)
+  row.profit = row.profit - (row.vendor * qty - cost)
+  row.bought = (row.bought or 0) + qty
+  if row.exact and row.auctions then
+    local left = qty
+    while left > 0 and row.auctions[1] do
+      local a = row.auctions[1]
+      if a.count <= left then
+        left = left - a.count
+        table.remove(row.auctions, 1)
+        row.n = math.max(0, (row.n or 1) - 1)
+      else
+        a.count = a.count - left
+        a.profit = (row.vendor - a.unit) * a.count
+        left = 0
+      end
+    end
+    if row.auctions[1] then
+      row.best = row.auctions[1].unit
+      row.each = row.vendor - row.best
+    end
+  end
+  if row.count <= 0 or row.profit <= 0 then
+    table.remove(Store().rows, i)
+  end
+  Notify()
+end
+
+-- Nothing of it is under the vendor price any more (the buy list looked): the row goes.
+function S.Gone(id)
+  local _, i = FindRow(id)
+  if i then
+    table.remove(Store().rows, i)
+    Notify()
+  end
+end
+
 -- Seen in the current browse (for the panel while scanning).
 function S.Seen()
   return seenCount

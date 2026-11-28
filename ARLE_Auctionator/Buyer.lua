@@ -107,6 +107,9 @@ local function ScanBusy()
 end
 
 local function Left(line)
+  if line.gone then
+    return 0
+  end
   return math.max(0, line.need - line.bought)
 end
 
@@ -165,6 +168,22 @@ end
 local ORDER = { Logistics = 1, Darkmoon = 2, Snipes = 3 }
 local seq = 0
 
+-- One line from a list entry x = { qty, unit, mat, hard, key, vendor }, or nil when nothing's left to buy.
+local function NewLine(from, id, x)
+  local need = x.qty
+  if x.mat and x.mat > 0 then
+    need = need - math.min(x.mat, Items.Count(id, false))
+  end
+  local cap = x.hard or (x.unit and math.floor(x.unit * (1 + Margin()) + 0.5))
+  if not (need > 0 and cap and cap > 0) then
+    return nil
+  end
+  seq = seq + 1
+  Name(id)
+  return { from = from, id = id, key = x.key, need = need, unit = x.unit or cap, cap = cap, hard = x.hard ~= nil,
+    vendor = x.vendor, bought = 0, spent = 0, fails = 0, order = ORDER[from] or 9, seq = seq }
+end
+
 -- A panel's list: into = { [id] = { qty, unit, mat, hard, key } } (B.Collect / B.Add; `hard` = a fixed cap per
 -- item, e.g. Snipes' vendor price - 1). Replaces that panel's lines. Materials reached through a craft count
 -- the ones in your bags. Returns how many lines and the most it could cost.
@@ -179,19 +198,12 @@ function B.Load(from, into)
   if cur and cur.from == from then
     B.Reset()
   end
-  local m, count, most = Margin(), 0, 0
+  local count, most = 0, 0
   for id, x in pairs(into) do
-    local need = x.qty
-    if x.mat and x.mat > 0 then
-      need = need - math.min(x.mat, Items.Count(id, false))
-    end
-    local cap = x.hard or (x.unit and math.floor(x.unit * (1 + m) + 0.5))
-    if need > 0 and cap and cap > 0 then
-      seq = seq + 1
-      lines[#lines + 1] = { from = from, id = id, key = x.key, need = need, unit = x.unit or cap, cap = cap,
-        hard = x.hard ~= nil, bought = 0, spent = 0, fails = 0, order = ORDER[from] or 9, seq = seq }
-      Name(id)
-      count, most = count + 1, most + need * cap
+    local line = NewLine(from, id, x)
+    if line then
+      lines[#lines + 1] = line
+      count, most = count + 1, most + line.need * line.cap
     end
   end
   Sort()
@@ -215,6 +227,60 @@ function B.Lines()
   return lines
 end
 
+-- One item bought before the rest (a Snipes row's Buy button): its line goes first and is looked up at once, so
+-- the next press buys at the live price. Returns false, why while another purchase is half-way.
+function B.Now(from, id, x)
+  if step == "start" or step == "confirm" or step == "buying" then
+    if cur and cur.id == id then
+      return true
+    end
+    return false, "another purchase is half-way: finish it with Buy next first"
+  end
+  local keep = {}
+  for _, line in ipairs(lines) do
+    if line.id ~= id or Left(line) == 0 then
+      keep[#keep + 1] = line
+    end
+  end
+  lines = keep
+  local line = NewLine(from, id, x)
+  if not line then
+    return false, "nothing to buy"
+  end
+  line.order = 0
+  lines[#lines + 1] = line
+  Sort()
+  step, offer, cur, note = "idle", nil, nil, nil
+  sent.tries = 0
+  B.Pump()
+  Notify()
+  return true
+end
+
+-- Where an item stands in the list: state ("search" / "ready" / "start" / "confirm" / "buying" while it's the one
+-- being bought; else "queued" / "bought" / "gone" / "skip"; nil = not in it), and the offer or the reason.
+function B.State(id)
+  if cur and cur.id == id and step ~= "idle" then
+    return step, offer
+  end
+  local found
+  for _, line in ipairs(lines) do
+    if line.id == id then
+      found = line
+    end
+  end
+  if not found then
+    return nil
+  elseif found.gone then
+    return "gone", found.gone
+  elseif found.skip then
+    return "skip", found.skip
+  elseif Left(found) == 0 then
+    return "bought", found.bought
+  end
+  return "queued"
+end
+
 function B.Active()
   return NextLine() ~= nil
 end
@@ -230,6 +296,17 @@ end
 -------------------------------------------------------------------------------
 -- Searching
 -------------------------------------------------------------------------------
+
+-- A Snipes line with nothing left under the vendor price: done, not failed.
+local function Gone(line)
+  line.gone = line.bought > 0 and "no more under vendor price" or "none under vendor price any more"
+  note = ("%s: %s"):format(Name(line.id), line.gone)
+  Trace("buy: %s", note)
+  if line.from == "Snipes" and ns.Snipes and ns.Snipes.Gone then
+    ns.Snipes.Gone(line.id)
+  end
+  step, offer, cur = "idle", nil, nil
+end
 
 local function Skip(line, why)
   line.skip = why
@@ -366,7 +443,11 @@ local function OnResults(event, arg)
   if commodity then
     local qty, total = ReadCommodity(line)
     if qty <= 0 then
-      Skip(line, ("none at or under %s"):format(Money(line.cap)))
+      if line.hard then
+        Gone(line)
+      else
+        Skip(line, ("none at or under %s"):format(Money(line.cap)))
+      end
       Notify()
       B.Pump()
       return
@@ -384,7 +465,11 @@ local function OnResults(event, arg)
       Lib.Call(C_AuctionHouse.RequestMoreItemSearchResults, arg)
       return
     end
-    Skip(line, ("none at or under %s"):format(Money(line.cap)))
+    if line.hard then
+      Gone(line)
+    else
+      Skip(line, ("none at or under %s"):format(Money(line.cap)))
+    end
     Notify()
     B.Pump()
   end
@@ -401,6 +486,9 @@ function B.Bought(qty, cost, unconfirmed)
   end
   line.bought = line.bought + qty
   line.spent = line.spent + (cost or 0)
+  if line.from == "Snipes" and ns.Snipes and ns.Snipes.Bought then
+    ns.Snipes.Bought(line.id, qty, cost or 0)
+  end
   note = ("Bought %d x %s for %s%s"):format(qty, Name(line.id), Money(cost), unconfirmed and " (seen gone)" or "")
   Trace("buy: %s", note)
   step, offer = "idle", nil
@@ -438,7 +526,9 @@ function B.NextText()
         skipped = skipped + 1
       end
     end
-    if skipped > 0 then
+    if skipped > 0 and skipped == #lines then
+      return "Nothing could be bought (see the tooltip)", false
+    elseif skipped > 0 then
       return ("Done, %d skipped (see the tooltip)"):format(skipped), false
     end
     return #lines > 0 and "All bought" or "Nothing to buy", false
@@ -452,14 +542,17 @@ function B.NextText()
     return busy .. "...", false
   end
   if step == "ready" and offer then
+    local cost = offer.commodity and offer.total or offer.buyout
+    local gain = line.vendor and ("  |cff40ff40+%s|r"):format(Money(line.vendor * offer.qty - cost)) or ""
     if offer.commodity then
-      return ("Buy %d x %s, about %s"):format(offer.qty, name, Money(offer.total)), true
+      return ("Buy %d x %s, about %s%s"):format(offer.qty, name, Money(offer.total), gain), true
     end
-    return ("Buy %d x %s for %s"):format(offer.qty, name, Money(offer.buyout)), true
+    return ("Buy %d x %s for %s%s"):format(offer.qty, name, Money(offer.buyout), gain), true
   elseif step == "start" then
     return ("Asking the price of %d x %s..."):format(offer and offer.qty or 0, name), false
   elseif step == "confirm" and offer then
-    return ("Confirm %d x %s for %s"):format(offer.qty, name, Money(offer.total)), true
+    local gain = line.vendor and ("  |cff40ff40+%s|r"):format(Money(line.vendor * offer.qty - offer.total)) or ""
+    return ("Confirm %d x %s for %s%s"):format(offer.qty, name, Money(offer.total), gain), true
   elseif step == "buying" then
     return ("Buying %s..."):format(name), false
   end
@@ -627,7 +720,9 @@ end
 local function Totals()
   local need, got, spent, most = 0, 0, 0, 0
   for _, line in ipairs(lines) do
-    if not line.skip then
+    if line.gone then
+      need = need + line.bought
+    elseif not line.skip then
       need = need + line.need
       most = most + Left(line) * line.cap
     end
@@ -652,7 +747,10 @@ local function BarTip(owner)
     end
     local r, g, b = 1, 1, 1
     local right = ("%d / %d"):format(line.bought, line.need)
-    if line.skip then
+    if line.gone then
+      r, g, b = 0.6, 0.6, 0.6
+      right = line.bought .. " · " .. line.gone
+    elseif line.skip then
       r, g, b = 0.6, 0.6, 0.6
       right = right .. " · " .. line.skip
     elseif Left(line) == 0 then

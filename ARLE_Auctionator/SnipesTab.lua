@@ -14,15 +14,16 @@ local AH = ARLE.Bridge.Auctionator
 local ROW_H = 32
 local COLS = { -- x, width, justify
   rank = { 2, 20, "RIGHT" },
-  item = { 54, 250, "LEFT" },
-  best = { 310, 90, "RIGHT" },
-  vendor = { 404, 90, "RIGHT" },
-  cost = { 498, 90, "RIGHT" },
-  profit = { 592, 100, "RIGHT" },
-  pct = { 696, 60, "RIGHT" },
+  item = { 54, 214, "LEFT" },
+  best = { 272, 84, "RIGHT" },
+  vendor = { 360, 84, "RIGHT" },
+  cost = { 448, 88, "RIGHT" },
+  profit = { 540, 96, "RIGHT" },
+  pct = { 640, 50, "RIGHT" },
+  buy = { 698, 58, "CENTER" },
 }
 local LABELS = { rank = "#", item = "Item", best = "Cheapest each", vendor = "Vendor each", cost = "Buy all",
-  profit = "Profit", pct = "Return" }
+  profit = "Profit", pct = "Return", buy = "" }
 local TIPS = { -- (a row not checked yet says "up to": as if all listed were at the cheapest price)
   best = "The lowest buyout per item among the auctions below vendor price.",
   vendor = "What a vendor pays for one.",
@@ -90,7 +91,8 @@ local function BuyAll(list)
   local into = {}
   for _, row in ipairs(list) do
     if row.vendor and row.vendor > 1 and row.count and row.count > 0 then
-      into[row.id] = { qty = row.count, mat = 0, unit = row.best, hard = row.vendor - 1, key = row.key }
+      into[row.id] = { qty = row.count, mat = 0, unit = row.best, hard = row.vendor - 1, key = row.key,
+        vendor = row.vendor }
     end
   end
   local n, most = B.Load("Snipes", into)
@@ -100,6 +102,61 @@ local function BuyAll(list)
     F():Print(("buy list: %d items, %s at most (each under what a vendor pays). Press Buy next (top right) for "
       .. "each purchase."):format(n, Money(most)))
   end
+end
+
+-- The row's Buy button: the first click looks the item up at once (its live auctions, under the vendor price,
+-- ours left out), the next buys what that found; Buy next on the bar does the same.
+local function RowBuy(row)
+  local B = ns.Buyer
+  if not B then
+    return
+  end
+  local state = B.State(row.id)
+  if state == "ready" or state == "confirm" then
+    B.Press()
+    return
+  end
+  if state == "search" or state == "start" or state == "buying" then
+    return
+  end
+  local ok, why = B.Now("Snipes", row.id, { qty = row.count, mat = 0, unit = row.best, hard = row.vendor - 1,
+    key = row.key, vendor = row.vendor })
+  if not ok then
+    F():Print("can't buy now: " .. tostring(why) .. ".")
+  end
+end
+
+-- The button's look for the row's state in the buy list: label, colour, live (a press does something).
+local BUY_LOOK = {
+  search = { "...", "ffaaaaaa", false },
+  ready = { "Buy", "ff40ff40", true },
+  start = { "...", "ffaaaaaa", false },
+  confirm = { "Confirm", "ff40ff40", true },
+  buying = { "...", "ffaaaaaa", false },
+  bought = { "Again", "ffffffff", true },
+  gone = { "Gone", "ff808080", false },
+  skip = { "Retry", "ffff9040", true },
+}
+
+local function BuyTip(btn)
+  local row = btn:GetParent().entry
+  local B = ns.Buyer
+  if not (row and B) then
+    return
+  end
+  local state, info = B.State(row.id)
+  local text
+  if state == "ready" or state == "confirm" or state == "search" or state == "start" or state == "buying" then
+    text = (B.NextText())
+  elseif state == "gone" or state == "skip" then
+    text = tostring(info)
+  elseif state == "bought" then
+    text = ("Bought %d. Click to look for more under the vendor price."):format(info or 0)
+  else
+    text = "Looks the item up now (its live auctions, under what a vendor pays, yours left out); click again to "
+      .. "buy what it found. A stack takes one more click to confirm its price."
+  end
+  Kit.SimpleTooltip(btn, "Buy", text)
 end
 
 local function ShowTip(r)
@@ -132,13 +189,14 @@ local function ShowTip(r)
     GameTooltip:AddDoubleLine("Cheapest", Money(row.best) .. " each", 1, 0.82, 0, 1, 1, 1)
     GameTooltip:AddDoubleLine("A vendor pays", Money(row.vendor) .. " each", 1, 0.82, 0, 1, 1, 1)
     GameTooltip:AddDoubleLine("Profit", Money(row.each) .. " each", 1, 0.82, 0, 0.25, 1, 0.25)
-    GameTooltip:AddDoubleLine("Listed", tostring(row.count), 1, 0.82, 0, 1, 1, 1)
-    GameTooltip:AddLine(("Up to %s if all %d are at the cheapest price: the scan only gives the cheapest. Click "
-      .. "to see each auction in Auctionator, or Check top %d."):format(Money(row.profit), row.count,
-      S.CHECK_TOP or 20), 1, 0.6, 0.25, true)
+    GameTooltip:AddDoubleLine("Listed (at all prices)", tostring(row.count), 1, 0.82, 0, 1, 1, 1)
+    GameTooltip:AddLine(("Up to %s if all %d were at the cheapest price, but the scan only gives the cheapest "
+      .. "price and how many are listed in all: it may be one item. Check top %d, or the Buy button, looks at each "
+      .. "auction."):format(Money(row.profit), row.count, S.CHECK_TOP or 20), 1, 0.6, 0.25, true)
   end
   if row.own then
-    GameTooltip:AddLine("You have auctions of this too.", 0.6, 0.8, 1, true)
+    GameTooltip:AddLine("You have auctions of this too: the cheapest may be yours (Buy leaves yours out).", 0.6,
+      0.8, 1, true)
   end
   GameTooltip:AddLine("From the last scan: some may be sold already.", 0.6, 0.6, 0.6, true)
   GameTooltip:AddLine("Click: look it up in Auctionator · Shift-click: link · Right-click: hide this item", 0.5, 0.5,
@@ -184,6 +242,15 @@ local function MakeRow(parent, i)
   r.best, r.vendor, r.cost = Text(r, "best"), Text(r, "vendor"), Text(r, "cost")
   r.profit = Text(r, "profit", "GameFontNormal")
   r.pct = Text(r, "pct")
+  r.buy = Kit.SmallButton(r, "Buy", COLS.buy[2])
+  r.buy:SetPoint("LEFT", COLS.buy[1], 0)
+  F():Script(r.buy, "OnClick", function(self)
+    if self:GetParent().entry then
+      RowBuy(self:GetParent().entry)
+    end
+  end)
+  F():Script(r.buy, "OnEnter", BuyTip)
+  F():Script(r.buy, "OnLeave", GameTooltip_Hide)
   F():Script(r, "OnEnter", ShowTip)
   F():Script(r, "OnLeave", GameTooltip_Hide)
   F():Script(r, "OnClick", function(self, button)
@@ -213,11 +280,21 @@ local function Paint(r, row, i)
   r.rank:SetText(tostring(i))
   r.icon:SetTexture(Items.GetIcon and Items.GetIcon(row.id) or 134400)
   r.item:SetText(Colored(row))
-  if row.exact then
-    r.sub:SetText(("|cff80ff80checked|r · %d auction%s · %d item%s"):format(row.n, row.n == 1 and "" or "s",
-      row.count, row.count == 1 and "" or "s"))
+  local B = ns.Buyer
+  local state = B and B.State(row.id)
+  local look = state and BUY_LOOK[state]
+  r.buy:SetText(look and ("|c%s%s|r"):format(look[2], look[1]) or "Buy")
+  r.buy:SetAlpha((not look or look[3]) and 1 or 0.6)
+  local bought = row.bought and row.bought > 0 and (" · |cff40ff40bought %d|r"):format(row.bought) or ""
+  if state == "ready" or state == "confirm" then
+    r.sub:SetText((B.NextText()))
+  elseif row.exact then
+    r.sub:SetText(("|cff80ff80checked|r · %d auction%s · %d item%s%s"):format(row.n, row.n == 1 and "" or "s",
+      row.count, row.count == 1 and "" or "s", bought))
   else
-    r.sub:SetText(("%d listed · %s profit each"):format(row.count, Money(row.each)))
+    -- (a browse gives the cheapest price and how many are listed at any price)
+    r.sub:SetText(("%s profit on the cheapest · %d listed at all prices%s"):format(Money(row.each), row.count,
+      bought))
   end
   local upTo = row.exact and "" or "|cff909090up to|r "
   r.best:SetText(Money(row.best))
@@ -398,6 +475,12 @@ local function Create(parent)
 
   F():Script(f, "OnShow", RealRefresh)
   return f
+end
+
+if ns.Buyer then
+  ns.Buyer.OnChange(function()
+    T.Refresh()
+  end)
 end
 
 ns.ARLTab.Register({ id = "snipes", title = "Snipes", order = 2, width = 70, feature = S.F, settings = "snipes",
