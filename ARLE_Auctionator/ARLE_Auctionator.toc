@@ -2,7 +2,7 @@
 ## Title: ARL Extensions: Auctionator
 ## Notes: Darkmoon Tickets (Darkmoon Faire turn-ins by gold per Prize Ticket) and Logistics (a Logistics tab on the auction house: the cheapest supply camp reputation from Craftsman's Writs, and the cheapest Merchant's Favor from Waylaid Crates).
 ## Author: aredpanda, andreg1
-## Version: 0.20.0
+## Version: 0.20.1
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
 ## OptionalDeps: Auctionator, ItemTree

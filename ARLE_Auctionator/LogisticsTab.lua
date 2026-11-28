@@ -89,7 +89,7 @@ end
 local function Colored(id)
   local name, quality = ItemName(id)
   local r, g, b = Lib.QualityColor(quality)
-  return ("|cff%s%s|r"):format(Lib.Hex(r, g, b), name)
+  return ("|c%s%s|r"):format(Lib.Hex(r, g, b), name)
 end
 
 -- "Craftsman's Writ: Heavy Linen Gloves" -> "Heavy Linen Gloves"

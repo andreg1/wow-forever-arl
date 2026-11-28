@@ -2,7 +2,7 @@
 ## Title: ARL Extensions: DungeonJournal
 ## Notes: Dungeon Helper: a compact dungeon window: quests and class quests with every quest leading to them, bosses and their loot (BiS from Forever Leveling BiS or GearQuest), and clear times with a guild leaderboard.
 ## Author: aredpanda, andreg1
-## Version: 0.20.0
+## Version: 0.20.1
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
 ## OptionalDeps: ForeverDungeonJournal, ForeverLevelingBiS, GearQuestForever, QuestieDB, Questie
