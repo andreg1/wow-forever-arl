@@ -1,38 +1,51 @@
--- Craftsman's Writs: a tab on the auction house that prices every Craftsman's
--- Writ for sale, with what its quest asks for (bought, crafted from materials
--- or from a vendor), and ranks them by gold per reputation with your side's
--- supply camp (Durotar Supply and Logistics / Azeroth Commerce Authority), so
--- the reputation is farmed as cheaply as possible.
+-- Logistics: a tab on the auction house for your side's supply camp
+-- (Durotar Supply and Logistics / Azeroth Commerce Authority), farmed as
+-- cheaply as possible two ways:
+--   * Reputation: every Craftsman's Writ for sale, with what its quest asks
+--     for (bought, crafted from materials or from a vendor), ranked by gold
+--     per reputation; plus the Forged Delivery Receipt (15 Merchant's Favor
+--     turns an empty Waylaid Crate into 50 reputation, Friendly to Revered).
+--   * Merchant's Favor (the camp's coin, spent at its vendors on recipes,
+--     the tabard, the Pack Kodo...): every Waylaid Crate for sale with the
+--     cheapest bundle to fill it, sealed crates and Shipping Labels, ranked by
+--     gold per Favor.
 --
--- The writs: a writ is a bind-on-equip paper that starts a daily quest asking
--- for one crafted item (sometimes several). The quest gives reputation by the
--- writ's rank (Journeyman 75, Expert 125, Artisan 200) and a Coin Pouch.
--- Which writ asks for what, the ranks, the reputation and the recipes are read
--- at run time from ItemTree's data (ItemTree, all rights reserved: its tables
--- are read through its own loader `ItemTree.Data:Get` and `ItemTreeAPI`, never
--- copied into ARL): "Supplies" (writs, writRanks, camps), "Uses" (the recipes
--- that make an item, `p`) and the recipe rows (`GetRecipe`: `re` reagents,
--- `out` what one craft makes). Vendor prices come from ItemTreeAPI's item
--- facts (`vendors.buyPrice`). Without ItemTree the tab says so.
+-- The game side: a writ is a bind-on-equip paper that starts a daily quest
+-- asking for one crafted item (sometimes several); the quest gives reputation
+-- by the writ's rank (Journeyman 75, Expert 125, Artisan 200) and a Coin
+-- Pouch. A Waylaid Crate (dropped by mobs, traded) is filled with ONE of its
+-- bundles (N of one material) into a Sealed Crate, whose quest pays Favor.
+-- What asks for what, the ranks, the Favor, the bundles and the recipes are
+-- read at run time from ItemTree's data (ItemTree, all rights reserved: its
+-- tables are read through its own loader `ItemTree.Data:Get` and
+-- `ItemTreeAPI`, never copied into ARL): "Supplies" (writs, writRanks, camps,
+-- crates, sealed, labels, currency, shop), "Uses" (the recipes that make an
+-- item, `p`) and the recipe rows (`GetRecipe`: `re` reagents, `out` what one
+-- craft makes). Vendor prices come from ItemTreeAPI's item facts
+-- (`vendors.buyPrice`). Without ItemTree the tab says so.
 --
 -- The scan (the Scan button, AH open): C_AuctionHouse browse queries, one at a
--- time when the throttle says ready: the writs first (by item key in batches
--- with `SearchForItemKeys` where the client has it, else a keyword search for
--- the writs' shared name), then what the listed writs ask for and every
--- material down to CRAFT_DEPTH (by item key, else one search per name). Only
--- the lowest unit price and the quantity are kept, per realm, in
--- `shared.writScans` (a day old counts as stale: Auctionator's price stands in
--- for an item the scan didn't see). Auctionator (its LibAHTab-1-0, a LibStub
--- library meant for this) adds the tab; nothing is written on Blizzard's AH.
+-- time when the throttle says ready: the papers first (writs, crates, sealed
+-- crates, labels; by item key in batches with `SearchForItemKeys` where the
+-- client has it, else a keyword search for the writs' and the crates' shared
+-- names and one search per other name), then what the listed writs ask for,
+-- the listed crates' bundles, and every material down to CRAFT_DEPTH (by item
+-- key, else one search per name). Only the lowest unit price and the quantity
+-- are kept, per realm, in `shared.logisticsScans` (a day old counts as stale:
+-- Auctionator's price stands in for an item the scan didn't see).
+-- Auctionator (its LibAHTab-1-0, a LibStub library meant for this) adds the
+-- tab; nothing is written on Blizzard's AH.
 --
--- The cost of a writ: its price (free when you hold one and "use what I have"
--- is on) + its count of the item at the cheapest of buying it, a vendor, or
--- crafting it (recipes you know, or any with "crafts I don't know"; each
--- material priced the same way, recursively). Per reputation = cost / rep.
--- The plan: the cheapest writs not done today, one of each, until the next
--- standing is reached (or PLAN_MAX of them).
+-- Costs: an item's cheapest of buying it, a vendor, or crafting it (recipes
+-- you know, or any with "crafts I don't know"; each material priced the same
+-- way, recursively). A writ = its price (free when held and "use what I have"
+-- is on) + its count of the item; per reputation = cost / rep. A crate = its
+-- price + its cheapest bundle; per Favor = cost / Favor (LogisticsCrates.lua).
+-- The plans: the cheapest writs not done today, one of each, until the next
+-- standing (receipts fill the rest when they're cheaper); the cheapest crates
+-- until the Favor goal.
 --
--- UI: CraftsmansWritsTab.lua (ns.WritsTab).
+-- UI: LogisticsTab.lua (ns.LogisticsTab).
 local ADDON, ns = ...
 local ARLE = _G.ARLExtensions
 if not ARLE then
@@ -45,6 +58,11 @@ local CAMPS = { Alliance = 2586, Horde = 2587 } -- reputation ids, when ItemTree
 local CAMP_NAMES = { [2586] = "Azeroth Commerce Authority", [2587] = "Durotar Supply and Logistics" }
 local RANK_NAMES = { [2] = "Journeyman", [3] = "Expert", [4] = "Artisan" }
 local RANK_REP = { [2] = 75, [3] = 125, [4] = 200 } -- when ItemTree's rank row states none
+local FAVOR_CURRENCY = 3402 -- Merchant's Favor, when ItemTree names none
+local RECEIPT = 262902 -- Forged Delivery Receipt: 15 Favor, an empty crate -> 50 reputation (ItemTree's ruling)
+local RECEIPT_FAVOR = 15
+local RECEIPT_REP = 50
+local RECEIPT_FROM, RECEIPT_UNTIL = 5, 8 -- Friendly up to (not with) Exalted
 local CRAFT_DEPTH = 3 -- crafted materials looked into this many steps down
 local QUERY_TIMEOUT = 12 -- seconds for one query's results
 local KEY_BATCH = 40 -- item keys per SearchForItemKeys
@@ -54,18 +72,20 @@ local PUMP = 0.2 -- seconds between scan steps
 local NAME_TRIES = 4 -- a name search waits this many times (1 s apart) for the item's name to load
 
 local F = {
-  id = "CraftsmansWrits",
+  id = "Logistics",
   addon = ADDON,
-  title = "Craftsman's Writs",
+  title = "Logistics",
   group = "Auctionator",
   extends = "Auctionator",
-  command = "writs",
-  commandArgs = "[scan|best [n]|stop]",
-  commandHelp = "Craftsman's Writs priced at the auction house, cheapest reputation first",
+  command = "logistics",
+  commandAliases = { "writs" },
+  commandArgs = "[scan|stop|best [n]|crates [n]]",
+  commandHelp = "supply camp reputation and Merchant's Favor priced at the auction house, cheapest first",
   mainHelp = "says how the last scan went",
-  description = "A Writs tab on the auction house: scans every Craftsman's Writ and what its quest asks for "
-    .. "(bought or crafted from materials) and ranks them by gold per reputation with your supply camp. Needs "
-    .. "ItemTree for the writ data.",
+  description = "A Logistics tab on the auction house: scans every Craftsman's Writ and Waylaid Crate for sale and "
+    .. "what they need (bought or crafted from materials), and ranks them by gold per reputation with your supply "
+    .. "camp and gold per Merchant's Favor. Needs ItemTree for the data.",
+  defaults = { view = "writs", favorGoal = 0, favorGoalItem = 0 },
   options = {
     { type = "info", text = function(def) return def:GetStatus() end },
     { key = "useBags", type = "boolean", label = "Count writs and items I already have as free", default = true,
@@ -73,23 +93,27 @@ local F = {
     { key = "anyCraft", type = "boolean", label = "Price crafts I don't know too (someone else crafts them)",
       default = false, cmd = "anycraft" },
     { key = "hideDone", type = "boolean", label = "Hide writs done today", default = true, cmd = "hidedone" },
-    { key = "showUnlisted", type = "boolean", label = "Show writs nobody is selling", default = false,
+    { key = "showUnlisted", type = "boolean", label = "Show writs and crates nobody is selling", default = false,
       cmd = "unlisted" },
-    { key = "scanOnOpen", type = "boolean", label = "Scan when I open the Writs tab (if the last scan is over "
+    { key = "receipts", type = "boolean", label = "Count Forged Delivery Receipts for reputation (15 Favor and an "
+      .. "empty crate: 50 reputation, Friendly to Revered)", default = true, cmd = "receipts" },
+    { key = "scanOnOpen", type = "boolean", label = "Scan when I open the Logistics tab (if the last scan is over "
       .. "15 minutes old)", default = false, cmd = "autoscan" },
   },
 }
 
-local W = {} -- what CraftsmansWritsTab.lua reads
-ns.Writs = W
+local W = {} -- what LogisticsCrates.lua and LogisticsTab.lua read
+ns.Logistics = W
 W.F = F
 W.RANK_NAMES = RANK_NAMES
+W.RECEIPT, W.RECEIPT_FAVOR, W.RECEIPT_REP = RECEIPT, RECEIPT_FAVOR, RECEIPT_REP
+W.PLAN_MAX = PLAN_MAX
 
 -------------------------------------------------------------------------------
 -- ItemTree's data (read at run time through its own loader, never copied)
 -------------------------------------------------------------------------------
 
-local data = { list = nil, byId = {}, ranks = {}, camps = {} }
+local data = { list = nil, byId = {}, ranks = {}, camps = {}, crates = {}, papers = {}, isPaper = {}, shop = {} }
 
 local function TreeData()
   local it = rawget(_G, "ItemTree")
@@ -156,8 +180,119 @@ function W.Load()
     return a.id < b.id
   end)
   data.list = list
-  F:Debug("loaded %d writs from ItemTree", #list)
+  data.currency = type(s.currency) == "table" and Whole(s.currency.id) or FAVOR_CURRENCY
+  data.shop = type(s.shop) == "table" and s.shop or {}
+  data.offers = type(s.offers) == "table" and s.offers or {}
+  data.generic = Whole(s.generic)
+  W.LoadCrates(s)
+  -- every paper the scan looks up first: writs, crates, sealed crates, labels, the plain crate
+  local papers, isPaper = {}, {}
+  local function add(id, group)
+    if id and not isPaper[id] then
+      isPaper[id] = group
+      papers[#papers + 1] = id
+    end
+  end
+  for _, w in ipairs(list) do
+    add(w.id, "writs")
+  end
+  for _, c in ipairs(data.crates) do
+    add(c.id, c.kind == "crate" and "crates" or "other")
+  end
+  add(data.generic, "crates")
+  data.papers, data.isPaper = papers, isPaper
+  F:Debug("loaded %d writs and %d crates from ItemTree", #list, #data.crates)
   return true
+end
+
+-- Waylaid Crates, sealed crates and Shipping Labels: { id, kind ("crate" / "sealed" / "label"), tier, quality,
+-- favor, favorGuess, bundles = { { item, count } } }.
+function W.LoadCrates(s)
+  local out = {}
+  local sealed = type(s.sealed) == "table" and s.sealed or {}
+  local function favorOf(row)
+    local f = type(row) == "table" and Whole(row.f)
+    return f and f > 0 and f or nil, type(row) == "table" and row.fp == 1
+  end
+  for id, row in pairs(type(s.crates) == "table" and s.crates or {}) do
+    id = Whole(id)
+    if id and type(row) == "table" then
+      local favor, guess = favorOf(sealed[Whole(row.s) or 0])
+      local bundles = {}
+      for _, b in ipairs(type(row.b) == "table" and row.b or {}) do
+        local item, count = Whole(b[1]), Whole(b[2]) or 1
+        if item then
+          bundles[#bundles + 1] = { item = item, count = math.max(1, count) }
+        end
+      end
+      out[#out + 1] = { id = id, kind = "crate", tier = Whole(row.t) or 0, quality = Whole(row.q) or 1,
+        level = Whole(row.l), favor = favor, favorGuess = guess, bundles = bundles }
+    end
+  end
+  for id, row in pairs(sealed) do
+    id = Whole(id)
+    local favor, guess = favorOf(row)
+    if id and favor then
+      out[#out + 1] = { id = id, kind = "sealed", tier = Whole(row.t) or 0, quality = Whole(row.q) or 1,
+        favor = favor, favorGuess = guess, bundles = {} }
+    end
+  end
+  local faction = Lib.Plain((UnitFactionGroup("player")))
+  local side = faction == "Alliance" and 1 or faction == "Horde" and 2 or nil
+  local label = side and type(s.labels) == "table" and s.labels[side]
+  if type(label) == "table" and Whole(label.i) then
+    local favor, guess = favorOf(label)
+    out[#out + 1] = { id = Whole(label.i), kind = "label", tier = 0, quality = 1, favor = favor,
+      favorGuess = guess, bundles = {} }
+  end
+  table.sort(out, function(a, b)
+    return a.id < b.id
+  end)
+  data.crates = out
+end
+
+function W.Crates()
+  return data.crates or {}
+end
+
+function W.Generic()
+  return data.generic
+end
+
+-- What the camp's vendors sell for Favor, for this side: { { item, favor, standing } }, cheapest first.
+function W.Shop()
+  local faction = Lib.Plain((UnitFactionGroup("player")))
+  local side = faction == "Alliance" and 1 or faction == "Horde" and 2 or nil
+  local out, seen = {}, {}
+  for _, key in ipairs({ side or -1, 0 }) do
+    for _, vendor in ipairs(type(data.shop[key]) == "table" and data.shop[key] or {}) do
+      for _, o in ipairs(type(vendor) == "table" and type(vendor.o) == "table" and vendor.o or {}) do
+        local item, favor = Whole(o[1]), Whole(o[2])
+        if item and favor and favor > 0 and not seen[item] then
+          seen[item] = true
+          local offer = type(data.offers) == "table" and data.offers[item]
+          out[#out + 1] = { item = item, favor = favor,
+            standing = type(offer) == "table" and Whole(offer.rs) or nil }
+        end
+      end
+    end
+  end
+  table.sort(out, function(a, b)
+    if a.favor ~= b.favor then
+      return a.favor < b.favor
+    end
+    return a.item < b.item
+  end)
+  return out
+end
+
+-- Merchant's Favor held, or nil.
+function W.Favor()
+  local c = C_CurrencyInfo and C_CurrencyInfo.GetCurrencyInfo
+  local info = c and Lib.Call(c, data.currency or FAVOR_CURRENCY)
+  if Lib.Readable(info) then
+    return Lib.Plain(info.quantity), Lib.Str(info.name), Lib.Plain(info.iconFileID)
+  end
 end
 
 function W.List()
@@ -228,8 +363,8 @@ W.Known = Known
 -------------------------------------------------------------------------------
 
 local function ScanStore()
-  local all = type(F.shared.writScans) == "table" and F.shared.writScans or {}
-  F.shared.writScans = all
+  local all = type(F.shared.logisticsScans) == "table" and F.shared.logisticsScans or {}
+  F.shared.logisticsScans = all
   local realm = Lib.Plain(GetRealmName and GetRealmName()) or "?"
   local s = all[realm]
   if type(s) ~= "table" or type(s.prices) ~= "table" or type(s.searched) ~= "table" then
@@ -242,6 +377,9 @@ W.ScanStore = ScanStore
 
 -- Lowest unit price on the AH: copper, source ("scan" / "auctionator"), quantity listed, age in seconds / days.
 function W.Price(id)
+  if not id then
+    return nil
+  end
   local s = ScanStore()
   local searched = s.searched[id]
   local fresh = searched and time() - searched < STALE
@@ -321,6 +459,15 @@ local function Node(id, depth)
   return n
 end
 
+W.Node = Node
+
+-- Before a new round of costs: prices, recipes known and bags may have changed.
+function W.ResetCosts()
+  wipe(memo)
+  wipe(visiting)
+  wipe(knownMemo)
+end
+
 local function QuestDone(q)
   if not (q and C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted) then
     return false
@@ -331,9 +478,7 @@ end
 -- Every writ priced: { w, writPrice, writSrc, writQty, writAge, haveWrit, haveItem, need, node, writCost, fill,
 -- total, perRep, done, listed }, the cheapest per reputation first.
 function W.Evaluate()
-  wipe(memo)
-  wipe(visiting)
-  wipe(knownMemo)
+  W.ResetCosts()
   local out = {}
   local bags = F.db.useBags ~= false
   for _, w in ipairs(W.List()) do
@@ -360,6 +505,10 @@ function W.Evaluate()
       e.perRep = e.total / w.rep
     end
     out[#out + 1] = e
+  end
+  local receipt = W.ReceiptEntry()
+  if receipt then
+    out[#out + 1] = receipt
   end
   table.sort(out, function(a, b)
     if a.done ~= b.done then
@@ -420,18 +569,73 @@ function W.Standing()
   return s
 end
 
+-- The Forged Delivery Receipt as a row among the writs: 15 Favor (at the cheapest crate's gold per Favor) plus
+-- the cheapest empty Waylaid Crate (any kind) for 50 reputation, repeatable. Only from Friendly up to Revered, with
+-- the "receipts" switch on, and LogisticsCrates.lua there.
+function W.ReceiptEntry()
+  local C = ns.LogisticsCrates
+  if F.db.receipts == false or not C then
+    return nil
+  end
+  local st = W.Standing()
+  if not (st and st.reaction and st.reaction >= RECEIPT_FROM and st.reaction < RECEIPT_UNTIL) then
+    F:Debug("receipts: not at a standing that forges (%s)", tostring(st and st.reaction))
+    return nil
+  end
+  local best = C.BestPerFavor()
+  local bags = F.db.useBags ~= false
+  local crate, crateNode, crateHeld = nil, nil, 0
+  local ids = {}
+  for _, c in ipairs(W.Crates()) do
+    if c.kind == "crate" then
+      ids[#ids + 1] = c.id
+    end
+  end
+  ids[#ids + 1] = data.generic
+  for _, id in ipairs(ids) do
+    local held = bags and Items.Count(id, true) or 0
+    local n = Node(id, CRAFT_DEPTH) -- (a crate is bought, never crafted)
+    local cost = held > 0 and 0 or (n and n.cost)
+    if cost and (not crate or cost < crate.cost) then
+      crate, crateNode, crateHeld = { id = id, cost = cost }, n, held
+    end
+  end
+  local w = { id = RECEIPT, item = crate and crate.id or data.generic or RECEIPT, count = 1, rank = 0,
+    rep = RECEIPT_REP, receipt = true }
+  local e = { w = w, receipt = true, repeatable = true, done = false, haveWrit = 0, haveItem = crateHeld,
+    node = crateNode, need = crateHeld > 0 and 0 or 1, favorEach = best and best.perFavor, favorFrom = best }
+  e.writPrice = best and best.perFavor * RECEIPT_FAVOR or nil
+  e.writCost = e.writPrice
+  e.listed = e.writPrice ~= nil
+  e.fill = crate and crate.cost or nil
+  if e.writCost and e.fill then
+    e.total = e.writCost + e.fill
+    e.perRep = e.total / RECEIPT_REP
+  end
+  return e
+end
+
 -- The cheapest writs to buy now: one of each, not done today, priced; until the next standing is reached (or
--- PLAN_MAX). Marks e.plan; returns { count, cost, rep, toNext }.
+-- PLAN_MAX). A repeatable row (the receipt) fills what's left when its turn comes. Marks e.plan (and
+-- e.planCount); returns { count, receipts, cost, rep, toNext }.
 function W.Plan(list, standing)
   local goal = standing and standing.toNext
-  local p = { count = 0, cost = 0, rep = 0, toNext = goal }
+  local p = { count = 0, receipts = 0, cost = 0, rep = 0, toNext = goal }
   for _, e in ipairs(list) do
-    e.plan = nil
+    e.plan, e.planCount = nil, nil
     if not e.done and e.total and (e.listed or e.writCost == 0) then
       local enough = goal and p.rep >= goal or (not goal and p.count >= PLAN_MAX)
       if not enough then
-        e.plan = true
-        p.count, p.cost, p.rep = p.count + 1, p.cost + e.total, p.rep + e.w.rep
+        if e.repeatable then
+          if goal then
+            local n = math.ceil((goal - p.rep) / e.w.rep)
+            e.plan, e.planCount = true, n
+            p.receipts, p.cost, p.rep = n, p.cost + e.total * n, p.rep + e.w.rep * n
+          end
+        else
+          e.plan = true
+          p.count, p.cost, p.rep = p.count + 1, p.cost + e.total, p.rep + e.w.rep
+        end
       end
     end
   end
@@ -455,15 +659,16 @@ local function Sorts()
 end
 
 local function Notify()
-  if ns.WritsTab then
-    ns.WritsTab.Refresh()
+  if ns.LogisticsTab then
+    ns.LogisticsTab.Refresh()
   end
 end
 
--- The writs' shared name in this client's language ("Craftsman's Writ"), from a writ's own name.
-local function WritKeyword()
-  for _, w in ipairs(W.List()) do
-    local name = Items.GetInfo and Items.GetInfo(w.id)
+-- A group's shared name in this client's language ("Craftsman's Writ", "Waylaid Crate"), from one of its own
+-- names ("Craftsman's Writ: ...").
+local function Keyword(ids, fallback)
+  for _, id in ipairs(ids) do
+    local name = Items.GetInfo and Items.GetInfo(id)
     if type(name) == "string" then
       local head = name:match("^(.-)%s*[:%-]%s") or name:match("^(.-)%s*:")
       if head and #head > 3 then
@@ -471,7 +676,7 @@ local function WritKeyword()
       end
     end
   end
-  return "Craftsman's Writ"
+  return fallback
 end
 
 -- The materials of an item down to CRAFT_DEPTH, for every recipe (known or not, so "crafts I don't know"
@@ -519,13 +724,24 @@ local function Queue(ids, label)
   scan.total = scan.total + #ids
 end
 
--- After the writs: what the listed (or held) writs ask for, and their materials.
+-- After the papers: what the listed (or held) writs ask for, the listed (or held) crates' bundles, and their
+-- materials.
 local function QueueItems()
   local want = {}
   for _, w in ipairs(W.List()) do
     if scan.found[w.id] or Items.Count(w.id, true) > 0 then
       Gather(w.item, 0, want)
     end
+  end
+  for _, c in ipairs(W.Crates()) do
+    if scan.found[c.id] or Items.Count(c.id, true) > 0 then
+      for _, b in ipairs(c.bundles) do
+        Gather(b.item, 0, want)
+      end
+    end
+  end
+  for id in pairs(data.isPaper) do
+    want[id] = nil -- (already searched)
   end
   local ids = {}
   for id, yes in pairs(want) do
@@ -547,15 +763,17 @@ local function Finish(reason)
   local s = ScanStore()
   if reason == "done" then
     s.at = time()
-    local writs, items = 0, 0
+    local writs, crates, items = 0, 0, 0
     for id in pairs(scan.found) do
       if data.byId[id] then
         writs = writs + 1
+      elseif data.isPaper[id] then
+        crates = crates + 1
       else
         items = items + 1
       end
     end
-    scan.last = ("%d writs for sale, %d items priced"):format(writs, items)
+    scan.last = ("%d writs and %d crates for sale, %d items priced"):format(writs, crates, items)
     F:Debug("scan done: %s", scan.last)
   else
     scan.last = "stopped: " .. tostring(reason)
@@ -601,10 +819,10 @@ local function QueryDone()
   end
   scan.done = scan.done + (q.kind == "keyword" and 1 or #q.ids)
   scan.current = nil
-  if q.label == "writs" and not scan.itemsQueued then
+  if q.label == "papers" and not scan.itemsQueued then
     local more = false
     for _, other in ipairs(scan.queue) do
-      if other.label == "writs" then
+      if other.label == "papers" then
         more = true
         break
       end
@@ -623,8 +841,8 @@ local function Send(q)
     q.want[id] = true
   end
   if q.kind == "keyword" then
-    for _, w in ipairs(W.List()) do
-      q.want[w.id] = true
+    for _, id in ipairs(q.group or {}) do
+      q.want[id] = true
     end
   end
   local ok, err
@@ -751,7 +969,7 @@ function W.StartScan()
     return false, "a scan is already running"
   end
   if not W.Load() then
-    return false, "ItemTree's writ data isn't there (install or turn on ItemTree)"
+    return false, "ItemTree's supply data isn't there (install or turn on ItemTree)"
   end
   if not AHOpen() then
     return false, "open the auction house first"
@@ -759,22 +977,43 @@ function W.StartScan()
   scan.running, scan.queue, scan.found = true, {}, {}
   scan.total, scan.done, scan.current, scan.itemsQueued = 0, 0, nil, false
   scan.startedAt = time()
-  local ids, mats = {}, {}
+  local mats = {}
+  for _, id in ipairs(data.papers) do
+    Items.Name(id)
+  end
   for _, w in ipairs(W.List()) do
-    ids[#ids + 1] = w.id
-    Items.Name(w.id)
     Gather(w.item, 0, mats)
+  end
+  for _, c in ipairs(W.Crates()) do
+    for _, b in ipairs(c.bundles) do
+      Gather(b.item, 0, mats)
+    end
   end
   for id, yes in pairs(mats) do
     if yes then
-      Items.Name(id) -- (the names load while the writs are searched)
+      Items.Name(id) -- (the names load while the papers are searched)
     end
   end
   if C_AuctionHouse.SearchForItemKeys and not scan.noKeys then
-    Queue(ids, "writs")
+    Queue(data.papers, "papers")
   else
-    scan.queue[1] = { kind = "keyword", text = WritKeyword(), ids = {}, label = "writs" }
-    scan.total = scan.total + 1
+    -- (by name: one search finds every writ, one every Waylaid Crate; the rest one by one)
+    local groups = { writs = {}, crates = {} }
+    local rest = {}
+    for _, id in ipairs(data.papers) do
+      local g = groups[data.isPaper[id]]
+      if g then
+        g[#g + 1] = id
+      else
+        rest[#rest + 1] = id
+      end
+    end
+    scan.queue[#scan.queue + 1] = { kind = "keyword", text = Keyword(groups.writs, "Craftsman's Writ"), ids = {},
+      group = groups.writs, label = "papers" }
+    scan.queue[#scan.queue + 1] = { kind = "keyword", text = Keyword(groups.crates, "Waylaid Crate"), ids = {},
+      group = groups.crates, label = "papers" }
+    scan.total = scan.total + 2
+    Queue(rest, "papers")
   end
   F:Debug("scan started: %d queries queued", #scan.queue)
   Notify()
@@ -794,8 +1033,8 @@ function F:OnEnable()
   wipe(vendorMemo)
   scan.running, scan.current = false, nil
   self:On("AUCTION_HOUSE_SHOW", function()
-    if ns.WritsTab then
-      ns.WritsTab.Attach()
+    if ns.LogisticsTab then
+      ns.LogisticsTab.Attach()
     end
   end)
   self:On("AUCTION_HOUSE_CLOSED", function()
@@ -810,17 +1049,20 @@ function F:OnEnable()
     end)
   end
   self:On("BAG_UPDATE_DELAYED", function()
-    self:Debounce("writs.bags", 0.5, Notify)
+    self:Debounce("logistics.bags", 0.5, Notify)
   end)
   self:On("QUEST_TURNED_IN", function()
-    self:Debounce("writs.quest", 1, Notify)
+    self:Debounce("logistics.quest", 1, Notify)
   end)
   self:On("UPDATE_FACTION", function()
-    self:Debounce("writs.rep", 0.5, Notify)
+    self:Debounce("logistics.rep", 0.5, Notify)
+  end)
+  self:On("CURRENCY_DISPLAY_UPDATE", function()
+    self:Debounce("logistics.favor", 0.5, Notify)
   end)
   self:Ticker(PUMP, Pump)
-  if ns.WritsTab then
-    ns.WritsTab.Enable()
+  if ns.LogisticsTab then
+    ns.LogisticsTab.Enable()
   end
 end
 
@@ -828,8 +1070,8 @@ function F:OnDisable()
   if scan.running then
     Finish("turned off")
   end
-  if ns.WritsTab then
-    ns.WritsTab.Disable()
+  if ns.LogisticsTab then
+    ns.LogisticsTab.Disable()
   end
 end
 
@@ -843,29 +1085,59 @@ end
 
 local function PrintBest(n)
   if not W.Load() then
-    F:Print("ItemTree's writ data isn't there: install or turn on ItemTree.")
+    F:Print("ItemTree's supply data isn't there: install or turn on ItemTree.")
     return
   end
   local list = W.Evaluate()
   local shown = 0
-  F:Print("cheapest writs per reputation:")
+  F:Print("cheapest reputation:")
   for _, e in ipairs(list) do
     if e.perRep and not e.done and (e.listed or e.writCost == 0) then
       shown = shown + 1
-      print(("   %d. %s + %d %s: %s (%s per reputation, %d rep)"):format(shown, Items.Link(e.w.id), e.w.count,
-        Items.Name(e.w.item), Money(e.total), Money(e.perRep), e.w.rep))
+      if e.receipt then
+        print(("   %d. %s (%d Favor) + an empty %s: %s (%s per reputation, %d rep, as often as you like)"):format(
+          shown, Items.Link(RECEIPT), RECEIPT_FAVOR, Items.Name(e.w.item), Money(e.total), Money(e.perRep), e.w.rep))
+      else
+        print(("   %d. %s + %d %s: %s (%s per reputation, %d rep)"):format(shown, Items.Link(e.w.id), e.w.count,
+          Items.Name(e.w.item), Money(e.total), Money(e.perRep), e.w.rep))
+      end
       if shown >= n then
         break
       end
     end
   end
   if shown == 0 then
-    F:Print("no prices yet: open the auction house and click Scan on the Writs tab.")
+    F:Print("no prices yet: open the auction house and click Scan on the Logistics tab.")
+  end
+end
+
+local function PrintCrates(n)
+  local C = ns.LogisticsCrates
+  if not (W.Load() and C) then
+    F:Print("ItemTree's supply data isn't there: install or turn on ItemTree.")
+    return
+  end
+  W.ResetCosts()
+  local shown = 0
+  F:Print("cheapest Merchant's Favor:")
+  for _, e in ipairs(C.Evaluate()) do
+    if e.perFavor and (e.listed or e.crateCost == 0) then
+      shown = shown + 1
+      local fill = e.bundle and (" + %d %s"):format(e.bundle.count, Items.Name(e.bundle.item)) or ""
+      print(("   %d. %s%s: %s (%s per Favor, %d Favor)"):format(shown, Items.Link(e.c.id), fill, Money(e.total),
+        Money(e.perFavor), e.c.favor))
+      if shown >= n then
+        break
+      end
+    end
+  end
+  if shown == 0 then
+    F:Print("no prices yet: open the auction house and click Scan on the Logistics tab.")
   end
 end
 
 F.commands = {
-  { name = "scan", help = "scans the writs and their materials (auction house open)", run = function(self)
+  { name = "scan", help = "scans the writs, the crates and their materials (auction house open)", run = function(self)
     local ok, err = W.StartScan()
     if not ok then
       self:Print("can't scan: " .. err .. ".")
@@ -878,21 +1150,25 @@ F.commands = {
       self:Print("no scan is running.")
     end
   end },
-  { name = "best", args = "[n]", help = "prints the n cheapest writs per reputation (default 5)", run = function(_, rest)
+  { name = "best", args = "[n]", help = "prints the n cheapest ways to reputation (default 5)", run = function(_, rest)
     PrintBest(tonumber(rest) or 5)
   end },
+  { name = "crates", args = "[n]", help = "prints the n cheapest crates per Merchant's Favor (default 5)",
+    run = function(_, rest)
+      PrintCrates(tonumber(rest) or 5)
+    end },
 }
 
 function F:GetStatus()
   if not TreeData() then
-    return "Active · waiting for ItemTree (it has the writ data)"
+    return "Active · waiting for ItemTree (it has the writ and crate data)"
   end
   if scan.running then
     return ("Active · scanning the auction house: %d of %d"):format(scan.done or 0, math.max(scan.total or 0, 1))
   end
   local s = ScanStore()
   if not s.at or s.at == 0 then
-    return "Active · no scan yet: open the auction house, Writs tab, Scan"
+    return "Active · no scan yet: open the auction house, Logistics tab, Scan"
   end
   return ("Active · last scan %s ago%s"):format(Lib.FormatDuration(time() - s.at),
     scan.last and (" · " .. scan.last) or "")
@@ -905,7 +1181,7 @@ function F:ReportDetails()
     n = n + 1
   end
   return {
-    ("ItemTree data: %s, %d writs"):format(TreeData() and "yes" or "no", #W.List()),
+    ("ItemTree data: %s, %d writs, %d crates"):format(TreeData() and "yes" or "no", #W.List(), #W.Crates()),
     ("SearchForItemKeys: %s%s"):format(C_AuctionHouse and C_AuctionHouse.SearchForItemKeys and "yes" or "no",
       scan.noKeys and " (failed, by name)" or ""),
     ("Stored prices: %d, last scan %s"):format(n, s.at and s.at > 0 and date("%Y-%m-%d %H:%M", s.at) or "never"),

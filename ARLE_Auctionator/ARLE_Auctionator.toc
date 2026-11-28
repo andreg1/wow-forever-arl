@@ -1,6 +1,6 @@
 ## Interface: 16001, 120105, 120107
 ## Title: ARL Extensions: Auctionator
-## Notes: Darkmoon Tickets (Darkmoon Faire turn-ins by gold per Prize Ticket) and Craftsman's Writs (a Writs tab on the auction house: cheapest supply camp reputation).
+## Notes: Darkmoon Tickets (Darkmoon Faire turn-ins by gold per Prize Ticket) and Logistics (a Logistics tab on the auction house: the cheapest supply camp reputation from Craftsman's Writs, and the cheapest Merchant's Favor from Waylaid Crates).
 ## Author: aredpanda, andreg1
 ## Version: 0.20.0
 ## Group: ARLExtensions
@@ -9,10 +9,11 @@
 ## LoadOnDemand: 1
 ## X-ARLE-Pack: Auctionator
 ## X-ARLE-Group: Auctionator
-## X-ARLE-Features: DarkmoonTickets, CraftsmansWrits
+## X-ARLE-Features: DarkmoonTickets, Logistics
 ## X-ARLE-Feature-DarkmoonTickets: title=Darkmoon Tickets; extends=Auctionator; cmd=dmf; default=off; replaces=Auctionator_DarkmoonTickets
-## X-ARLE-Feature-CraftsmansWrits: title=Craftsman's Writs; extends=Auctionator; cmd=writs; default=off
+## X-ARLE-Feature-Logistics: title=Logistics; extends=Auctionator; cmd=logistics; default=off
 
 DarkmoonTickets.lua
-CraftsmansWrits.lua
-CraftsmansWritsTab.lua
+Logistics.lua
+LogisticsCrates.lua
+LogisticsTab.lua
