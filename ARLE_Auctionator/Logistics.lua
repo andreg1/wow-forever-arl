@@ -85,7 +85,7 @@ local F = {
   description = "A Logistics tab on the auction house: scans every Craftsman's Writ and Waylaid Crate for sale and "
     .. "what they need (bought or crafted from materials), and ranks them by gold per reputation with your supply "
     .. "camp and gold per Merchant's Favor. Needs ItemTree for the data.",
-  defaults = { view = "writs", favorGoal = 0, favorGoalItem = 0 },
+  defaults = { view = "writs", favorGoal = 0, favorGoalItem = 0, writBudget = 0, crateBudget = 0 },
   options = {
     { type = "info", text = function(def) return def:GetStatus() end },
     { key = "useBags", type = "boolean", label = "Count writs and items I already have as free", default = true,
@@ -615,23 +615,48 @@ function W.ReceiptEntry()
   return e
 end
 
+-- A budget in gold from the settings (0 or none = no limit), in copper, or nil.
+function W.Budget(key)
+  local gold = tonumber(F.db[key]) or 0
+  return gold > 0 and gold * 10000 or nil
+end
+
+-- How many copies at `each` fit in what's left of a budget (`left` nil = no budget): n, or fewer and true.
+function W.Fit(n, each, left)
+  if not left or each <= 0 then
+    return n, false
+  end
+  local fit = math.floor(left / each + 1e-9)
+  if fit < n then
+    return math.max(0, fit), true
+  end
+  return n, false
+end
+
 -- The cheapest writs to buy now: one of each, not done today, priced; until the next standing is reached (or
--- PLAN_MAX). A repeatable row (the receipt) fills what's left when its turn comes. Marks e.plan (and
--- e.planCount); returns { count, receipts, cost, rep, toNext }.
-function W.Plan(list, standing)
+-- PLAN_MAX), and within the budget (copper; a writ that doesn't fit is passed over for a cheaper one; with a budget
+-- and no next standing, until it's spent). A repeatable row (the receipt) fills what's left when its turn comes.
+-- Marks e.plan (and e.planCount); returns { count, receipts, cost, rep, toNext, budget, capped }.
+function W.Plan(list, standing, budget)
   local goal = standing and standing.toNext
-  local p = { count = 0, receipts = 0, cost = 0, rep = 0, toNext = goal }
+  local p = { count = 0, receipts = 0, cost = 0, rep = 0, toNext = goal, budget = budget, capped = false }
   for _, e in ipairs(list) do
     e.plan, e.planCount = nil, nil
     if not e.done and e.total and (e.listed or e.writCost == 0) then
-      local enough = goal and p.rep >= goal or (not goal and p.count >= PLAN_MAX)
+      local enough = goal and p.rep >= goal or (not goal and not budget and p.count >= PLAN_MAX)
       if not enough then
+        local left = budget and (budget - p.cost)
         if e.repeatable then
-          if goal then
-            local n = math.ceil((goal - p.rep) / e.w.rep)
+          local n = goal and math.ceil((goal - p.rep) / e.w.rep) or (budget and math.huge) or 0
+          local capped
+          n, capped = W.Fit(n, e.total, left)
+          p.capped = p.capped or capped
+          if n > 0 and n < math.huge then
             e.plan, e.planCount = true, n
             p.receipts, p.cost, p.rep = n, p.cost + e.total * n, p.rep + e.w.rep * n
           end
+        elseif left and e.total > left then
+          p.capped = true
         else
           e.plan = true
           p.count, p.cost, p.rep = p.count + 1, p.cost + e.total, p.rep + e.w.rep

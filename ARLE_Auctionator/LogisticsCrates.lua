@@ -110,25 +110,33 @@ function C.Goal()
     need = have and math.max(0, goal - have) or goal }
 end
 
--- The cheapest crates to buy now until the goal's Favor is covered (or PLAN_MAX without a goal): marks e.plan and
--- e.planCount; returns { count, cost, favor, need, short }.
-function C.Plan(list, goal)
+-- The cheapest crates to buy now until the goal's Favor is covered (or PLAN_MAX without a goal), within the
+-- budget (copper, nil = none; with a budget and no goal, until it's spent): marks e.plan and e.planCount; returns
+-- { count, cost, favor, need, short, budget, capped }.
+function C.Plan(list, goal, budget)
   local need = goal and goal.need
-  local p = { count = 0, cost = 0, favor = 0, need = need }
+  local p = { count = 0, cost = 0, favor = 0, need = need, budget = budget, capped = false }
   for _, e in ipairs(list) do
     e.plan, e.planCount = nil, nil
     if e.perFavor and (e.listed or e.crateCost == 0) then
-      local enough = need and p.favor >= need or (not need and p.count >= PLAN_MAX)
+      local enough = need and p.favor >= need or (not need and not budget and p.count >= PLAN_MAX)
       if not enough then
         local copies = 1
+        local avail = e.crateCost == 0 and e.held or (e.qty or 1)
         if need then
-          local avail = e.crateCost == 0 and e.held or (e.qty or 1)
           copies = math.min(math.max(1, avail), PLAN_COPIES, math.ceil((need - p.favor) / e.c.favor))
+        elseif budget then
+          copies = math.min(math.max(1, avail), PLAN_COPIES)
         end
-        e.plan, e.planCount = true, copies
-        p.count = p.count + copies
-        p.cost = p.cost + e.total * copies
-        p.favor = p.favor + e.c.favor * copies
+        local capped
+        copies, capped = W().Fit(copies, e.total, budget and (budget - p.cost))
+        p.capped = p.capped or capped
+        if copies > 0 then
+          e.plan, e.planCount = true, copies
+          p.count = p.count + copies
+          p.cost = p.cost + e.total * copies
+          p.favor = p.favor + e.c.favor * copies
+        end
       end
     end
   end

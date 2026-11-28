@@ -625,6 +625,20 @@ local function PlaceBar()
   frame.bar:SetPoint("TOPLEFT", 10, -36)
 end
 
+local function BudgetKey()
+  return View() == "crates" and "crateBudget" or "writBudget"
+end
+
+-- The end of the plan line: why it stops short of the goal.
+local function PlanNote(p, short)
+  if not short then
+    return ""
+  elseif p.capped then
+    return (" |cffff9040(budget %s reached)|r"):format(Lib.FormatMoney(p.budget))
+  end
+  return " |cffff9040(not enough for sale today)|r"
+end
+
 local function RealRefresh()
   if not (frame and frame:IsVisible()) then
     return
@@ -638,6 +652,10 @@ local function RealRefresh()
   frame.doneCB:SetShown(view == "writs")
   frame.doneText:SetShown(view == "writs")
   frame.unlistedCB:SetChecked(db.showUnlisted == true)
+  if not frame.budget:HasFocus() then
+    local gold = tonumber(db[BudgetKey()]) or 0
+    frame.budget:SetText(gold > 0 and tostring(gold) or "")
+  end
   local h = HEADERS[view]
   for col, fs in pairs(frame.headers) do
     fs:SetText(h.labels[col] or "")
@@ -676,13 +694,13 @@ local function RealRefresh()
     goal = ns.LogisticsCrates.Goal()
     PaintFavor(goal)
     all = ns.LogisticsCrates.Evaluate()
-    plan = ns.LogisticsCrates.Plan(all, goal)
+    plan = ns.LogisticsCrates.Plan(all, goal, W.Budget("crateBudget"))
     key, Shown, Paint = "perFavor", ShownCrate, PaintCrate
   else
     PlaceBar()
     PaintStanding(st)
     all = W.Evaluate()
-    plan = W.Plan(all, st)
+    plan = W.Plan(all, st, W.Budget("writBudget"))
     key, Shown, Paint = "perRep", ShownWrit, PaintWrit
   end
   wipe(list)
@@ -721,20 +739,20 @@ local function RealRefresh()
   if view == "crates" then
     if plan.count > 0 then
       local to = goal and ("to %s (%d Favor)"):format(goal.item > 0 and Short(goal.item) or "your goal", goal.need)
-        or ("the cheapest %d"):format(plan.count)
+        or plan.budget and "within your budget" or ("the cheapest %d"):format(plan.count)
       frame.plan:SetText(("%s Plan %s: |cffffffff%d crate%s|r for about |cffffffff%s|r · %d Favor · %s per Favor%s")
         :format(QUALITY_STAR, to, plan.count, plan.count == 1 and "" or "s", Lib.FormatMoney(math.floor(plan.cost)),
           plan.favor, Lib.FormatMoney(math.floor(plan.cost / math.max(plan.favor, 1))),
-          plan.short and " |cffff9040(not enough for sale today)|r" or ""))
+          PlanNote(plan, plan.short)))
       frame.shopBtn:Show()
     else
       frame.plan:SetText(goal and goal.need == 0 and "|cff80ff80You have the Favor for your goal.|r"
-        or scanned and "No priced crates for sale." or "")
+        or plan.capped and "|cffff9040Nothing fits your budget.|r" or scanned and "No priced crates for sale." or "")
       frame.shopBtn:Hide()
     end
   elseif plan.count + plan.receipts > 0 then
     local goalText = plan.toNext and ("to %s (%d rep)"):format(st.nextLabel or "the next standing", plan.toNext)
-      or ("the cheapest %d"):format(plan.count)
+      or plan.budget and "within your budget" or ("the cheapest %d"):format(plan.count)
     local what = ("%d writ%s"):format(plan.count, plan.count == 1 and "" or "s")
     if plan.receipts > 0 then
       what = (plan.count > 0 and (what .. " + ") or "") .. ("%d receipt%s"):format(plan.receipts,
@@ -743,10 +761,11 @@ local function RealRefresh()
     frame.plan:SetText(("%s Plan %s: |cffffffff%s|r for |cffffffff%s|r · %d rep · %s per rep%s"):format(
       QUALITY_STAR, goalText, what, Lib.FormatMoney(math.floor(plan.cost)), plan.rep,
       Lib.FormatMoney(math.floor(plan.cost / math.max(plan.rep, 1))),
-      plan.toNext and plan.rep < plan.toNext and " |cffff9040(not enough for sale today)|r" or ""))
+      PlanNote(plan, plan.toNext and plan.rep < plan.toNext)))
     frame.shopBtn:Show()
   else
-    frame.plan:SetText(scanned and "No priced writs left for today." or "")
+    frame.plan:SetText(plan.capped and "|cffff9040Nothing fits your budget.|r"
+      or scanned and "No priced writs left for today." or "")
     frame.shopBtn:Hide()
   end
 end
@@ -908,6 +927,39 @@ local function Create()
   cb3:ClearAllPoints()
   cb3:SetPoint("LEFT", cb4, "RIGHT", 100, 0)
   f.bagsCB, f.anyCB, f.doneCB, f.doneText, f.unlistedCB = cb1, cb2, cb3, t3, cb4
+
+  -- the budget: how much to spend in one go, per view (gold; empty = no limit)
+  local gold = Kit.Text(f, "GameFontHighlightSmall")
+  gold:SetPoint("BOTTOMRIGHT", -10, 8)
+  gold:SetText("g")
+  f.budget = Kit.EditBox(f, 64)
+  f.budget:SetPoint("RIGHT", gold, "LEFT", -4, 0)
+  f.budget:SetNumeric(false)
+  f.budget:SetMaxLetters(9)
+  local budgetLabel = Kit.Text(f, "GameFontNormalSmall")
+  budgetLabel:SetPoint("RIGHT", f.budget, "LEFT", -8, 0)
+  budgetLabel:SetText("Spend up to")
+  local function SaveBudget(box)
+    local n = tonumber((box:GetText() or ""):gsub(",", "."):match("[%d%.]+") or "") or 0
+    n = math.max(0, math.floor(n * 100 + 0.5) / 100)
+    box:ClearFocus()
+    ARLE:SetOption(F().id, BudgetKey(), n)
+    RealRefresh()
+  end
+  F():Script(f.budget, "OnEnterPressed", SaveBudget)
+  F():Script(f.budget, "OnEditFocusLost", function(box)
+    local gold2 = tonumber(F().db[BudgetKey()]) or 0
+    local typed = tonumber((box:GetText() or ""):gsub(",", "."):match("[%d%.]+") or "") or 0
+    if typed ~= gold2 then
+      SaveBudget(box)
+    end
+  end)
+  F():Script(f.budget, "OnEscapePressed", function(box)
+    box:ClearFocus()
+    RealRefresh()
+  end)
+  Tip(f.budget, "Spend up to", "How much gold to spend in one go (each view keeps its own). The plan stops at your "
+    .. "goal or at this, whichever comes first, passing over what doesn't fit for something cheaper. Empty: no limit.")
 
   F():Script(f, "OnShow", function()
     local db = F().db
