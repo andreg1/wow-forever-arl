@@ -963,6 +963,7 @@ local function Create(parent)
 end
 
 ns.ARLTab.Register({ id = "logistics", title = "Logistics", order = 1, width = 90, feature = W.F,
+  settings = "logistics",
   tip = "Your supply camp: Craftsman's Writs by gold per reputation, Waylaid Crates by gold per Merchant's Favor.",
   build = Create })
 

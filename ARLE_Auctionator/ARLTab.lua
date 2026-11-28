@@ -29,7 +29,7 @@ local host, content, strip, buttons = nil, nil, nil, nil
 local current -- the panel id shown (this session)
 local waiting = false
 
--- panel = { id, title, order, feature, tip, build(parent) -> frame }
+-- panel = { id, title, order, width, feature, tip, settings (its page in the Auction House entry), build(parent) }
 function H.Register(panel)
   H.panels[#H.panels + 1] = panel
   table.sort(H.panels, function(a, b)
@@ -125,8 +125,25 @@ local function Create()
   Skin:Panel(f)
   strip = CreateFrame("Frame", nil, f)
   strip:SetPoint("TOPLEFT", 10, -6)
-  strip:SetPoint("RIGHT", -10, 0)
+  strip:SetPoint("RIGHT", -100, 0)
   strip:SetHeight(16)
+  -- the settings: a shortcut to the Auction House entry in /arl, on the shown panel's page
+  local cog = Kit.SmallButton(f, "Settings", 80)
+  cog:SetPoint("TOPRIGHT", -10, -6)
+  local scriptOwner = Owner()
+  scriptOwner:Script(cog, "OnClick", function()
+    local page
+    for _, p in ipairs(H.panels) do
+      if p.id == current then
+        page = p.settings
+      end
+    end
+    ARLE:Open(ns.AuctionHouse and ns.AuctionHouse.id or nil, page)
+  end)
+  scriptOwner:Script(cog, "OnEnter", function(self)
+    Kit.SimpleTooltip(self, "Settings", "Opens the Auction House settings in /arl, on this panel's page.")
+  end)
+  scriptOwner:Script(cog, "OnLeave", GameTooltip_Hide)
   local rule = Kit.Rule(f, 0.15)
   rule:SetPoint("TOPLEFT", 6, -STRIP_H - 1)
   rule:SetPoint("TOPRIGHT", -6, -STRIP_H - 1)

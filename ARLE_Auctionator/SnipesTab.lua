@@ -371,7 +371,7 @@ local function Create(parent)
   return f
 end
 
-ns.ARLTab.Register({ id = "snipes", title = "Snipes", order = 2, width = 70, feature = S.F,
+ns.ARLTab.Register({ id = "snipes", title = "Snipes", order = 2, width = 70, feature = S.F, settings = "snipes",
   tip = "Auctions selling below vendor price, from Auctionator's last full scan.", build = Create })
 
 function T.Attach()

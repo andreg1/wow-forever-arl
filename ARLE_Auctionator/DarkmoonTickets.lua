@@ -1,37 +1,61 @@
--- Darkmoon Tickets: ranks every Darkmoon Faire Prize Ticket turn-in by how
--- much it costs per ticket at the auction house, from Auctionator's last scan:
---   cost per ticket = AH unit price * items per turn-in / tickets.
--- Based on Auctionator_DarkmoonTickets by andreg1 (MIT),
--- https://github.com/andreg1/wow-forever-addons
+-- Darkmoon Faire: the cheapest way to Darkmoon Prize Tickets and Darkmoon
+-- Faire reputation on WoW Forever, and where and when the Faire is. Shown as
+-- the Darkmoon panel in the ARL tab on the auction house (DarkmoonTab.lua).
+-- Started as Auctionator_DarkmoonTickets by andreg1 (MIT),
+-- https://github.com/andreg1/wow-forever-addons; reworked in 0.22.0.
 --
--- Auctionator.API.v1 through ARLE.Bridge.Auctionator (every call pcall'd: the
--- v1 API raises errors on bad state, e.g. a search with the AH closed):
--- GetAuctionPriceByItemLink / ...ByItemID, GetAuctionAgeByItemID,
--- RegisterForDBUpdate (refresh after a scan), MultiSearchExact ("Search all").
+-- What Forever does (researched 2026-11-28 from wowforever.be's reputation
+-- guide and wofwforever.com's Faire guide, cross-checked with ItemTree's data):
+--   * 21 turn-ins in 5 tiers at four NPCs pay 1 / 4 / 8 / 12 / 20 tickets and
+--     100 Darkmoon Faire reputation each; a tier stops being offered once the
+--     reputation reaches its cut (500 / 1100 / 1700 / 2500 into Neutral, the
+--     last at 5999 into Friendly; some players report ~2000 into Friendly).
+--   * Prize Tickets are a currency on Forever (515), not the Classic item 19182.
+--   * A Darkmoon card deck (Beasts, Elementals, Portals, Warlords) handed to
+--     Professor Thaddeus Paleo gives 150 reputation (and a level 60 trinket),
+--     with no cut: past the turn-ins, decks are the way on.
+--   * The Faire alternates monthly between Elwynn Forest (south of Goldshire)
+--     and Mulgore (at the foot of Thunder Bluff): it arrives on the month's
+--     first Friday, opens the Monday after and closes a week later (Nov 9-15
+--     2026 Elwynn, Dec 7-13 Mulgore, Jan 4-10 2027 Elwynn, ...).
 --
--- Ticket data: the built-in table comes from community guides. When you turn
--- a quest in, the real counts are read from the quest window (required item
--- count on QUEST_PROGRESS, the Prize Ticket reward count on QUEST_COMPLETE)
--- and kept account-wide (shared.learned), overriding the built-in numbers.
--- Reputation: tiers 1-4 stop being offered at a Darkmoon Faire reputation value
--- (approximate); those rows are greyed and sorted after the rest.
-local ADDON = ...
+-- Where and when: the game calendar first (C_Calendar: the Faire's holiday
+-- day events, ids 263 Elwynn / 264 Mulgore, or their textures; facts from
+-- Forever's Holidays table that ItemTree documents), else the rule above
+-- ("expected"). The month offset is counted from the month the calendar shows,
+-- so a player browsing the calendar changes nothing.
+--
+-- Costs: each item at the cheapest of buying it, a vendor, or crafting it,
+-- through Logistics.lua's costing (ns.Logistics.Node: ItemTree's recipes,
+-- this realm's scan, else Auctionator's price; its "crafts I don't know"
+-- switch applies); a deck at the cheaper of the deck and its eight cards
+-- (ItemTree's combine recipe). Without ItemTree: Auctionator's prices only.
+--
+-- Learned counts: turning a quest in reads the count asked (QUEST_PROGRESS)
+-- and the tickets paid (QUEST_COMPLETE: the ticket currency, or the old item)
+-- into `shared.learned`, which beats the built-in numbers.
+local ADDON, ns = ...
 local ARLE = _G.ARLExtensions
 if not ARLE then
   return
 end
-local AH, Kit, Skin, Items = ARLE.Bridge.Auctionator, ARLE.UI.Kit, ARLE.Skin, ARLE.Lib.Items
+local AH, Items = ARLE.Bridge.Auctionator, ARLE.Lib.Items
 local Lib = ARLE.Lib
 
-local TICKET_ID = 19182
+local TICKET_ITEM = 19182 -- Classic's ticket item (still read, in case)
+local TICKET_CURRENCY = 515 -- Forever's Darkmoon Prize Ticket
 local FACTION_ID = 909 -- Darkmoon Faire
+local TURNIN_REP = 100
+local DECK_REP = 150
+local PLAN_MAX = 200 -- turn-ins or decks the plan counts at most
+local CALENDAR_STALE = 600 -- seconds a calendar read is kept
 
--- Tier offered while DMF reputation value (absolute, Neutral = 0) is below this.
-local TIER_CAP = { [1] = 401, [2] = 1100, [3] = 1625, [4] = 2500 }
+-- A tier is offered while the Faire reputation (absolute, Neutral = 0) is below this.
+local TIER_CAP = { [1] = 500, [2] = 1100, [3] = 1700, [4] = 2500, [5] = 8999 }
 
 local TURNINS = {
   { id = 3240, name = "Coarse Weightstone", qty = 10, tickets = 1, tier = 1, src = "Blacksmithing" },
-  { id = 4363, name = "Copper Modulator", qty = 3, tickets = 1, tier = 1, src = "Engineering" },
+  { id = 4363, name = "Copper Modulator", qty = 5, tickets = 1, tier = 1, src = "Engineering" },
   { id = 2309, name = "Embossed Leather Boots", qty = 3, tickets = 1, tier = 1, src = "Leatherworking" },
   { id = 5134, name = "Small Furry Paw", qty = 5, tickets = 1, tier = 1, src = "Beast drop" },
   { id = 3486, name = "Heavy Grinding Stone", qty = 7, tickets = 4, tier = 2, src = "Blacksmithing" },
@@ -42,7 +66,7 @@ local TURNINS = {
   { id = 9313, name = "Green Firework", qty = 36, tickets = 8, tier = 3, src = "Engineering" },
   { id = 5739, name = "Barbaric Harness", qty = 3, tickets = 8, tier = 3, src = "Leatherworking" },
   { id = 4582, name = "Soft Bushy Tail", qty = 5, tickets = 8, tier = 3, src = "Beast drop" },
-  { id = 7945, name = "Big Black Mace", qty = 3, tickets = 12, tier = 4, src = "Blacksmithing" },
+  { id = 7945, name = "Big Black Mace", qty = 1, tickets = 12, tier = 4, src = "Blacksmithing" },
   { id = 11590, name = "Mechanical Repair Kit", qty = 6, tickets = 12, tier = 4, src = "Engineering" },
   { id = 8185, name = "Turtle Scale Leggings", qty = 1, tickets = 12, tier = 4, src = "Leatherworking" },
   { id = 5117, name = "Vibrant Plume", qty = 5, tickets = 12, tier = 4, src = "Beast drop" },
@@ -53,6 +77,37 @@ local TURNINS = {
   { id = 19933, name = "Glowing Scorpid Blood", qty = 10, tickets = 20, tier = 5, src = "Beast drop" },
 }
 
+-- The four decks and their cards (when ItemTree can't say): Ace to Eight.
+local DECKS = {
+  { id = 19228, name = "Beasts Deck", cards = { 19227, 19230, 19231, 19232, 19233, 19234, 19235, 19236 } },
+  { id = 19267, name = "Elementals Deck", cards = { 19268, 19269, 19270, 19271, 19272, 19273, 19274, 19275 } },
+  { id = 19277, name = "Portals Deck", cards = { 19276, 19278, 19279, 19280, 19281, 19282, 19283, 19284 } },
+  { id = 19257, name = "Warlords Deck", cards = { 19258, 19259, 19260, 19261, 19262, 19263, 19264, 19265 } },
+}
+
+-- What tickets buy at Gelvas Grimegate, for the ticket goal.
+local PRIZES = {
+  { id = 19295, name = "Darkmoon Flower", tickets = 5 },
+  { id = 19298, name = "Minor Darkmoon Prize", tickets = 5 },
+  { id = 19292, name = "Last Month's Mutton", tickets = 10 },
+  { id = 19297, name = "Lesser Darkmoon Prize", tickets = 12 },
+  { id = 19296, name = "Greater Darkmoon Prize", tickets = 40 },
+  { id = 19291, name = "Darkmoon Storage Box", tickets = 50 },
+  { id = 19293, name = "Last Year's Mutton", tickets = 50 },
+  { id = 19491, name = "Amulet of the Darkmoon", tickets = 1200 },
+  { id = 19426, name = "Orb of the Darkmoon", tickets = 1200 },
+}
+
+-- Where the Faire stands: the calendar's holiday ids and textures, and each site.
+local HOLIDAYS = { [263] = "elwynn", [264] = "mulgore" }
+local TEXTURES = { [235446] = "elwynn", [235447] = "elwynn", [235448] = "elwynn", [235449] = "mulgore",
+  [235450] = "mulgore", [235451] = "mulgore" }
+local SITES = {
+  elwynn = { map = 1429, x = 0.42, y = 0.70, zone = "Elwynn Forest", spot = "south of Goldshire" },
+  mulgore = { map = 1412, x = 0.37, y = 0.38, zone = "Mulgore", spot = "at the foot of Thunder Bluff" },
+}
+local RULE_FROM = { year = 2026, month = 11, site = "elwynn" } -- the alternation's known month
+
 local byID = {}
 for _, t in ipairs(TURNINS) do
   byID[t.id] = t
@@ -61,35 +116,46 @@ end
 local F = {
   id = "DarkmoonTickets",
   addon = ADDON,
-  title = "Darkmoon Tickets",
+  title = "Darkmoon Faire",
   group = "Auctionator",
   extends = "Auctionator",
   command = "dmf",
-  commandArgs = "[best [n]|learned|forget]",
-  commandHelp = "Darkmoon Faire turn-ins ranked by gold per Prize Ticket",
-  mainHelp = "opens or closes the window",
-  description = "Darkmoon Faire turn-ins ranked by gold per Prize Ticket, from Auctionator's prices.",
+  commandArgs = "[best [n]|rep [n]|when|learned|forget]",
+  commandHelp = "the Darkmoon Faire: where and when, and the cheapest tickets and reputation",
+  mainHelp = "says where and when the Faire is",
+  description = "The cheapest way to Darkmoon Prize Tickets and Darkmoon Faire reputation (turn-ins bought or "
+    .. "crafted, and card decks), and where and when the Faire is: the Darkmoon panel in the ARL tab on the "
+    .. "auction house.",
+  defaults = { view = "tickets", ticketGoal = 0, ticketGoalItem = 0 },
   options = {
-    { key = "hideCapped", type = "boolean", label = "Hide tiers past my reputation", default = false,
+    { type = "info", text = function(def) return def:GetStatus() end },
+    { key = "hideCapped", type = "boolean", label = "Hide turn-ins past my reputation", default = false,
       cmd = "hidecapped" },
     { key = "includeBank", type = "boolean", label = "Count bank items", default = true, cmd = "bank" },
     ARLE.Options.Preset.Tooltip({ label = "Tooltip line on turn-in items" }),
-    { type = "button", label = "Open Darkmoon Tickets", nocmd = true, run = function(def) def:Toggle(true) end },
     { type = "button", label = "Forget learned ticket counts", confirm = "Click again to forget them", nocmd = true,
       desc = "back to the built-in numbers", run = function(def) def:Forget() end },
   },
 }
 
-local frame, rows = nil, {}
+local D = {} -- what DarkmoonTab.lua reads
+ns.Darkmoon = D
+D.F, D.PRIZES, D.SITES, D.TICKET_CURRENCY = F, PRIZES, SITES, TICKET_CURRENCY
+D.TURNIN_REP, D.DECK_REP = TURNIN_REP, DECK_REP
+
+local function Notify()
+  if ns.DarkmoonTab then
+    ns.DarkmoonTab.Refresh()
+  end
+end
+D.Notify = Notify
 
 -------------------------------------------------------------------------------
 -- Data
 -------------------------------------------------------------------------------
 
--- Learned counts are facts about the quests, the same for every character:
--- they live in F.shared (account wide), while settings are per character.
--- A copy left in this character's settings (from when settings were account
--- wide) is merged in once.
+-- Learned counts are facts about the quests, the same for every character (shared). A copy left in this
+-- character's settings (from when settings were account wide) is merged in once.
 local function Learned()
   local shared = F.shared
   shared.learned = type(shared.learned) == "table" and shared.learned or {}
@@ -111,32 +177,41 @@ local function TurnIn(t)
   end
   return t.qty, t.tickets, false
 end
+D.TurnIn = TurnIn
 
 local function ItemInfo(id)
   local name, link, _, _, _, _, _, _, _, icon = Items.GetInfo(id)
   if not name and C_Item and C_Item.RequestLoadItemDataByID then
     pcall(C_Item.RequestLoadItemDataByID, id)
   end
-  if not icon and Items.GetInfoInstant then
-    icon = select(5, Items.GetInfoInstant(id))
+  if not icon and Items.GetIcon then
+    icon = Items.GetIcon(id)
   end
   return name, link, icon
 end
+D.ItemInfo = ItemInfo
 
-local function Reputation()
-  if C_Reputation and C_Reputation.GetFactionDataByID then
-    local ok, d = pcall(C_Reputation.GetFactionDataByID, FACTION_ID)
-    if ok and d and d.currentStanding then
-      return d.currentStanding, d.reaction
-    end
+-- The Faire's standing: Logistics' reader when there, else a small one of our own.
+function D.Standing()
+  local L = ns.Logistics
+  if L and L.FactionStanding then
+    return L.FactionStanding(FACTION_ID, "Darkmoon Faire")
   end
-  if GetFactionInfoByID then
-    local ok, _, _, standingID, _, _, value = pcall(GetFactionInfoByID, FACTION_ID)
-    if ok and value then
-      return value, standingID
-    end
+  local d = C_Reputation and C_Reputation.GetFactionDataByID and Lib.Call(C_Reputation.GetFactionDataByID, FACTION_ID)
+  if Lib.Readable(d) then
+    return { id = FACTION_ID, name = Lib.Str(d.name) or "Darkmoon Faire", reaction = d.reaction,
+      value = d.currentStanding }
   end
-  return nil
+end
+
+-- Tickets held: the currency, else the Classic item.
+function D.Tickets()
+  local c = C_CurrencyInfo and C_CurrencyInfo.GetCurrencyInfo
+  local info = c and Lib.Call(c, TICKET_CURRENCY)
+  if Lib.Readable(info) and Lib.Plain(info.quantity) then
+    return Lib.Plain(info.quantity), Lib.Plain(info.iconFileID)
+  end
+  return Items.Count(TICKET_ITEM, true), nil
 end
 
 local function IsCapped(tier, rep)
@@ -144,276 +219,350 @@ local function IsCapped(tier, rep)
   return cap ~= nil and rep ~= nil and rep >= cap
 end
 
-local function Money(copper)
-  if not copper then
-    return "|cff808080--|r"
-  end
-  copper = math.floor(copper + 0.5)
-  if GetCoinTextureString then
-    local ok, s = pcall(GetCoinTextureString, copper)
-    if ok and s then
-      return s
+-- One item's cheapest way: a Logistics node { cost, src, buy, craft, known, ... } (or a plain auction price).
+local function Cost(id)
+  local L = ns.Logistics
+  if L and L.Node then
+    local n = L.Node(id, 0)
+    if n then
+      return n
     end
   end
-  return ARLE.Lib.FormatMoney(copper)
+  local p = AH.Price(id)
+  return { id = id, cost = p, buy = p, src = p and "buy" or nil }
+end
+D.Cost = Cost
+
+-- A deck's cards, from ItemTree's combine recipe when it has one.
+local function DeckCards(deck)
+  local it = rawget(_G, "ItemTree")
+  local data = type(it) == "table" and it.Data
+  if type(data) == "table" and type(data.GetUses) == "function" and type(data.GetRecipe) == "function" then
+    local ok, uses = pcall(data.GetUses, data, deck.id)
+    for _, spell in ipairs(ok and type(uses) == "table" and type(uses.p) == "table" and uses.p or {}) do
+      local okR, r = pcall(data.GetRecipe, data, spell)
+      if okR and type(r) == "table" and type(r.re) == "table" and type(r.out) == "table" and r.out[1] == deck.id then
+        local cards = {}
+        for _, re in ipairs(r.re) do
+          cards[#cards + 1] = tonumber(re[1])
+        end
+        if #cards > 0 then
+          return cards
+        end
+      end
+    end
+  end
+  return deck.cards
 end
 
--- The ranked list. Each entry: t, name, link, icon, qty, tickets, learned,
--- unit, perTicket, perTurnIn, age, have, capped.
-local function BuildList()
-  local rep = Reputation()
-  local list = {}
+-- Every way, priced: turn-ins { kind "turnin", t, qty, tickets, learned, node, unit, perTurnIn, perTicket,
+-- perRep, have, capped, cap } and decks { kind "deck", deck, node, cards, cardsCost, cost, perRep, have }.
+function D.Evaluate()
+  if ns.Logistics and ns.Logistics.ResetCosts then
+    ns.Logistics.ResetCosts()
+  end
+  local st = D.Standing()
+  local rep = st and st.value
+  local bank = F.db.includeBank ~= false
+  local out = {}
   for _, t in ipairs(TURNINS) do
     local name, link, icon = ItemInfo(t.id)
     local qty, tickets, learned = TurnIn(t)
-    local unit = AH.Price(t.id, link)
-    local e = {
-      t = t,
-      name = name or t.name,
-      link = link,
-      icon = icon,
-      qty = qty,
-      tickets = tickets,
-      learned = learned,
-      unit = unit,
-      age = AH.Age(t.id),
-      have = Items.Count(t.id, F.db.includeBank ~= false),
-      capped = IsCapped(t.tier, rep),
-    }
-    if unit then
-      e.perTurnIn = unit * qty
+    local node = Cost(t.id)
+    local e = { kind = "turnin", t = t, id = t.id, name = name or t.name, link = link, icon = icon, qty = qty,
+      tickets = tickets, learned = learned, node = node, unit = node and node.cost,
+      have = Items.Count(t.id, bank), capped = IsCapped(t.tier, rep), cap = TIER_CAP[t.tier], rep = TURNIN_REP }
+    if e.unit then
+      e.perTurnIn = e.unit * qty
       e.perTicket = e.perTurnIn / tickets
+      if not e.capped then
+        e.perRep = e.perTurnIn / TURNIN_REP
+      end
     end
-    if not (e.capped and F.db.hideCapped) then
+    out[#out + 1] = e
+  end
+  for _, deck in ipairs(DECKS) do
+    local name, link, icon = ItemInfo(deck.id)
+    local node = Cost(deck.id)
+    local e = { kind = "deck", deck = deck, id = deck.id, name = name or deck.name, link = link, icon = icon,
+      node = node, have = Items.Count(deck.id, bank), rep = DECK_REP, qty = 1 }
+    local cards, sum = DeckCards(deck), 0
+    e.cards = {}
+    for _, c in ipairs(cards) do
+      local n = Cost(c)
+      e.cards[#e.cards + 1] = { id = c, node = n, have = Items.Count(c, bank) }
+      if sum and n and n.cost then
+        sum = sum + n.cost
+      else
+        sum = nil
+      end
+    end
+    e.cardsCost = sum
+    local deckCost = node and node.cost
+    if deckCost and (not sum or deckCost <= sum) then
+      e.cost, e.via = deckCost, "deck"
+    elseif sum then
+      e.cost, e.via = sum, "cards"
+    end
+    e.perTurnIn = e.cost
+    e.perRep = e.cost and e.cost / DECK_REP
+    out[#out + 1] = e
+  end
+  return out, st
+end
+
+-- The list for one view, sorted: "tickets" (turn-ins by gold per ticket, past the cut last) or "rep" (what still
+-- gives reputation, by gold per reputation).
+function D.Sorted(all, view)
+  local list = {}
+  for _, e in ipairs(all) do
+    if view == "rep" then
+      if e.kind == "deck" or not e.capped or not F.db.hideCapped then
+        list[#list + 1] = e
+      end
+    elseif e.kind == "turnin" and not (e.capped and F.db.hideCapped) then
       list[#list + 1] = e
     end
   end
+  local key = view == "rep" and "perRep" or "perTicket"
   table.sort(list, function(a, b)
-    if a.capped ~= b.capped then
-      return not a.capped
+    local ca, cb = view ~= "rep" and a.capped or false, view ~= "rep" and b.capped or false
+    if ca ~= cb then
+      return not ca
     end
-    if (a.perTicket ~= nil) ~= (b.perTicket ~= nil) then
-      return a.perTicket ~= nil
+    if (a[key] ~= nil) ~= (b[key] ~= nil) then
+      return a[key] ~= nil
     end
-    if a.perTicket and b.perTicket and a.perTicket ~= b.perTicket then
-      return a.perTicket < b.perTicket
+    if a[key] and b[key] and a[key] ~= b[key] then
+      return a[key] < b[key]
     end
-    return a.t.id < b.t.id
+    return a.id < b.id
   end)
-  return list, rep
+  return list, key
 end
 
--------------------------------------------------------------------------------
--- Window (ARLE.UI.Window: follows the theme)
--------------------------------------------------------------------------------
-
-local ROW_H, NUM_ROWS, WIDTH = 20, #TURNINS, 700
-local COLS = { -- x offset, width, justify
-  rank = { 2, 20, "RIGHT" },
-  item = { 28, 200, "LEFT" },
-  turnin = { 232, 70, "CENTER" },
-  unit = { 304, 100, "RIGHT" },
-  ticket = { 408, 110, "RIGHT" },
-  seen = { 522, 50, "CENTER" },
-  have = { 574, 50, "CENTER" },
-  tier = { 626, 56, "CENTER" },
-}
-
-local function MakeText(parent, col, font)
-  local c = COLS[col]
-  local fs = Kit.Text(parent, font or "GameFontHighlightSmall")
-  fs:SetPoint("LEFT", parent, "LEFT", c[1], 0)
-  fs:SetWidth(c[2])
-  fs:SetJustifyH(c[3])
-  fs:SetWordWrap(false)
-  return fs
-end
-
-local Refresh
-
-local function SearchAll()
-  local names = {}
-  for _, t in ipairs(TURNINS) do
-    names[#names + 1] = ItemInfo(t.id) or t.name
-  end
-  local ok, err = AH.SearchExact(names)
-  if not ok then
-    F:Print("open the auction house first. (" .. tostring(err or ""):gsub("^.-: ", "") .. ")")
-  end
-end
-
-local function CreateWindow()
-  local f = ARLE.UI.Window:New({
-    name = "ARLEDarkmoonTicketsFrame",
-    title = "Darkmoon Faire: cost per Prize Ticket (Auctionator's last scan)",
-    width = WIDTH,
-    height = 70 + ROW_H * (NUM_ROWS + 1) + 40,
-    strata = "HIGH",
-    store = F.char,
-    key = "pos",
-    escClose = true,
-  })
-  local c = f.content
-  f.summary = Kit.Text(c, "GameFontNormal")
-  f.summary:SetPoint("TOPLEFT", 4, -4)
-  f.summary:SetPoint("RIGHT", -4, 0)
-
-  local header = CreateFrame("Frame", nil, c)
-  header:SetPoint("TOPLEFT", 0, -26)
-  header:SetSize(WIDTH - 12, ROW_H)
-  local labels = { rank = "#", item = "Item", turnin = "Items > Tix", unit = "AH unit", ticket = "Per ticket",
-    seen = "Seen", have = "Have", tier = "Tier" }
-  for col, text in pairs(labels) do
-    local fs = MakeText(header, col, "GameFontNormalSmall")
-    fs:SetText(text)
-    fs:SetTextColor(Skin:Accent())
-  end
-
-  for i = 1, NUM_ROWS do
-    local r = CreateFrame("Button", nil, c)
-    r:SetSize(WIDTH - 12, ROW_H)
-    r:SetPoint("TOPLEFT", 0, -26 - ROW_H * i)
-    r.bg = r:CreateTexture(nil, "BACKGROUND")
-    r.bg:SetAllPoints()
-    r.bg:SetColorTexture(1, 1, 1, (i % 2 == 0) and 0.04 or 0)
-    r.hl = r:CreateTexture(nil, "HIGHLIGHT")
-    r.hl:SetAllPoints()
-    r.hl:SetColorTexture(1, 1, 1, 0.08)
-    r.icon = r:CreateTexture(nil, "ARTWORK")
-    r.icon:SetSize(ROW_H - 4, ROW_H - 4)
-    r.icon:SetPoint("LEFT", COLS.item[1], 0)
-    r.rank, r.turnin, r.unit = MakeText(r, "rank"), MakeText(r, "turnin"), MakeText(r, "unit")
-    r.ticket, r.seen, r.have, r.tier = MakeText(r, "ticket"), MakeText(r, "seen"), MakeText(r, "have"),
-      MakeText(r, "tier")
-    r.item = MakeText(r, "item")
-    r.item:ClearAllPoints()
-    r.item:SetPoint("LEFT", r.icon, "RIGHT", 4, 0)
-    r.item:SetWidth(COLS.item[2] - ROW_H)
-    F:Script(r, "OnEnter", function(self)
-      local e = self.entry
-      if not e then
-        return
-      end
-      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-      GameTooltip:SetItemByID(e.t.id)
-      GameTooltip:AddLine(" ")
-      GameTooltip:AddLine(string.format("Turn-in: %d for %d ticket%s%s", e.qty, e.tickets, e.tickets == 1 and "" or "s",
-        e.learned and " |cff00ff00(seen in quest window)|r" or " |cffaaaaaa(guide data)|r"), 1, 1, 1)
-      GameTooltip:AddLine("Source: " .. e.t.src, 0.8, 0.8, 0.8)
-      if e.perTurnIn then
-        GameTooltip:AddLine("Cost per turn-in: " .. Money(e.perTurnIn), 1, 1, 1)
-      end
-      if e.have and e.have > 0 then
-        local n = math.floor(e.have / e.qty)
-        GameTooltip:AddLine(string.format("You have %d (%d turn-in%s)", e.have, n, n == 1 and "" or "s"), 0.6, 1, 0.6)
-      end
-      if e.capped then
-        GameTooltip:AddLine("Your Darkmoon reputation is past this tier (approximate cap).", 1, 0.4, 0.4, true)
-      end
-      GameTooltip:AddLine("Shift-click: link in chat", 0.5, 0.5, 0.5)
-      GameTooltip:Show()
-    end)
-    F:Script(r, "OnLeave", GameTooltip_Hide)
-    F:Script(r, "OnClick", function(self)
-      if self.entry and IsModifiedClick("CHATLINK") then
-        local _, link = ItemInfo(self.entry.t.id)
-        if link and ChatEdit_InsertLink then
-          ChatEdit_InsertLink(link)
-        end
-      end
-    end)
-    rows[i] = r
-  end
-
-  local search = Kit.Button(c, "Search all on AH", 150)
-  search:SetPoint("BOTTOMLEFT", 0, 0)
-  F:Script(search, "OnClick", SearchAll)
-
-  local function Toggle(key, label, anchor)
-    local cb = Kit.Check(c)
-    cb:SetPoint("LEFT", anchor, "RIGHT", 12, 0)
-    local text = Kit.Text(c, "GameFontHighlightSmall")
-    text:SetPoint("LEFT", cb, "RIGHT", 2, 0)
-    text:SetText(label)
-    F:Script(cb, "OnClick", function(self)
-      ARLE:SetOption(F.id, key, self:GetChecked() and true or false)
-    end)
-    return cb, text
-  end
-  local capLabel
-  f.cappedCheck, capLabel = Toggle("hideCapped", "Hide tiers past my reputation", search)
-  f.bankCheck = Toggle("includeBank", "Count bank items", capLabel)
-
-  F:Script(f, "OnShow", function()
-    Refresh()
-  end)
-  frame = f
-end
-
-Refresh = function()
-  if not (frame and frame:IsShown()) then
-    return
-  end
-  frame.cappedCheck:SetChecked(F.db.hideCapped and true or false)
-  frame.bankCheck:SetChecked(F.db.includeBank ~= false)
-  local list, rep = BuildList()
-  local best
+-- The cheapest way to a goal, as many of each as the cuts allow: view "tickets" (need = tickets) or "rep"
+-- (need = reputation). Each turn-in adds 100 reputation, so a tier stops when its cut is reached either way.
+-- Marks e.plan / e.planCount; returns { count, cost, got, need, short }.
+function D.Plan(list, view, need, rep)
+  local p = { count = 0, cost = 0, got = 0, need = need }
   for _, e in ipairs(list) do
-    if not e.capped and e.perTicket then
-      best = e
+    e.plan, e.planCount = nil, nil
+  end
+  if not need or need <= 0 then
+    return p
+  end
+  rep = rep or 0
+  local key = view == "rep" and "perRep" or "perTicket"
+  for _, e in ipairs(list) do
+    if p.got >= need or p.count >= PLAN_MAX then
+      break
+    end
+    if e[key] and e.perTurnIn then
+      local gain = view == "rep" and e.rep or e.tickets
+      local n = math.ceil((need - p.got) / gain)
+      if e.kind == "turnin" then
+        local left = e.cap and math.ceil((e.cap - rep) / TURNIN_REP) or n
+        n = math.min(n, math.max(0, left))
+      end
+      n = math.min(n, PLAN_MAX - p.count)
+      if n > 0 then
+        e.plan, e.planCount = true, n
+        p.count, p.cost, p.got = p.count + n, p.cost + e.perTurnIn * n, p.got + gain * n
+        rep = rep + e.rep * n
+      end
+    end
+  end
+  p.short = p.got < need
+  return p
+end
+
+-------------------------------------------------------------------------------
+-- Where and when
+-------------------------------------------------------------------------------
+
+local function DayStart(y, m, d)
+  return time({ year = y, month = m, day = d, hour = 0, min = 0, sec = 0 })
+end
+
+-- The rule: the month's first Friday it arrives, the Monday after it opens, a week later it's gone; the sites
+-- alternate from RULE_FROM.
+local function RuleFor(y, m)
+  local friday
+  for d = 1, 7 do
+    if date("*t", DayStart(y, m, d) + 43200).wday == 6 then
+      friday = d
       break
     end
   end
-  local repText = rep and string.format("DMF reputation %d", rep) or "DMF reputation unknown"
-  if not AH.API() then
-    frame.summary:SetText("|cffff8080Auctionator's API was not found: no prices.|r   |cffaaaaaa" .. repText .. "|r")
-  elseif best then
-    frame.summary:SetText(string.format("Best: |cffffffff%s|r at %s per ticket  (%d for %d tickets = %s)   "
-      .. "|cffaaaaaa%s|r", best.name, Money(best.perTicket), best.qty, best.tickets, Money(best.perTurnIn), repText))
-  else
-    frame.summary:SetText("No Auctionator prices for these items yet: scan the AH or use \"Search all on AH\".   "
-      .. "|cffaaaaaa" .. repText .. "|r")
+  local setup = DayStart(y, m, friday)
+  local open = DayStart(y, m, friday + 3)
+  local close = DayStart(y, m, friday + 10)
+  local months = (y * 12 + m) - (RULE_FROM.year * 12 + RULE_FROM.month)
+  local site = months % 2 == 0 and RULE_FROM.site or (RULE_FROM.site == "elwynn" and "mulgore" or "elwynn")
+  return { site = site, setup = setup, open = open, close = close, source = "expected" }
+end
+
+local function NextMonth(y, m)
+  if m == 12 then
+    return y + 1, 1
   end
-  for i, r in ipairs(rows) do
-    local e = list[i]
-    r.entry = e
-    if not e then
-      r:Hide()
-    else
-      r:Show()
-      local dim = e.capped
-      local function c(s)
-        return dim and ("|cff707070" .. s .. "|r") or s
+  return y, m + 1
+end
+
+local function CalTime(t)
+  if not Lib.Readable(t) then
+    return nil
+  end
+  local y, m, d = Lib.Plain(t.year), Lib.Plain(t.month), Lib.Plain(t.monthDay)
+  if y and m and d then
+    return time({ year = y, month = m, day = d, hour = Lib.Plain(t.hour) or 0, min = Lib.Plain(t.minute) or 0,
+      sec = 0 })
+  end
+end
+
+-- The calendar's Faire runs in this month and the next: { { site, open, close } }, or nil when it can't say.
+local calendar = { at = -1e9 }
+local function ReadCalendar()
+  local C = C_Calendar
+  local now = C_DateAndTime and C_DateAndTime.GetCurrentCalendarTime
+    and Lib.Call(C_DateAndTime.GetCurrentCalendarTime)
+  if not (C and C.GetMonthInfo and C.GetNumDayEvents and C.GetDayEvent and Lib.Readable(now)) then
+    return nil
+  end
+  local shown = Lib.Call(C.GetMonthInfo, 0)
+  if not Lib.Readable(shown) or not shown.year or not shown.month then
+    return nil
+  end
+  local base = (Lib.Plain(now.year) * 12 + Lib.Plain(now.month)) - (shown.year * 12 + shown.month)
+  local runs, any = {}, false
+  for k = 0, 1 do
+    local offset = base + k
+    local info = Lib.Call(C.GetMonthInfo, offset)
+    local days = Lib.Readable(info) and Lib.Plain(info.numDays) or 0
+    for day = 1, days do
+      local n = Lib.Call(C.GetNumDayEvents, offset, day) or 0
+      if n > 0 then
+        any = true
       end
-      r.rank:SetText(c(tostring(i)))
-      r.icon:SetTexture(e.icon or 134400)
-      r.icon:SetDesaturated(dim)
-      r.item:SetText(dim and c(e.name) or (e == best and ("|cff00ff00" .. e.name .. "|r") or e.name))
-      r.turnin:SetText(c(string.format("%d > %d%s", e.qty, e.tickets, e.learned and "" or "*")))
-      r.unit:SetText(e.unit and c(Money(e.unit)) or "|cff808080no price|r")
-      r.ticket:SetText(e.perTicket and c(Money(e.perTicket)) or "|cff808080--|r")
-      local seen = e.age == nil and "-" or (e.age == 0 and "today" or (e.age .. "d"))
-      r.seen:SetText(c(seen))
-      r.have:SetText(c(e.have > 0 and (e.have >= e.qty and ("|cff00ff00" .. e.have .. "|r") or tostring(e.have)) or "-"))
-      r.tier:SetText(c(e.capped and ("T" .. e.t.tier .. " cap") or ("T" .. e.t.tier)))
+      for i = 1, n do
+        local e = Lib.Call(C.GetDayEvent, offset, day, i)
+        if Lib.Readable(e) and Lib.Plain(e.calendarType) == "HOLIDAY" then
+          local site = HOLIDAYS[Lib.Plain(e.eventID) or 0] or TEXTURES[Lib.Plain(e.iconTexture) or 0]
+          if not site then
+            local title = Lib.Str(e.title)
+            if title and title:find("Darkmoon") then
+              site = "elwynn" -- (named but not placed: see below)
+              e.unplaced = true
+            end
+          end
+          if site then
+            local open, close = CalTime(e.startTime), CalTime(e.endTime)
+            local key = (open or 0) .. ":" .. site
+            if open and close and not runs[key] then
+              runs[key] = true
+              runs[#runs + 1] = { site = site, open = open, close = close, source = "calendar",
+                unplaced = e.unplaced }
+            end
+          end
+        end
+      end
     end
   end
+  if not any then
+    return nil -- (the calendar hasn't loaded its events yet)
+  end
+  table.sort(runs, function(a, b)
+    return a.open < b.open
+  end)
+  return runs
 end
 
-function F:Toggle(show)
-  if not frame then
-    CreateWindow()
+-- The Faire now or next: { state "open" / "setup" / "soon", site (SITES key), open, close, setup, source }.
+function D.Faire()
+  local now = time()
+  if GetTime() - calendar.at > CALENDAR_STALE then
+    calendar.at = GetTime()
+    calendar.runs = ReadCalendar()
+    if not calendar.runs and C_Calendar and C_Calendar.OpenCalendar then
+      Lib.Call(C_Calendar.OpenCalendar) -- (asks for the events; CALENDAR_UPDATE_EVENT_LIST reads them again)
+    end
   end
-  if show == nil then
-    show = not frame:IsShown()
+  local pick
+  for _, r in ipairs(calendar.runs or {}) do
+    if r.close > now then
+      pick = { site = r.site, open = r.open, close = r.close, setup = r.open - 3 * 86400, source = "calendar" }
+      if r.unplaced then
+        pick.site = RuleFor(tonumber(date("%Y", r.open)), tonumber(date("%m", r.open))).site
+      end
+      break
+    end
   end
-  frame:SetShown(show)
+  if not pick then
+    local t = date("*t", now)
+    pick = RuleFor(t.year, t.month)
+    if pick.close <= now then
+      pick = RuleFor(NextMonth(t.year, t.month))
+    end
+  end
+  pick.state = now >= pick.open and "open" or now >= pick.setup and "setup" or "soon"
+  pick.siteInfo = SITES[pick.site]
+  local map = C_Map and C_Map.GetMapInfo and Lib.Call(C_Map.GetMapInfo, pick.siteInfo.map)
+  pick.zone = Lib.Readable(map) and Lib.Str(map.name) or pick.siteInfo.zone
+  return pick
 end
 
-function F:Forget()
-  wipe(Learned())
-  self:Print("learned counts cleared; using the built-in table.")
-  Refresh()
+local function Days(seconds)
+  local d = math.floor(seconds / 86400)
+  if d >= 1 then
+    return ("%d day%s"):format(d, d == 1 and "" or "s")
+  end
+  local h = math.max(1, math.floor(seconds / 3600))
+  return ("%d hour%s"):format(h, h == 1 and "" or "s")
+end
+
+-- The Faire's last day: the calendar closes it early on a Monday morning, which is still Sunday's Faire.
+local function LastDay(close)
+  return close - 6 * 3600
+end
+
+-- One line: "Open now in Elwynn Forest (south of Goldshire) · closes in 3 days".
+function D.FaireText(f)
+  f = f or D.Faire()
+  local now = time()
+  local where = ("%s (%s)"):format(f.zone, f.siteInfo.spot)
+  local text
+  if f.state == "open" then
+    text = ("|cff40ff40Open now|r in %s · until %s (%s left)"):format(where, date("%a %d %b", LastDay(f.close)),
+      Days(f.close - now))
+  elseif f.state == "setup" then
+    text = ("|cffffd100Setting up|r in %s · opens in %s, %s"):format(where, Days(f.open - now),
+      date("%a %d %b", f.open))
+  else
+    text = ("Next: %s · %s to %s (in %s)"):format(where, date("%a %d %b", f.open), date("%a %d %b", LastDay(f.close)),
+      Days(f.open - now))
+  end
+  if f.source ~= "calendar" then
+    text = text .. " |cff909090(expected)|r"
+  end
+  return text
+end
+
+-- A map pin on the Faire.
+function D.Pin()
+  local f = D.Faire()
+  local s = f.siteInfo
+  if not (C_Map and C_Map.SetUserWaypoint and UiMapPoint and UiMapPoint.CreateFromCoordinates) then
+    F:Print(("the Faire: %s, %s (%.0f, %.0f)."):format(f.zone, s.spot, s.x * 100, s.y * 100))
+    return
+  end
+  local point = Lib.Call(UiMapPoint.CreateFromCoordinates, s.map, s.x, s.y)
+  if point and Lib.Call(C_Map.SetUserWaypoint, point) ~= false then
+    if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
+      Lib.Call(C_SuperTrack.SetSuperTrackedUserWaypoint, true)
+    end
+    F:Print(("map pin set on the Faire: %s, %s."):format(f.zone, s.spot))
+  end
 end
 
 -------------------------------------------------------------------------------
@@ -435,6 +584,36 @@ local function OnQuestProgress()
   end
 end
 
+-- The tickets a quest window pays: the currency (Forever), else the item.
+local function RewardTickets()
+  local nc = GetNumRewardCurrencies and Lib.Call(GetNumRewardCurrencies) or 0
+  for i = 1, nc do
+    local id = GetQuestCurrencyID and Lib.Call(GetQuestCurrencyID, "reward", i)
+    local amount
+    if C_QuestOffer and C_QuestOffer.GetQuestRewardCurrencyInfo then
+      local info = Lib.Call(C_QuestOffer.GetQuestRewardCurrencyInfo, "reward", i)
+      if Lib.Readable(info) then
+        id = id or Lib.Plain(info.currencyID)
+        amount = Lib.Plain(info.totalRewardAmount) or Lib.Plain(info.baseRewardAmount)
+      end
+    end
+    if not amount and GetQuestCurrencyInfo then
+      local _, _, a = Lib.Call(GetQuestCurrencyInfo, "reward", i)
+      amount = a
+    end
+    if id == TICKET_CURRENCY and amount and amount > 0 then
+      return amount
+    end
+  end
+  local n = GetNumQuestRewards and GetNumQuestRewards() or 0
+  for i = 1, n do
+    if Items.IDFromLink(GetQuestItemLink("reward", i)) == TICKET_ITEM then
+      local _, _, count = GetQuestItemInfo("reward", i)
+      return count
+    end
+  end
+end
+
 local function OnQuestComplete()
   if not pending then
     return
@@ -443,27 +622,28 @@ local function OnQuestComplete()
     pending = nil
     return
   end
-  local n = GetNumQuestRewards and GetNumQuestRewards() or 0
-  for i = 1, n do
-    local id = Items.IDFromLink(GetQuestItemLink("reward", i))
-    if id == TICKET_ID then
-      local _, _, count = GetQuestItemInfo("reward", i)
-      if count and count > 0 then
-        local t = byID[pending.id]
-        local learned = Learned()
-        local old = learned[pending.id]
-        learned[pending.id] = { qty = pending.qty, tickets = count }
-        if (not old and (t.qty ~= pending.qty or t.tickets ~= count))
-            or (old and (old.qty ~= pending.qty or old.tickets ~= count)) then
-          F:Print(string.format("learned %s: %d for %d tickets (was %d for %d).", t.name, pending.qty, count,
-            old and old.qty or t.qty, old and old.tickets or t.tickets))
-        end
-        Refresh()
-      end
-      break
+  local count = RewardTickets()
+  if count and count > 0 then
+    local t = byID[pending.id]
+    local learned = Learned()
+    local old = learned[pending.id]
+    learned[pending.id] = { qty = pending.qty, tickets = count }
+    if (not old and (t.qty ~= pending.qty or t.tickets ~= count))
+        or (old and (old.qty ~= pending.qty or old.tickets ~= count)) then
+      F:Print(("learned %s: %d for %d tickets (was %d for %d)."):format(t.name, pending.qty, count,
+        old and old.qty or t.qty, old and old.tickets or t.tickets))
     end
+    Notify()
+  else
+    F:Debug("quest complete for %s: no ticket reward read", tostring(pending.id))
   end
   pending = nil
+end
+
+function F:Forget()
+  wipe(Learned())
+  self:Print("learned counts cleared; using the built-in table.")
+  Notify()
 end
 
 -------------------------------------------------------------------------------
@@ -476,11 +656,10 @@ local function AddTooltipLine(tt, id)
   end
   local t = byID[id]
   local qty, tickets = TurnIn(t)
-  local _, link = ItemInfo(id)
-  local unit = AH.Price(id, link)
-  local text = string.format("Darkmoon: %d for %d ticket%s", qty, tickets, tickets == 1 and "" or "s")
-  if unit then
-    text = text .. " (" .. Money(unit * qty / tickets) .. " per ticket)"
+  local node = Cost(id)
+  local text = ("Darkmoon: %d for %d ticket%s"):format(qty, tickets, tickets == 1 and "" or "s")
+  if node and node.cost then
+    text = text .. " (" .. Lib.FormatMoney(math.floor(node.cost * qty / tickets + 0.5)) .. " per ticket)"
   end
   tt:AddLine(text, 0.82, 0.42, 1)
 end
@@ -492,8 +671,8 @@ local function InstallTooltip()
   end
   tooltipInstalled = true
   if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType then
-    -- (registered for the session: off, it returns at once; a hidden tooltip
-    -- table or id, in combat or an instance, is never read; errors caught)
+    -- (registered for the session: off, it returns at once; a hidden tooltip table or id, in combat or an
+    -- instance, is never read; errors caught)
     TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tt, data)
       if not F._active or (tt ~= GameTooltip and tt ~= ItemRefTooltip) then
         return
@@ -507,16 +686,6 @@ local function InstallTooltip()
       end
       ARLE.Debug.Call(F, AddTooltipLine, tt, id)
     end)
-  elseif GameTooltip.HasScript and GameTooltip:HasScript("OnTooltipSetItem") then
-    GameTooltip:HookScript("OnTooltipSetItem", function(tt)
-      if not F._active then
-        return
-      end
-      local _, link = tt:GetItem()
-      if type(link) == "string" and not Lib.IsSecret(link) then
-        ARLE.Debug.Call(F, AddTooltipLine, tt, Items.IDFromLink(link))
-      end
-    end)
   end
 end
 
@@ -524,48 +693,65 @@ end
 -- Lifecycle
 -------------------------------------------------------------------------------
 
--- Auctionator keeps every callback for the session (there is no unregister),
--- so it is registered once; OnDBUpdate returns true once it's registered,
--- and the callback does nothing while the feature is off.
+-- Auctionator keeps every callback for the session (there is no unregister), so it is registered once and does
+-- nothing while the feature is off.
 local dbHooked = false
 function F:OnEnable()
   InstallTooltip()
+  pending = nil
+  calendar.at = -1e9
   if not dbHooked and AH.API() then
     dbHooked = AH.OnDBUpdate(function()
       if F._active then
-        Refresh()
+        Notify()
       end
     end)
-  elseif not AH.API() then
-    self:Print("Auctionator API v1 not found; prices will be missing.")
   end
   self:On("QUEST_PROGRESS", OnQuestProgress)
   self:On("QUEST_COMPLETE", OnQuestComplete)
   self:On("GET_ITEM_INFO_RECEIVED", function(_, _, id)
     if id and byID[id] then
-      Refresh()
+      self:Debounce("dmf.items", 0.5, Notify)
     end
   end)
-  self:On("BAG_UPDATE_DELAYED", Refresh)
-  self:On("UPDATE_FACTION", Refresh)
+  self:On("BAG_UPDATE_DELAYED", function()
+    self:Debounce("dmf.bags", 0.5, Notify)
+  end)
+  self:On("UPDATE_FACTION", function()
+    self:Debounce("dmf.rep", 0.5, Notify)
+  end)
+  self:On("CURRENCY_DISPLAY_UPDATE", function()
+    self:Debounce("dmf.tickets", 0.5, Notify)
+  end)
+  self:On("CALENDAR_UPDATE_EVENT_LIST", function()
+    calendar.at = -1e9
+    self:Debounce("dmf.calendar", 1, Notify)
+  end)
+  self:On("AUCTION_HOUSE_SHOW", function()
+    if ns.DarkmoonTab then
+      ns.DarkmoonTab.Attach()
+    end
+  end)
   for _, t in ipairs(TURNINS) do
     ItemInfo(t.id) -- warm the item cache
+  end
+  if ns.DarkmoonTab then
+    ns.DarkmoonTab.Enable()
   end
 end
 
 function F:OnDisable()
-  if frame then
-    frame:Hide()
+  if ns.DarkmoonTab then
+    ns.DarkmoonTab.Disable()
   end
 end
 
 function F:OnOptionChanged()
-  Refresh()
+  Notify()
 end
 
--- The standalone Auctionator_DarkmoonTickets' data (account wide
--- DarkmoonTicketsDB: learned = { [itemID] = { qty, tickets } }, hideCapped,
--- includeBank, tooltip). Replaces ours; entries that don't fit are skipped.
+-- The standalone Auctionator_DarkmoonTickets' data (account wide DarkmoonTicketsDB: learned = { [itemID] = { qty,
+-- tickets } }, hideCapped, includeBank, tooltip). Replaces ours; entries that don't fit are skipped.
 function F:Import()
   local old = _G.DarkmoonTicketsDB
   if type(old) ~= "table" then
@@ -591,59 +777,66 @@ function F:Import()
   end
 end
 
-function F:main(rest)
-  rest = rest or ""
-  if rest == "" or rest == "show" then
-    self:Toggle()
-  else
-    self:Print("no command \"" .. rest .. "\". /arl dmf help lists them.")
-  end
-end
-
-local function PrintBest(n)
-  local list, rep = BuildList()
+local function PrintBest(view, n)
+  local all, st = D.Evaluate()
+  local list, key = D.Sorted(all, view)
   local shown = 0
-  F:Print(string.format("cheapest tickets from the last Auctionator scan%s:", rep and (" (DMF rep " .. rep .. ")") or ""))
+  F:Print(("cheapest %s%s:"):format(view == "rep" and "Darkmoon Faire reputation" or "Prize Tickets",
+    st and st.value and (" (reputation " .. st.value .. ")") or ""))
   for _, e in ipairs(list) do
-    if e.perTicket and not e.capped then
+    if e[key] and not (view ~= "rep" and e.capped) then
       shown = shown + 1
-      print(string.format("   %d. %s - %s per ticket (%d for %d, %s per turn-in)", shown, e.link or e.name,
-        Money(e.perTicket), e.qty, e.tickets, Money(e.perTurnIn)))
+      if e.kind == "deck" then
+        print(("   %d. %s (%s): %s per reputation, 150 a deck"):format(shown, e.link or e.name,
+          e.via == "cards" and "its 8 cards" or "the deck", Lib.FormatMoney(math.floor(e[key] + 0.5))))
+      else
+        print(("   %d. %s x%d: %s per %s (%d tickets, %s per turn-in)"):format(shown, e.link or e.name, e.qty,
+          Lib.FormatMoney(math.floor(e[key] + 0.5)), view == "rep" and "reputation" or "ticket", e.tickets,
+          Lib.FormatMoney(math.floor(e.perTurnIn + 0.5))))
+      end
       if shown >= n then
         break
       end
     end
   end
   if shown == 0 then
-    F:Print("no prices yet. Scan the AH with Auctionator first.")
+    F:Print("no prices yet: scan the auction house (Auctionator's full scan, or Snipes' Scan) first.")
+  end
+end
+
+function F:main(rest)
+  rest = rest or ""
+  if rest == "" or rest == "when" then
+    self:Print("Darkmoon Faire: " .. D.FaireText())
+  else
+    self:Print("no command \"" .. rest .. "\". /arl dmf help lists them.")
   end
 end
 
 F.commands = {
-  { name = "best", args = "[n]", help = "prints the n cheapest turn-ins to chat (default 5)", run = function(_, rest)
-    PrintBest(tonumber(rest) or 5)
+  { name = "best", args = "[n]", help = "prints the n cheapest turn-ins per ticket (default 5)", run = function(_, rest)
+    PrintBest("tickets", tonumber(rest) or 5)
   end },
+  { name = "rep", args = "[n]", help = "prints the n cheapest ways to reputation (default 5)", run = function(_, rest)
+    PrintBest("rep", tonumber(rest) or 5)
+  end },
+  { name = "pin", help = "puts a map pin on the Faire", run = function() D.Pin() end },
   { name = "learned", help = "ticket counts read from the quest window so far", always = true, run = function(self)
     local any = false
     for id, l in pairs(Learned()) do
       any = true
-      print(string.format("   %s: %d for %d tickets", byID[id] and byID[id].name or id, l.qty, l.tickets))
+      print(("   %s: %d for %d tickets"):format(byID[id] and byID[id].name or id, l.qty, l.tickets))
     end
     if not any then
       self:Print("nothing learned yet; counts update when you turn a quest in.")
     end
   end },
   { name = "forget", help = "clears those and goes back to the built-in numbers", run = function(self) self:Forget() end },
-  { name = "searchall", help = "searches all 21 items in Auctionator (AH open)", run = function() SearchAll() end },
 }
 
 function F:GetStatus()
-  local n = 0
-  for _ in pairs(Learned()) do
-    n = n + 1
-  end
-  return ("Active · %s · %d turn-in count%s learned from the quest window"):format(
-    AH.API() and "Auctionator prices in use" or "waiting for Auctionator", n, n == 1 and "" or "s")
+  local ok, text = pcall(D.FaireText)
+  return "Active · " .. (ok and text or "the Faire's dates aren't known yet")
 end
 
 ARLE:RegisterModule(F)

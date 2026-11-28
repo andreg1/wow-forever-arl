@@ -2,7 +2,7 @@
 ## Title: ARL Extensions: OpenMap
 ## Notes: Sharer Markers: guildmates and friends who share where they are show as diamonds with names on OpenMap, apart from your group.
 ## Author: aredpanda, andreg1
-## Version: 0.21.1
+## Version: 0.22.0
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
 ## OptionalDeps: OpenMap

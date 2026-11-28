@@ -1,23 +1,26 @@
 ## Interface: 16001, 120105, 120107
 ## Title: ARL Extensions: Auctionator
-## Notes: Darkmoon Tickets (Darkmoon Faire turn-ins by gold per Prize Ticket), plus Logistics and Snipes, in an ARL tab on the auction house (the cheapest supply camp reputation and Merchant's Favor; auctions below vendor price after a full scan).
+## Notes: The ARL tab on the auction house: Darkmoon (the Faire's whereabouts, the cheapest Prize Tickets and reputation), Logistics (the cheapest supply camp reputation and Merchant's Favor) and Snipes (auctions below vendor price), with one Auction House settings entry.
 ## Author: aredpanda, andreg1
-## Version: 0.21.1
+## Version: 0.22.0
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
 ## OptionalDeps: Auctionator, ItemTree
 ## LoadOnDemand: 1
 ## X-ARLE-Pack: Auctionator
 ## X-ARLE-Group: Auctionator
-## X-ARLE-Features: DarkmoonTickets, Logistics, Snipes
-## X-ARLE-Feature-DarkmoonTickets: title=Darkmoon Tickets; extends=Auctionator; cmd=dmf; default=off; replaces=Auctionator_DarkmoonTickets
-## X-ARLE-Feature-Logistics: title=Logistics; extends=Auctionator; cmd=logistics; default=off
-## X-ARLE-Feature-Snipes: title=Snipes; extends=Auctionator; cmd=snipes; default=off
+## X-ARLE-Features: AuctionHouse, DarkmoonTickets, Logistics, Snipes
+## X-ARLE-Feature-AuctionHouse: title=Auction House; extends=Auctionator; cmd=ah; default=off
+## X-ARLE-Feature-DarkmoonTickets: title=Darkmoon Faire; extends=Auctionator; cmd=dmf; default=off; replaces=Auctionator_DarkmoonTickets; hidden=1
+## X-ARLE-Feature-Logistics: title=Logistics; extends=Auctionator; cmd=logistics; default=off; hidden=1
+## X-ARLE-Feature-Snipes: title=Snipes; extends=Auctionator; cmd=snipes; default=off; hidden=1
 
-DarkmoonTickets.lua
 ARLTab.lua
 Logistics.lua
 LogisticsCrates.lua
 LogisticsTab.lua
 Snipes.lua
 SnipesTab.lua
+DarkmoonTickets.lua
+DarkmoonTab.lua
+AuctionHouse.lua

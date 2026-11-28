@@ -10,6 +10,9 @@
 --   ## X-ARLE-Feature-NewInForever: title=New in Forever; extends=Questie; cmd=new; default=off
 --
 -- default=off: the feature starts turned off until the player turns it on.
+-- hidden=1: the feature isn't listed in the panel; another entry shows its
+-- switch and settings on its own pages (the Auction House entry's parts).
+-- Its commands, data and error reports work as usual.
 --
 -- A feature is what the player turns on and off. Its file calls
 -- ARLE:RegisterModule(def) (or ARLE.Modules:NewFeature(def)); OnEnable runs
@@ -596,6 +599,7 @@ function ARLE:Scan()
           cmd = spec.cmd,
           replaces = spec.replaces,
           off = spec.default == "off",
+          hidden = spec.hidden == "1", -- (a part shown inside another entry's pages, not in the list)
           version = version,
           loadError = old and old.loadError,
         }
@@ -708,6 +712,10 @@ function ARLE:GetGroups()
     end
     seen[id] = true
     local def = self.modules[id]
+    local cat = self.catalog[id]
+    if (cat and cat.hidden) or (def and def.hidden) then
+      return -- e.g. the Auction House entry's parts: their settings are its pages
+    end
     if def and def.visible then
       local ok, show = pcall(def.visible)
       if not (ok and show) then

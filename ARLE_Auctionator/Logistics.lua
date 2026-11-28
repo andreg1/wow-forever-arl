@@ -541,19 +541,27 @@ function W.Standing()
   if not camp then
     return nil
   end
-  local s = { id = camp, name = CAMP_NAMES[camp] }
+  return W.FactionStanding(camp, CAMP_NAMES[camp])
+end
+
+-- Any faction's standing (Darkmoon Tickets reads the Faire's): { id, name, reaction, label, nextLabel, into, size,
+-- toNext, value (absolute, Neutral = 0) }.
+function W.FactionStanding(id, fallbackName)
+  local camp = id
+  local s = { id = camp, name = fallbackName }
   local d = C_Reputation and C_Reputation.GetFactionDataByID and Lib.Call(C_Reputation.GetFactionDataByID, camp)
   if Lib.Readable(d) and d.reaction then
     s.name = Lib.Str(d.name) or s.name
     s.reaction = d.reaction
     local low, high, value = d.currentReactionThreshold, d.nextReactionThreshold, d.currentStanding
+    s.value = value
     if low and high and value then
       s.into, s.size = value - low, high - low
     end
   elseif GetFactionInfoByID then
     local name, _, reaction, low, high, value = Lib.Call(GetFactionInfoByID, camp)
     if reaction then
-      s.name, s.reaction = Lib.Str(name) or s.name, reaction
+      s.name, s.reaction, s.value = Lib.Str(name) or s.name, reaction, value
       if low and high and value then
         s.into, s.size = value - low, high - low
       end
