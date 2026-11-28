@@ -1,13 +1,8 @@
--- Logistics: the Logistics tab on the auction house (see Logistics.lua for the
--- data, the scan and the costs, LogisticsCrates.lua for the crates; this file
--- only draws them). Two views on one tab: Writs (reputation) and Crates
--- (Merchant's Favor), switched at the top left; one Scan prices both.
---
--- The tab is added through LibAHTab-1-0 (the LibStub library Auctionator ships
--- for other addons' tabs: CreateTab / GetButton), the first time the auction
--- house opens with the feature on; it can't be taken out again, so turning the
--- feature off hides its button and frame. Our frame sits on AuctionHouseFrame
--- by its own anchors; nothing is written on Blizzard's frames.
+-- Logistics: its panel in the ARL tab on the auction house (ARLTab.lua holds
+-- the tab and switches panels; see Logistics.lua for the data, the scan and the
+-- costs, LogisticsCrates.lua for the crates; this file only draws them). Two
+-- views in the panel: Writs (reputation) and Crates (Merchant's Favor),
+-- switched at the top left; one Scan prices both.
 local ADDON, ns = ...
 local ARLE = _G.ARLExtensions
 if not ARLE then
@@ -16,7 +11,6 @@ end
 local Lib, Items, Kit, Skin = ARLE.Lib, ARLE.Lib.Items, ARLE.UI.Kit, ARLE.Skin
 local AH = ARLE.Bridge.Auctionator
 
-local TAB_ID = "ARLLogistics"
 local ROW_H = 32
 local COLS = { -- x, width, justify
   rank = { 2, 20, "RIGHT" },
@@ -799,13 +793,9 @@ local function Tip(widget, title, text)
   F():Script(widget, "OnLeave", GameTooltip_Hide)
 end
 
-local function Create()
-  local f = CreateFrame("Frame", "ARLELogisticsTab", AuctionHouseFrame)
-  f:SetPoint("TOPLEFT", AuctionHouseFrame, "TOPLEFT", 4, -62)
-  f:SetPoint("BOTTOMRIGHT", AuctionHouseFrame, "BOTTOMRIGHT", -4, 27)
-  f:Hide() -- (LibAHTab shows it when the tab is picked)
+local function Create(parent)
+  local f = CreateFrame("Frame", "ARLELogisticsPanel", parent)
   frame = f
-  Skin:Panel(f)
 
   -- top left: the two views
   local bar = CreateFrame("Frame", nil, f)
@@ -972,47 +962,18 @@ local function Create()
   return f
 end
 
--- The first time the auction house opens with the feature on: the tab.
-function T.Attach()
-  if frame or not F()._active then
-    return
-  end
-  local lib = LibStub and LibStub("LibAHTab-1-0", true)
-  if not (lib and AuctionHouseFrame) then
-    F():Debug("no LibAHTab-1-0 (Auctionator's) or no AuctionHouseFrame: no tab")
-    return
-  end
-  local f = Create()
-  local ok, err = pcall(lib.CreateTab, lib, TAB_ID, f, "Logistics", "Logistics")
-  if not ok then
-    F():Debug("LibAHTab CreateTab failed: %s", tostring(err))
-    return
-  end
-  F():Debug("Logistics tab added")
-end
+ns.ARLTab.Register({ id = "logistics", title = "Logistics", order = 1, width = 90, feature = W.F,
+  tip = "Your supply camp: Craftsman's Writs by gold per reputation, Waylaid Crates by gold per Merchant's Favor.",
+  build = Create })
 
-local function Button()
-  local lib = LibStub and LibStub("LibAHTab-1-0", true)
-  if lib and lib.DoesIDExist and lib:DoesIDExist(TAB_ID) then
-    return lib:GetButton(TAB_ID)
-  end
+function T.Attach()
+  ns.ARLTab.Attach()
 end
 
 function T.Enable()
-  local b = Button()
-  if b then
-    b:Show()
-  elseif AuctionHouseFrame and AuctionHouseFrame:IsShown() then
-    T.Attach()
-  end
+  ns.ARLTab.Update()
 end
 
 function T.Disable()
-  local b = Button()
-  if b then
-    b:Hide()
-  end
-  if frame then
-    frame:Hide()
-  end
+  ns.ARLTab.Update(W.F)
 end
