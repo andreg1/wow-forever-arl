@@ -211,8 +211,8 @@ RealRefresh = function()
     frame.status:SetText(("Reading the full scan: %d / %d auctions"):format(job.index or 0,
       math.max(job.total or 0, 1)))
   elseif s.at and s.at > 0 then
-    frame.status:SetText(("Last full scan %s ago · %d auctions read"):format(Lib.FormatDuration(time() - s.at),
-      s.total or 0))
+    frame.status:SetText(("Last full scan %s ago · %s auctions read%s"):format(Lib.FormatDuration(time() - s.at),
+      tostring(s.partial or s.total or 0), s.partial and (" of " .. (s.total or 0) .. " |cffff9040(partial)|r") or ""))
   else
     frame.status:SetText("|cffff9040No full scan read yet|r")
   end
@@ -277,8 +277,8 @@ local function Create(parent)
     end
     RealRefresh()
   end)
-  Tip(f.readBtn, "Read last scan", "Reads Auctionator's last full scan again (it's done by itself when a full scan "
-    .. "finishes). Only this session's scan, with the auction house open.")
+  Tip(f.readBtn, "Read last scan", "Snipes reads a full scan by itself as its auctions arrive. This reads the list "
+    .. "again while the game still holds it (it may let it go soon after the scan).")
   f.shopBtn = Kit.Button(f, "Shop all", 90)
   f.shopBtn:SetPoint("RIGHT", f.readBtn, "LEFT", -6, 0)
   F():Script(f.shopBtn, "OnClick", function()

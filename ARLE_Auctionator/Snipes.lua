@@ -4,13 +4,16 @@
 -- (SnipesTab.lua).
 --
 -- How: Auctionator's full scan asks the server for every auction at once
--- (C_AuctionHouse.ReplicateItems). We note the server's answer
--- (REPLICATE_ITEM_LIST_UPDATE, a Blizzard event) and wait for Auctionator to
--- say it has finished with it (Auctionator.API.v1.RegisterForDBUpdate, its
--- public API; it also fires after its smaller scans, which don't answer a
--- replicate request, so those are left alone). Then the same list is read
--- through Blizzard's API (GetNumReplicateItems / GetReplicateItemInfo /
--- GetReplicateItemLink), SLICE auctions a frame. Auctionator is all rights
+-- (C_AuctionHouse.ReplicateItems). The server's answer fires
+-- REPLICATE_ITEM_LIST_UPDATE (a Blizzard event), and we read the same list
+-- right then, alongside Auctionator, through Blizzard's API
+-- (GetNumReplicateItems / GetReplicateItemInfo / GetReplicateItemLink), SLICE
+-- auctions a frame. (0.21.0 waited for Auctionator's "done" callback first, and
+-- on Forever the list was already gone by then: GetNumReplicateItems said 0.)
+-- If the list changes or empties while we read, what was read is kept
+-- (marked partial). Auctionator's public "done" callback
+-- (Auctionator.API.v1.RegisterForDBUpdate) only starts a read when one is
+-- still owed. What happened is kept in `char.diag` for /arl report. Auctionator is all rights
 -- reserved: none of its code or internals is used. The vendor price is the
 -- item's own sell price (GetItemInfo's 11th value); an auction counts when
 -- count x vendor price - buyout >= the minimum profit (buyout only, never
@@ -34,7 +37,6 @@ local RETRIES = 3 -- passes over auctions whose item data wasn't loaded
 local RETRY_WAIT = 1.5 -- seconds between those passes
 local MAX_ROWS = 300 -- items kept
 local MAX_AUCTIONS = 25 -- auctions kept per item
-local FALLBACK_WAIT = 90 -- seconds after the server's answer before reading it without Auctionator's word
 
 local profitValues = {
   { value = 1, label = "Any profit" },
@@ -120,8 +122,20 @@ local function MyNames()
   return full, full and full:match("^(%S+)")
 end
 
+local function Diag()
+  local d = type(F.char.diag) == "table" and F.char.diag or {}
+  F.char.diag = d
+  return d
+end
+
 local function Finish(reason)
   job.running = false
+  Diag().lastEnd = ("%s %s (%d of %d read)"):format(date("%H:%M:%S"), tostring(reason), job.index or 0,
+    job.total or 0)
+  if reason == "partial" then
+    job.partial = true
+    reason = "done"
+  end
   if reason ~= "done" then
     job.last = "stopped: " .. tostring(reason)
     F:Debug("read stopped: %s", tostring(reason))
@@ -167,8 +181,10 @@ local function Finish(reason)
   for _, row in ipairs(rows) do
     profit = profit + row.profit
   end
-  job.last = ("%d items in %d auctions below vendor price, %s profit"):format(#rows, #job.hits,
-    Lib.FormatMoney(profit))
+  s.partial = job.partial and job.index or nil
+  job.last = ("%d items in %d auctions below vendor price, %s profit%s"):format(#rows, #job.hits,
+    Lib.FormatMoney(profit), job.partial and (" (the list went away after %d of %d auctions)"):format(job.index,
+    job.total) or "")
   F:Debug("read done: %d auctions read, %s, %d without item data", job.total, job.last, #job.retry)
   if F.db.chat ~= false then
     if #rows > 0 then
@@ -213,7 +229,8 @@ local function Retry()
     return
   end
   if Lib.Call(C_AuctionHouse.GetNumReplicateItems) ~= job.total then
-    Finish("the auction list changed")
+    F:Debug("the list changed before the second pass: keeping what was read")
+    Finish("partial")
     return
   end
   local list = job.retry
@@ -235,6 +252,11 @@ end
 
 Step = function()
   if not job.running then
+    return
+  end
+  if Lib.Call(C_AuctionHouse.GetNumReplicateItems) ~= job.total then
+    F:Debug("the list changed or went away at %d of %d: keeping what was read", job.index, job.total)
+    Finish("partial")
     return
   end
   local minProfit = math.max(1, tonumber(F.db.minProfit) or 100)
@@ -267,11 +289,14 @@ function S.Read(why)
     return false, "this client has no full scan list"
   end
   local n = Lib.Plain(Lib.Call(C_AuctionHouse.GetNumReplicateItems)) or 0
+  Diag().lastTry = ("%s %s: %d auctions"):format(date("%H:%M:%S"), tostring(why), n)
   if n <= 0 then
-    return false, "no full scan to read: run one in Auctionator (its Auctionator tab)"
+    return false, "the game holds no full scan list right now: run a full scan in Auctionator (its Auctionator "
+      .. "tab) with Snipes on, and it's read as the auctions arrive"
   end
   pending = nil
   job.running, job.index, job.total, job.hits, job.retry, job.tries = true, 0, n, {}, {}, 0
+  job.partial = false
   F:Debug("reading %d auctions (%s)", n, tostring(why))
   Notify()
   F:After(0, Step)
@@ -291,21 +316,27 @@ function F:OnEnable()
   wipe(sellMemo)
   if not dbHooked and AH.API() then
     dbHooked = AH.OnDBUpdate(function()
-      if F._active and pending then
-        F:Debug("Auctionator finished its full scan: reading it")
-        S.Read("Auctionator's full scan")
+      if F._active and pending and not job.running then
+        F:Debug("Auctionator finished its full scan and ours wasn't read yet: reading it")
+        S.Read("Auctionator's done")
       end
     end)
   end
   self:On("REPLICATE_ITEM_LIST_UPDATE", function()
+    local n = Lib.Plain(Lib.Call(C_AuctionHouse.GetNumReplicateItems)) or 0
+    Diag().lastAnswer = ("%s %d auctions"):format(date("%H:%M:%S"), n)
+    F:Debug("the server answered a full scan (%d auctions): reading it now", n)
+    if job.running and job.total == n then
+      return -- (the same answer again)
+    end
+    if job.running then
+      Finish("a new full scan")
+    end
     pending = GetTime()
-    F:Debug("the server answered a full scan: waiting for Auctionator")
-    -- (without Auctionator's word, read it anyway after a while)
-    self:After(FALLBACK_WAIT, function()
-      if pending and GetTime() - pending >= FALLBACK_WAIT - 1 then
-        S.Read("no word from Auctionator")
-      end
-    end)
+    local ok, err = S.Read("the server's answer")
+    if not ok then
+      F:Debug("can't read the server's answer: %s", tostring(err))
+    end
   end)
   self:On("AUCTION_HOUSE_SHOW", function()
     if ns.SnipesTab then
@@ -383,8 +414,11 @@ end
 
 function F:ReportDetails()
   local s = Store()
+  local d = type(F.char.diag) == "table" and F.char.diag or {}
   return {
     ("Auctionator API: %s, DB callback: %s"):format(AH.API() and "yes" or "no", dbHooked and "yes" or "no"),
+    ("Server's last full scan answer: %s"):format(tostring(d.lastAnswer or "none seen")),
+    ("Last read try: %s · last end: %s"):format(tostring(d.lastTry or "-"), tostring(d.lastEnd or "-")),
     ("Replicate list now: %s auctions"):format(tostring(C_AuctionHouse and Lib.Call(C_AuctionHouse.GetNumReplicateItems))),
     ("Last read: %s, %d auctions, %d items, %d without item data"):format(
       s.at and s.at > 0 and date("%Y-%m-%d %H:%M", s.at) or "never", s.total or 0, #s.rows, s.skipped or 0),

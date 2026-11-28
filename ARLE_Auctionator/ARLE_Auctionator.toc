@@ -2,7 +2,7 @@
 ## Title: ARL Extensions: Auctionator
 ## Notes: Darkmoon Tickets (Darkmoon Faire turn-ins by gold per Prize Ticket), plus Logistics and Snipes, in an ARL tab on the auction house (the cheapest supply camp reputation and Merchant's Favor; auctions below vendor price after a full scan).
 ## Author: aredpanda, andreg1
-## Version: 0.21.0
+## Version: 0.21.1
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
 ## OptionalDeps: Auctionator, ItemTree
