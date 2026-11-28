@@ -293,6 +293,43 @@ local function Shop(entries)
   end
 end
 
+-- The plan as a buy list (Buyer.lua): the papers, and what to buy for the items (a craft's materials).
+local function BuyPlan(entries)
+  local B = ns.Buyer
+  if not B then
+    return
+  end
+  local into = {}
+  for _, e in ipairs(entries) do
+    local copies = e.planCount or 1
+    if e.c then
+      if e.crateCost and e.crateCost > 0 then
+        B.Add(into, e.c.id, copies, e.price)
+      elseif e.held then
+        B.Add(into, e.c.id, copies - e.held, e.price)
+      end
+      if e.need and e.need > 0 then
+        B.Collect(e.node, e.need * copies, into)
+      end
+    elseif e.receipt then
+      -- (the receipt itself costs Favor, not gold: only the empty crate is bought)
+      B.Collect(e.node, copies - (e.haveItem or 0), into)
+    else
+      if e.writCost and e.writCost > 0 then
+        B.Add(into, e.w.id, 1, e.writPrice)
+      end
+      B.Collect(e.node, e.need, into)
+    end
+  end
+  local n, most = B.Load("Logistics", into)
+  if n == 0 then
+    F():Print("nothing to buy in that plan (or no price for it yet: scan first).")
+  else
+    F():Print(("buy list: %d items, %s at most. Press Buy next (top right) for each purchase."):format(n,
+      Money(most)))
+  end
+end
+
 -------------------------------------------------------------------------------
 -- The Favor goal: something the camp's vendors sell
 -------------------------------------------------------------------------------
@@ -863,9 +900,23 @@ local function Create(parent)
   end)
   Tip(f.shopBtn, "Shop the plan", "Searches Auctionator's Shopping tab for what the plan buys (writs or crates, and "
     .. "the items, or the materials of the ones you craft).")
+  f.buyBtn = Kit.Button(f, "Buy the plan", 100)
+  f.buyBtn:SetPoint("RIGHT", f.shopBtn, "LEFT", -6, 0)
+  F():Script(f.buyBtn, "OnClick", function()
+    local picked = {}
+    for _, e in ipairs(list) do
+      if e.plan then
+        picked[#picked + 1] = e
+      end
+    end
+    BuyPlan(picked)
+  end)
+  Tip(f.buyBtn, "Buy the plan", "Puts what the plan buys in the buy list, in the quantities it needs; then each "
+    .. "press of Buy next (top right, or its key) buys the next one, never over the plan's price plus the margin "
+    .. "set under Settings > Buying.")
   f.plan = Kit.Text(f, "GameFontNormal")
   f.plan:SetPoint("TOPLEFT", 10, -54)
-  f.plan:SetPoint("RIGHT", f.shopBtn, "LEFT", -8, 0)
+  f.plan:SetPoint("RIGHT", f.buyBtn, "LEFT", -8, 0)
   f.plan:SetWordWrap(false)
 
   -- column headers (their words follow the view)

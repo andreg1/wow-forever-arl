@@ -1,5 +1,6 @@
 -- The ARL tab on the auction house: one tab that holds the pack's panels
--- (Logistics, Snipes), switched with a strip at its top. Each feature
+-- (Logistics, Snipes, Darkmoon), switched with a strip at its top, and the
+-- buy list's bar (Buyer.lua) at the strip's right. Each feature
 -- registers its panel (ns.ARLTab.Register); a panel's button shows only while
 -- its feature is on, and the tab's button only while one of them is.
 --
@@ -144,6 +145,12 @@ local function Create()
     Kit.SimpleTooltip(self, "Settings", "Opens the Auction House settings in /arl, on this panel's page.")
   end)
   scriptOwner:Script(cog, "OnLeave", GameTooltip_Hide)
+  -- the buy list's bar (Buyer.lua), left of the settings, while it has lines
+  if ns.Buyer then
+    local buy = ns.Buyer.BuildBar(f, scriptOwner)
+    buy:SetWidth(340)
+    buy:SetPoint("RIGHT", cog, "LEFT", -10, 0)
+  end
   local rule = Kit.Rule(f, 0.15)
   rule:SetPoint("TOPLEFT", 6, -STRIP_H - 1)
   rule:SetPoint("TOPRIGHT", -6, -STRIP_H - 1)

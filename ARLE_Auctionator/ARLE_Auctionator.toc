@@ -1,8 +1,8 @@
 ## Interface: 16001, 120105, 120107
 ## Title: ARL Extensions: Auctionator
-## Notes: The ARL tab on the auction house: Darkmoon (the Faire's whereabouts, the cheapest Prize Tickets and reputation), Logistics (the cheapest supply camp reputation and Merchant's Favor) and Snipes (auctions below vendor price), with one Auction House settings entry.
+## Notes: The ARL tab on the auction house: Darkmoon (the Faire's whereabouts, the cheapest Prize Tickets and reputation), Logistics (the cheapest supply camp reputation and Merchant's Favor) and Snipes (auctions below vendor price), a Buy next button for their plans, and one Auction House settings entry.
 ## Author: aredpanda, andreg1
-## Version: 0.22.0
+## Version: 0.23.0
 ## Group: ARLExtensions
 ## Dependencies: ARLExtensions
 ## OptionalDeps: Auctionator, ItemTree
@@ -16,6 +16,7 @@
 ## X-ARLE-Feature-Snipes: title=Snipes; extends=Auctionator; cmd=snipes; default=off; hidden=1
 
 ARLTab.lua
+Buyer.lua
 Logistics.lua
 LogisticsCrates.lua
 LogisticsTab.lua

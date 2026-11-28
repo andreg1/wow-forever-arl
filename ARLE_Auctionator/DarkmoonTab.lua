@@ -200,6 +200,36 @@ local function Shop(entries)
   end
 end
 
+-- The plan as a buy list (Buyer.lua): the items (less those you have), a craft's materials, or a deck's cards.
+local function BuyPlan(entries)
+  local B = ns.Buyer
+  if not B then
+    return
+  end
+  local into = {}
+  for _, e in ipairs(entries) do
+    local n = e.planCount or 1
+    if e.kind == "deck" then
+      if e.via == "cards" then
+        for _, c in ipairs(e.cards) do
+          B.Collect(c.node, n - (c.have or 0), into)
+        end
+      else
+        B.Collect(e.node, n - (e.have or 0), into)
+      end
+    else
+      B.Collect(e.node, (e.qty or 1) * n - (e.have or 0), into)
+    end
+  end
+  local count, most = B.Load("Darkmoon", into)
+  if count == 0 then
+    F():Print("nothing to buy in that plan.")
+  else
+    F():Print(("buy list: %d items, %s at most. Press Buy next (top right) for each purchase."):format(count,
+      Lib.FormatMoney(math.floor(most + 0.5))))
+  end
+end
+
 -------------------------------------------------------------------------------
 -- The ticket goal: a prize
 -------------------------------------------------------------------------------
@@ -577,9 +607,23 @@ local function Create(parent)
   end)
   Tip(f.shopBtn, "Shop the plan", "Searches Auctionator's Shopping tab for what the plan buys (the items, the "
     .. "materials of the ones you craft, or a deck's cards).")
+  f.buyBtn = Kit.Button(f, "Buy the plan", 100)
+  f.buyBtn:SetPoint("RIGHT", f.shopBtn, "LEFT", -6, 0)
+  F():Script(f.buyBtn, "OnClick", function()
+    local picked = {}
+    for _, e in ipairs(list) do
+      if e.plan then
+        picked[#picked + 1] = e
+      end
+    end
+    BuyPlan(picked)
+  end)
+  Tip(f.buyBtn, "Buy the plan", "Puts what the plan buys in the buy list, in the quantities it needs; then each "
+    .. "press of Buy next (top right, or its key) buys the next one, never over the plan's price plus the margin "
+    .. "set under Settings > Buying.")
   f.plan = Kit.Text(f, "GameFontNormal")
   f.plan:SetPoint("TOPLEFT", 10, -78)
-  f.plan:SetPoint("RIGHT", f.shopBtn, "LEFT", -8, 0)
+  f.plan:SetPoint("RIGHT", f.buyBtn, "LEFT", -8, 0)
   f.plan:SetWordWrap(false)
 
   -- column headers

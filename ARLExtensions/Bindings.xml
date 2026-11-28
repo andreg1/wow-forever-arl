@@ -10,4 +10,7 @@
   </Binding>
   <Binding name="CLICK ARLE_SecureSoulstone:LeftButton" category="ADDONS">
   </Binding>
+  <!-- The auction house buy list's button, made by ARLE_Auctionator/Buyer.lua when the ARL tab opens. -->
+  <Binding name="CLICK ARLE_BuyNext:LeftButton" category="ADDONS">
+  </Binding>
 </Bindings>

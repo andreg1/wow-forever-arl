@@ -117,6 +117,8 @@ for key, spec in pairs(BUTTONS) do
     _G["BINDING_NAME_" .. S:Binding(key)] = spec.label
   end
 end
+-- (not a secure button: the auction house buy list's plain button, ARLE_Auctionator/Buyer.lua)
+_G["BINDING_NAME_CLICK ARLE_BuyNext:LeftButton"] = "Auction house: buy next"
 
 -- Made at load (login, never in combat). Hidden 1x1 buttons that answer key
 -- presses on the down edge only, so a press acts once; UseItem is shown by

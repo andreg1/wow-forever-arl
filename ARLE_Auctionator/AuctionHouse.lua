@@ -99,6 +99,19 @@ for _, part in ipairs(PARTS) do
   end
 end
 
+-- The buy list (Buyer.lua): its own page.
+local marginValues = {
+  { value = 0, label = "Not a copper more than planned" },
+  { value = 5, label = "Up to 5% more" },
+  { value = 10, label = "Up to 10% more" },
+  { value = 25, label = "Up to 25% more" },
+  { value = 50, label = "Up to 50% more" },
+}
+F.pages[#F.pages + 1] = { key = "buying", label = "Buying",
+  notes = "Buy the plan / Buy all fill a buy list; the Buy next button (or its key) buys it one press at a time." }
+F.options[#F.options + 1] = { key = "buyMargin", type = "select", page = "buying", cmd = "margin",
+  label = "Pay at most this much over the plan's price", values = marginValues, default = 10 }
+
 -- Characters that had parts on before this entry existed: on, once.
 function F:OnBind()
   if self.db.seen then
@@ -114,6 +127,9 @@ function F:OnBind()
 end
 
 function F:OnEnable()
+  if ns.Buyer then
+    ns.Buyer.Enable(self)
+  end
   local was = self.db.parts
   self.db.parts = nil
   local any = false
@@ -133,6 +149,9 @@ function F:OnEnable()
 end
 
 function F:OnDisable()
+  if ns.Buyer then
+    ns.Buyer.Disable()
+  end
   local was = {}
   for _, part in ipairs(PARTS) do
     if On(part.id) then
@@ -152,7 +171,16 @@ function F:GetStatus()
   for _, part in ipairs(PARTS) do
     words[#words + 1] = part.label .. (On(part.id) and " on" or " |cff999999off|r")
   end
-  return "Active · " .. table.concat(words, ", ")
+  local buy = ""
+  local B = ns.Buyer
+  if B and B.Active() then
+    buy = " · buy list: " .. (B.NextText())
+  end
+  return "Active · " .. table.concat(words, ", ") .. buy
+end
+
+function F:ReportDetails()
+  return ns.Buyer and ns.Buyer.Report() or {}
 end
 
 -- The page for an ARL tab panel (its `settings` key).

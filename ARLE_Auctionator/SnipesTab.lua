@@ -81,6 +81,27 @@ local function Shop(list)
   end
 end
 
+-- The rows as a buy list (Buyer.lua): every item listed under its vendor price, never at or over it.
+local function BuyAll(list)
+  local B = ns.Buyer
+  if not B then
+    return
+  end
+  local into = {}
+  for _, row in ipairs(list) do
+    if row.vendor and row.vendor > 1 and row.count and row.count > 0 then
+      into[row.id] = { qty = row.count, mat = 0, unit = row.best, hard = row.vendor - 1, key = row.key }
+    end
+  end
+  local n, most = B.Load("Snipes", into)
+  if n == 0 then
+    F():Print("nothing to buy there.")
+  else
+    F():Print(("buy list: %d items, %s at most (each under what a vendor pays). Press Buy next (top right) for "
+      .. "each purchase."):format(n, Money(most)))
+  end
+end
+
 local function ShowTip(r)
   local row = r.entry
   if not row then
@@ -325,6 +346,14 @@ local function Create(parent)
   end)
   Tip(f.checkBtn, "Check top", "Looks the top rows up one by one to see each auction under vendor price (and leave "
     .. "yours out). The scan alone only knows each item's cheapest price; this takes a second or two per item.")
+  f.buyBtn = Kit.Button(f, "Buy all", 80)
+  f.buyBtn:SetPoint("RIGHT", f.checkBtn, "LEFT", -6, 0)
+  F():Script(f.buyBtn, "OnClick", function()
+    BuyAll(shown)
+  end)
+  Tip(f.buyBtn, "Buy all", "Puts every item listed here in the buy list; then each press of Buy next (top right, "
+    .. "or its key) buys the next auction, only while it's under what a vendor pays. Check top first for the "
+    .. "exact auctions.")
   Tip(f.shopBtn, "Shop all", "Searches Auctionator's Shopping tab for every item listed here; buy the auctions "
     .. "under the vendor price shown.")
 
