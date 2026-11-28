@@ -1,5 +1,5 @@
 -- Snipes: its panel in the ARL tab on the auction house (ARLTab.lua holds the
--- tab; Snipes.lua reads the full scan; this file only draws the result). One
+-- tab; Snipes.lua scans and reads Auctionator's scans; this file only draws the result). One
 -- row per item selling below vendor price: the cheapest each, the vendor's
 -- price, what buying them all costs and what vendoring them pays. A click
 -- searches Auctionator's Shopping tab, right-click hides an item.
@@ -106,7 +106,11 @@ local function ShowTip(r)
   GameTooltip:AddDoubleLine("Buy them all", Money(row.cost), 1, 0.82, 0, 1, 1, 1)
   GameTooltip:AddDoubleLine("A vendor pays", Money(row.vendor * row.count), 1, 0.82, 0, 1, 1, 1)
   GameTooltip:AddDoubleLine("Profit", Money(row.profit), 1, 0.82, 0, 0.25, 1, 0.25)
-  GameTooltip:AddLine("From the last full scan: some may be sold already.", 0.6, 0.6, 0.6, true)
+  if row.approx then
+    GameTooltip:AddLine("Only its cheapest price was seen (its own auctions weren't looked up): there's at least "
+      .. "one at that price.", 1, 0.6, 0.25, true)
+  end
+  GameTooltip:AddLine("From the last scan: some may be sold already.", 0.6, 0.6, 0.6, true)
   GameTooltip:AddLine("Click: look it up in Auctionator · Shift-click: link · Right-click: hide this item", 0.5, 0.5,
     0.5, true)
   GameTooltip:Show()
@@ -179,8 +183,8 @@ local function Paint(r, row, i)
   r.rank:SetText(tostring(i))
   r.icon:SetTexture(Items.GetIcon and Items.GetIcon(row.id) or 134400)
   r.item:SetText(Colored(row))
-  r.sub:SetText(("%d auction%s · %d item%s"):format(row.n, row.n == 1 and "" or "s", row.count,
-    row.count == 1 and "" or "s"))
+  r.sub:SetText(row.approx and "at least 1 at this price" or ("%d auction%s · %d item%s"):format(row.n,
+    row.n == 1 and "" or "s", row.count, row.count == 1 and "" or "s"))
   r.best:SetText(Money(row.best))
   r.vendor:SetText(Money(row.vendor))
   r.cost:SetText(Money(row.cost))
@@ -193,7 +197,7 @@ RealRefresh = function()
   if not (frame and frame:IsVisible()) then
     return
   end
-  local job, s = S.job, S.Store()
+  local s = S.Store()
   local hidden = S.Hidden()
   local nHidden = 0
   for _ in pairs(hidden) do
@@ -207,14 +211,14 @@ RealRefresh = function()
       profit, cost = profit + row.profit, cost + row.cost
     end
   end
-  if job.running then
-    frame.status:SetText(("Reading the full scan: %d / %d auctions"):format(job.index or 0,
-      math.max(job.total or 0, 1)))
+  local doing = S.Doing()
+  if doing then
+    frame.status:SetText(doing)
   elseif s.at and s.at > 0 then
-    frame.status:SetText(("Last full scan %s ago · %s auctions read%s"):format(Lib.FormatDuration(time() - s.at),
-      tostring(s.partial or s.total or 0), s.partial and (" of " .. (s.total or 0) .. " |cffff9040(partial)|r") or ""))
+    frame.status:SetText(("Last scan %s ago · %d items checked%s"):format(Lib.FormatDuration(time() - s.at),
+      s.total or 0, s.partial and " |cffff9040(partial)|r" or ""))
   else
-    frame.status:SetText("|cffff9040No full scan read yet|r")
+    frame.status:SetText("|cffff9040Not scanned yet|r")
   end
   frame.summary:SetText(#shown > 0 and ("|cffffffff%d item%s|r · buy all for |cffffffff%s|r · vendor profit "
     .. "|cff40ff40%s|r"):format(#shown, #shown == 1 and "" or "s", Lib.FormatMoney(cost), Lib.FormatMoney(profit))
@@ -222,7 +226,7 @@ RealRefresh = function()
   frame.shopBtn:SetShown(#shown > 0)
   frame.unhide:SetShown(nHidden > 0)
   frame.unhide:SetText(("Unhide %d"):format(nHidden))
-  frame.readBtn:SetEnabled(not job.running)
+  frame.scanBtn:SetText(S.Busy() and "Stop" or "Scan")
 
   local child = frame.child
   child:SetWidth(frame.scroll:GetWidth())
@@ -237,9 +241,9 @@ RealRefresh = function()
   end
   child:SetHeight(math.max(1, #shown * ROW_H))
   if #shown == 0 then
-    frame.empty:SetText((s.at and s.at > 0) and "Nothing below vendor price in the last full scan."
-      or "Run a full scan in Auctionator (its Auctionator tab). When it finishes, every auction selling for less "
-      .. "than a vendor pays shows up here.")
+    frame.empty:SetText((s.at and s.at > 0) and "Nothing below vendor price in the last scan."
+      or "Click Scan (or run Auctionator's full scan): every auction selling for less than a vendor pays shows up "
+      .. "here.")
     frame.empty:Show()
   else
     frame.empty:Hide()
@@ -268,19 +272,23 @@ local function Create(parent)
   f.summary = Kit.Text(f, "GameFontHighlightSmall")
   f.summary:SetPoint("TOPLEFT", 10, -28)
 
-  f.readBtn = Kit.Button(f, "Read last scan", 120)
-  f.readBtn:SetPoint("TOPRIGHT", -10, -6)
-  F():Script(f.readBtn, "OnClick", function()
-    local ok, err = S.Read("button")
-    if not ok then
-      F():Print("can't: " .. tostring(err) .. ".")
+  f.scanBtn = Kit.Button(f, "Scan", 90)
+  f.scanBtn:SetPoint("TOPRIGHT", -10, -6)
+  F():Script(f.scanBtn, "OnClick", function()
+    if S.Busy() then
+      S.Stop("stopped")
+    else
+      local ok, err = S.Scan()
+      if not ok then
+        F():Print("can't scan: " .. tostring(err) .. ".")
+      end
     end
     RealRefresh()
   end)
-  Tip(f.readBtn, "Read last scan", "Snipes reads a full scan by itself as its auctions arrive. This reads the list "
-    .. "again while the game still holds it (it may let it go soon after the scan).")
+  Tip(f.scanBtn, "Scan", "Searches the whole auction house, then looks up every item selling below its vendor "
+    .. "price to find each cheap auction. Auctionator's own full scan fills this list too.")
   f.shopBtn = Kit.Button(f, "Shop all", 90)
-  f.shopBtn:SetPoint("RIGHT", f.readBtn, "LEFT", -6, 0)
+  f.shopBtn:SetPoint("RIGHT", f.scanBtn, "LEFT", -6, 0)
   F():Script(f.shopBtn, "OnClick", function()
     Shop(shown)
   end)

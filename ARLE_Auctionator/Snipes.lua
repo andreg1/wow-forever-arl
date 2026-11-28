@@ -1,29 +1,36 @@
--- Snipes: after every Auctionator full scan, the auctions whose buyout is
--- below what a vendor pays for the same items, so buying them and selling
--- them to a vendor is a sure profit. Shown in the ARL tab on the auction house
--- (SnipesTab.lua).
+-- Snipes: the auctions selling for less than a vendor pays for the same items,
+-- so buying them and selling them to a vendor is a sure profit. Shown in the
+-- ARL tab on the auction house (SnipesTab.lua).
 --
--- How: Auctionator's full scan asks the server for every auction at once
--- (C_AuctionHouse.ReplicateItems). The server's answer fires
--- REPLICATE_ITEM_LIST_UPDATE (a Blizzard event), and we read the same list
--- right then, alongside Auctionator, through Blizzard's API
--- (GetNumReplicateItems / GetReplicateItemInfo / GetReplicateItemLink), SLICE
--- auctions a frame. (0.21.0 waited for Auctionator's "done" callback first, and
--- on Forever the list was already gone by then: GetNumReplicateItems said 0.)
--- If the list changes or empties while we read, what was read is kept
--- (marked partial). Auctionator's public "done" callback
--- (Auctionator.API.v1.RegisterForDBUpdate) only starts a read when one is
--- still owed. What happened is kept in `char.diag` for /arl report. Auctionator is all rights
--- reserved: none of its code or internals is used. The vendor price is the
--- item's own sell price (GetItemInfo's 11th value); an auction counts when
--- count x vendor price - buyout >= the minimum profit (buyout only, never
--- bids, never your own auctions). Items whose data isn't loaded yet are asked
--- for and read again (RETRIES times, RETRY_WAIT apart).
+-- Where the auctions come from (all through Blizzard's C_AuctionHouse API;
+-- Auctionator is all rights reserved, none of its code or internals is used):
+--   1. Our own Scan (the panel's button, `/arl snipes scan`): an empty browse
+--      search (SendBrowseQuery), paged to the end (RequestMoreBrowseResults).
+--   2. Auctionator's own "Full Scan": with its "replicate scan" option off (its
+--      default, and what Forever players have), that is the same empty browse
+--      search, paged by Auctionator. Every browse result goes through our
+--      collector too (AUCTION_HOUSE_BROWSE_RESULTS_UPDATED / _ADDED), and when
+--      Auctionator's public "done" callback (Auctionator.API.v1.RegisterForDBUpdate)
+--      comes after at least PASSIVE_MIN items, that was a full scan: we take
+--      it. (0.21.0 / 0.21.1 only listened for the replicate list below, which
+--      this kind of scan never makes: nothing was found.)
+--   3. Auctionator's replicate scan (that option on): REPLICATE_ITEM_LIST_UPDATE,
+--      read at once through GetNumReplicateItems / GetReplicateItemInfo, SLICE
+--      a frame; exact auctions, kept even if the list goes away mid-read.
 --
--- Results, grouped per item (cheapest auctions first, most profit first), go
--- to `shared.snipeScans[realm]` (in SHARED_ONLY) so the tab shows the last
--- scan's after a /reload. Buying goes through Auctionator's Shopping tab
--- (MultiSearchExact), like Logistics: a listing may be gone by then.
+-- A browse row is one item: its lowest price (each) and the quantity listed.
+-- An item whose lowest price is under its vendor price (GetItemInfo's 11th
+-- value) by enough that all it lists could make the minimum profit is a
+-- candidate; then each candidate (most profit first,
+-- DETAIL_MAX of them) is looked up on its own (SendSearchQuery, price order,
+-- our own auctions apart: ITEM_ / COMMODITY_SEARCH_RESULTS_UPDATED), which
+-- gives the exact auctions under vendor price, without our own. A search that
+-- comes back empty is sent again (like Auctionator's own search scan does);
+-- one that never answers (DETAIL_WAIT) keeps the browse row ("approx").
+--
+-- Results, per item (cheapest auctions first, most profit first), go to
+-- `shared.snipeScans[realm]` (in SHARED_ONLY). Buying goes through
+-- Auctionator's Shopping tab (MultiSearchExact): a listing may be gone by then.
 local ADDON, ns = ...
 local ARLE = _G.ARLExtensions
 if not ARLE then
@@ -32,11 +39,18 @@ end
 local Lib, Items = ARLE.Lib, ARLE.Lib.Items
 local AH = ARLE.Bridge.Auctionator
 
-local SLICE = 1500 -- auctions read per frame
-local RETRIES = 3 -- passes over auctions whose item data wasn't loaded
+local SLICE = 1500 -- replicate auctions read per frame
+local RETRIES = 3 -- passes over items whose data wasn't loaded
 local RETRY_WAIT = 1.5 -- seconds between those passes
 local MAX_ROWS = 300 -- items kept
 local MAX_AUCTIONS = 25 -- auctions kept per item
+local PASSIVE_MIN = 1000 -- browse items seen before Auctionator's "done" counts as its full scan
+local PUMP = 0.2 -- seconds between our query steps
+local BROWSE_WAIT = 20 -- seconds without a browse page before our scan gives up on the rest
+local DETAIL_MAX = 80 -- candidates looked up one by one
+local DETAIL_WAIT = 8 -- seconds for one lookup's answer
+local DETAIL_TRIES = 3 -- sends of one lookup that comes back empty
+local DETAIL_PAGES = 3 -- pages of one item's auctions, while they're all still under vendor price
 
 local profitValues = {
   { value = 1, label = "Any profit" },
@@ -53,16 +67,17 @@ local F = {
   group = "Auctionator",
   extends = "Auctionator",
   command = "snipes",
-  commandArgs = "[read|list [n]]",
-  commandHelp = "auctions selling below vendor price, from Auctionator's last full scan",
-  mainHelp = "says what the last full scan found",
-  description = "After every Auctionator full scan, lists the auctions selling for less than a vendor pays for the "
-    .. "same items, so buying and vendoring them is a sure profit. Shown in the ARL tab on the auction house.",
+  commandArgs = "[scan|stop|read|list [n]]",
+  commandHelp = "auctions selling below vendor price, from a full scan (ours or Auctionator's)",
+  mainHelp = "says what the last scan found",
+  description = "Lists the auctions selling for less than a vendor pays for the same items, so buying and vendoring "
+    .. "them is a sure profit. Scan from its panel in the ARL tab on the auction house, or run Auctionator's full "
+    .. "scan: either fills the list.",
   options = {
     { type = "info", text = function(def) return def:GetStatus() end },
     { key = "minProfit", type = "select", label = "Smallest profit per auction worth listing", values = profitValues,
       default = 100, cmd = "min" },
-    { key = "chat", type = "boolean", label = "Tell me in chat what a full scan found", default = true, cmd = "chat" },
+    { key = "chat", type = "boolean", label = "Tell me in chat what a scan found", default = true, cmd = "chat" },
   },
 }
 
@@ -70,9 +85,19 @@ local S = {} -- what SnipesTab.lua reads
 ns.Snipes = S
 S.F = F
 
-local job = { running = false } -- the read in progress
+-- job: the work in progress. phase nil (idle), "browse" (our scan paging), "check" (vendor prices loading),
+-- "detail" (looking candidates up), "replicate" (reading the replicate list).
+local job = {}
 S.job = job
-local pending = nil -- GetTime() of a replicate answer not read yet
+local seen = {} -- browse results since the last new search: itemID -> { key, price, qty, own }
+local seenCount = 0
+local pendingReplicate = false
+
+local function Diag()
+  local d = type(F.char.diag) == "table" and F.char.diag or {}
+  F.char.diag = d
+  return d
+end
 
 local function Store()
   local all = type(F.shared.snipeScans) == "table" and F.shared.snipeScans or {}
@@ -93,13 +118,34 @@ function S.Hidden()
   return h
 end
 
+function S.Busy()
+  return job.phase ~= nil
+end
+
 local function Notify()
   if ns.SnipesTab then
     ns.SnipesTab.Refresh()
   end
 end
 
--- What a vendor pays for one: copper, 0 for nothing, nil while the item's data isn't loaded.
+local function MinProfit()
+  return math.max(1, tonumber(F.db.minProfit) or 100)
+end
+
+local function AHOpen()
+  return AuctionHouseFrame and AuctionHouseFrame:IsShown() and C_AuctionHouse ~= nil
+end
+
+local function Ready()
+  return Lib.Call(C_AuctionHouse.IsThrottledMessageSystemReady) ~= false
+end
+
+local function PriceSorts()
+  local e = Enum and Enum.AuctionHouseSortOrder
+  return e and { { sortOrder = e.Price, reverseSort = false } } or {}
+end
+
+-- What a vendor pays for one: copper, 0 for nothing, nil while the item's data isn't loaded (asked for).
 local sellMemo = {}
 local function VendorSell(id)
   local v = sellMemo[id]
@@ -109,6 +155,9 @@ local function VendorSell(id)
   local get = C_Item and C_Item.GetItemInfo or GetItemInfo
   local name, _, _, _, _, _, _, _, _, _, sell = Lib.Call(get, id)
   if not name then
+    if C_Item and C_Item.RequestLoadItemDataByID then
+      Lib.Call(C_Item.RequestLoadItemDataByID, id)
+    end
     return nil
   end
   v = Lib.Plain(sell) or 0
@@ -122,36 +171,23 @@ local function MyNames()
   return full, full and full:match("^(%S+)")
 end
 
-local function Diag()
-  local d = type(F.char.diag) == "table" and F.char.diag or {}
-  F.char.diag = d
-  return d
-end
+-------------------------------------------------------------------------------
+-- Results
+-------------------------------------------------------------------------------
 
-local function Finish(reason)
-  job.running = false
-  Diag().lastEnd = ("%s %s (%d of %d read)"):format(date("%H:%M:%S"), tostring(reason), job.index or 0,
-    job.total or 0)
-  if reason == "partial" then
-    job.partial = true
-    reason = "done"
-  end
-  if reason ~= "done" then
-    job.last = "stopped: " .. tostring(reason)
-    F:Debug("read stopped: %s", tostring(reason))
-    Notify()
-    return
-  end
-  -- per item, the most profit first
+-- hits = { { id, link, count, buyout, vendor, profit, approx } } -> rows per item, stored, said.
+local function Publish(hits, total, source, partial)
   local byItem = {}
-  for _, a in ipairs(job.hits) do
+  for _, a in ipairs(hits) do
     local row = byItem[a.id]
     if not row then
       row = { id = a.id, link = a.link, vendor = a.vendor, auctions = {}, count = 0, cost = 0, profit = 0 }
       byItem[a.id] = row
     end
+    row.link = row.link or a.link
+    row.approx = row.approx or a.approx
     row.auctions[#row.auctions + 1] = { count = a.count, buyout = a.buyout, unit = a.buyout / a.count,
-      profit = a.profit, link = a.link }
+      profit = a.profit, approx = a.approx }
     row.count, row.cost, row.profit = row.count + a.count, row.cost + a.buyout, row.profit + a.profit
   end
   local rows = {}
@@ -176,43 +212,400 @@ local function Finish(reason)
     rows[i] = nil
   end
   local s = Store()
-  s.at, s.total, s.rows, s.skipped = time(), job.total, rows, #job.retry
+  s.at, s.total, s.rows, s.source, s.partial = time(), total, rows, source, partial
   local profit = 0
   for _, row in ipairs(rows) do
     profit = profit + row.profit
   end
-  s.partial = job.partial and job.index or nil
-  job.last = ("%d items in %d auctions below vendor price, %s profit%s"):format(#rows, #job.hits,
-    Lib.FormatMoney(profit), job.partial and (" (the list went away after %d of %d auctions)"):format(job.index,
-    job.total) or "")
-  F:Debug("read done: %d auctions read, %s, %d without item data", job.total, job.last, #job.retry)
+  job.last = ("%d items below vendor price, %s profit%s"):format(#rows, Lib.FormatMoney(profit),
+    partial and " (partial)" or "")
+  Diag().lastEnd = ("%s %s: %s"):format(date("%H:%M:%S"), source, job.last)
+  F:Debug("published from %s: %s", source, job.last)
   if F.db.chat ~= false then
     if #rows > 0 then
       F:Print(("Snipes: %s. See the ARL tab on the auction house."):format(job.last))
     else
-      F:Print("Snipes: nothing below vendor price in this full scan.")
+      F:Print("Snipes: nothing below vendor price in this scan.")
     end
   end
   Notify()
 end
 
--- One auction: a hit when its buyout beats the vendor by the minimum profit; nil when its item isn't loaded.
-local function Check(i, minProfit, me, meShort)
+local function Stop(reason)
+  if job.phase then
+    F:Debug("stopped (%s) during %s", tostring(reason), job.phase)
+  end
+  job.phase = nil
+  job.query = nil
+  job.stopped = reason
+  Notify()
+end
+S.Stop = Stop
+
+-------------------------------------------------------------------------------
+-- Browse: collect, then candidates, then the lookups
+-------------------------------------------------------------------------------
+
+local function TakeBrowse(results)
+  if not Lib.Readable(results) then
+    return
+  end
+  for _, r in ipairs(results) do
+    local key = Lib.Readable(r) and r.itemKey
+    local id = Lib.Readable(key) and Lib.Plain(key.itemID)
+    local price, qty = Lib.Plain(r.minPrice), Lib.Plain(r.totalQuantity)
+    if id and price and price > 0 and qty and qty > 0 then
+      local old = seen[id]
+      if not old then
+        seenCount = seenCount + 1
+      end
+      if not old or price < old.price then
+        seen[id] = { price = price, qty = qty, own = Lib.Plain(r.containsOwnerItem) == true,
+          key = { itemID = id, itemLevel = Lib.Plain(key.itemLevel) or 0, itemSuffix = Lib.Plain(key.itemSuffix) or 0,
+            battlePetSpeciesID = Lib.Plain(key.battlePetSpeciesID) or 0 } }
+      end
+    end
+  end
+end
+
+local function StartDetail()
+  local list = {}
+  for _, c in ipairs(job.candidates) do
+    list[#list + 1] = c
+  end
+  table.sort(list, function(a, b)
+    return a.edge > b.edge
+  end)
+  for i = DETAIL_MAX + 1, #list do
+    -- (past the lookups: the browse row stands)
+    local c = list[i]
+    job.hits[#job.hits + 1] = { id = c.id, count = 1, buyout = c.price, vendor = c.vendor, profit = c.edge,
+      approx = true }
+    list[i] = nil
+  end
+  job.queue, job.phase, job.done, job.total = list, "detail", 0, #list
+  F:Debug("%d candidates to look up", #list)
+  Notify()
+end
+
+-- Every item seen: those under vendor price become candidates; unloaded items are read again (RETRIES).
+local function Check()
+  local minProfit = MinProfit()
+  local waiting = {}
+  for id, s in pairs(job.pool) do
+    local vendor = VendorSell(id)
+    if vendor == nil then
+      waiting[id] = s
+    elseif vendor > s.price and (vendor - s.price) * s.qty >= minProfit then
+      -- (each one's edge times all listed: the most it could be; the lookup finds the real auctions)
+      job.candidates[#job.candidates + 1] = { id = id, key = s.key, price = s.price, qty = s.qty, vendor = vendor,
+        edge = vendor - s.price }
+    end
+  end
+  job.pool = waiting
+  job.tries = (job.tries or 0) + 1
+  if next(waiting) and job.tries < RETRIES then
+    F:After(RETRY_WAIT, function()
+      if job.phase == "check" then
+        Check()
+      end
+    end)
+    return
+  end
+  local left = 0
+  for _ in pairs(waiting) do
+    left = left + 1
+  end
+  job.skipped = left
+  F:Debug("%d of %d items under vendor price (%d without item data)", #job.candidates, job.seen, left)
+  if #job.candidates == 0 then
+    job.phase = nil
+    Publish({}, job.seen, job.source)
+  elseif AHOpen() and C_AuctionHouse.SendSearchQuery then
+    StartDetail()
+  else
+    for _, c in ipairs(job.candidates) do
+      job.hits[#job.hits + 1] = { id = c.id, count = 1, buyout = c.price, vendor = c.vendor, profit = c.edge,
+        approx = true }
+    end
+    job.phase = nil
+    Publish(job.hits, job.seen, job.source)
+  end
+end
+
+-- A full browse is in (ours, or Auctionator's): from here on it's ours to finish.
+local function FromBrowse(source)
+  local pool = {}
+  for id, s in pairs(seen) do
+    pool[id] = s
+  end
+  job.phase, job.source, job.pool, job.seen = "check", source, pool, seenCount
+  job.candidates, job.hits, job.tries, job.skipped = {}, {}, 0, 0
+  Diag().lastBrowse = ("%s %s: %d items"):format(date("%H:%M:%S"), source, seenCount)
+  F:Debug("%s: %d items seen", source, seenCount)
+  Notify()
+  Check()
+end
+
+-- One candidate's own auctions, read: hits under vendor price, ours left out. Returns whether to page on.
+local function ReadDetail(q)
+  local c, minProfit, more = q.c, MinProfit(), true
+  local me, meShort = MyNames()
+  if q.commodity then
+    local n = Lib.Call(C_AuctionHouse.GetNumCommoditySearchResults, c.id) or 0
+    for i = q.read + 1, n do
+      local r = Lib.Call(C_AuctionHouse.GetCommoditySearchResultInfo, c.id, i)
+      if Lib.Readable(r) then
+        local unit, qty = Lib.Plain(r.unitPrice), Lib.Plain(r.quantity)
+        local mine = Lib.Plain(r.numOwnerItems) or (Lib.Plain(r.containsOwnerItem) and qty) or 0
+        if unit and qty then
+          qty = qty - math.min(qty, mine)
+          if unit >= c.vendor then
+            more = false
+          elseif qty > 0 and (c.vendor - unit) * qty >= minProfit then
+            q.hits[#q.hits + 1] = { id = c.id, count = qty, buyout = unit * qty, vendor = c.vendor,
+              profit = (c.vendor - unit) * qty }
+          end
+        end
+      end
+    end
+    q.read = n
+  else
+    local n = Lib.Call(C_AuctionHouse.GetNumItemSearchResults, c.key) or 0
+    for i = q.read + 1, n do
+      local r = Lib.Call(C_AuctionHouse.GetItemSearchResultInfo, c.key, i)
+      if Lib.Readable(r) then
+        local buyout, qty = Lib.Plain(r.buyoutAmount), Lib.Plain(r.quantity) or 1
+        local own = Lib.Plain(r.containsOwnerItem) == true
+        local owners = Lib.Readable(r.owners) and r.owners
+        if owners and not own then
+          for _, o in ipairs(owners) do
+            o = Lib.Plain(o)
+            if o == me or o == meShort then
+              own = true
+            end
+          end
+        end
+        if buyout and buyout > 0 and qty > 0 then
+          if buyout / qty >= c.vendor then
+            more = false
+          elseif not own and c.vendor * qty - buyout >= minProfit then
+            q.hits[#q.hits + 1] = { id = c.id, count = qty, buyout = buyout, vendor = c.vendor,
+              profit = c.vendor * qty - buyout, link = Lib.Plain(r.itemLink) }
+          end
+        end
+      end
+    end
+    q.read = n
+  end
+  return more
+end
+
+local function DetailDone(q, ok)
+  if ok then
+    for _, h in ipairs(q.hits) do
+      job.hits[#job.hits + 1] = h
+    end
+  else
+    local c = q.c
+    F:Debug("no answer for item %d: keeping its browse row", c.id)
+    job.hits[#job.hits + 1] = { id = c.id, count = 1, buyout = c.price, vendor = c.vendor, profit = c.edge,
+      approx = true }
+  end
+  job.query = nil
+  job.done = job.done + 1
+  Notify()
+end
+
+local function SendDetail(q)
+  q.tries = q.tries + 1
+  q.read, q.hits, q.pages = 0, {}, 1
+  local ok = pcall(C_AuctionHouse.SendSearchQuery, q.c.key, PriceSorts(), true)
+  q.sentAt = GetTime()
+  if not ok then
+    F:Debug("SendSearchQuery failed for item %d", q.c.id)
+    DetailDone(q, false)
+  end
+end
+
+local function NextDetail()
+  local c = table.remove(job.queue, 1)
+  if not c then
+    job.phase = nil
+    Publish(job.hits, job.seen, job.source)
+    return
+  end
+  local status = C_AuctionHouse.GetItemCommodityStatus and Lib.Call(C_AuctionHouse.GetItemCommodityStatus, c.id)
+  local commodity = Enum and Enum.ItemCommodityStatus and status == Enum.ItemCommodityStatus.Commodity
+  job.query = { c = c, commodity = commodity, tries = 0 }
+  SendDetail(job.query)
+end
+
+-- ITEM_ / COMMODITY_SEARCH_RESULTS_UPDATED for the item being looked up.
+local function OnDetail(event, arg)
+  local q = job.query
+  if job.phase ~= "detail" or not q then
+    return
+  end
+  local id = event == "COMMODITY_SEARCH_RESULTS_UPDATED" and Lib.Plain(arg)
+    or (Lib.Readable(arg) and Lib.Plain(arg.itemID))
+  if id ~= q.c.id then
+    return
+  end
+  q.commodity = event == "COMMODITY_SEARCH_RESULTS_UPDATED"
+  local key = q.commodity and Lib.Call(C_AuctionHouse.MakeItemKey, id) or q.c.key
+  local has = Lib.Call(C_AuctionHouse.HasSearchResults, key)
+  local full, qty
+  if q.commodity then
+    full = Lib.Call(C_AuctionHouse.HasFullCommoditySearchResults, id)
+    qty = Lib.Call(C_AuctionHouse.GetCommoditySearchResultsQuantity, id)
+  else
+    full = Lib.Call(C_AuctionHouse.HasFullItemSearchResults, q.c.key)
+    qty = Lib.Call(C_AuctionHouse.GetItemSearchResultsQuantity, q.c.key)
+  end
+  if has == false or (has and full == false and qty == 0) then
+    -- (an empty answer the server sometimes gives: ask again)
+    q.resend = q.tries < DETAIL_TRIES
+    if not q.resend then
+      DetailDone(q, false)
+    end
+    return
+  end
+  local more = ReadDetail(q)
+  if more and full == false and q.pages < DETAIL_PAGES then
+    q.pages = q.pages + 1
+    q.more = true
+    q.sentAt = GetTime()
+    return
+  end
+  DetailDone(q, true)
+end
+
+-- Our scan's browse pages and the lookups, one step at a time (the throttle decides).
+local function Pump()
+  if job.phase == "browse" then
+    if not AHOpen() then
+      Stop("the auction house closed")
+      return
+    end
+    if job.more and Ready() then
+      job.more = false
+      job.pageAt = GetTime()
+      Lib.Call(C_AuctionHouse.RequestMoreBrowseResults)
+    elseif GetTime() - (job.pageAt or 0) > BROWSE_WAIT then
+      F:Debug("no browse page for %d s: taking what came", BROWSE_WAIT)
+      FromBrowse("your scan (cut short)")
+    end
+  elseif job.phase == "detail" then
+    if not AHOpen() then
+      -- (the rest keep their browse rows)
+      for _, c in ipairs(job.queue) do
+        job.hits[#job.hits + 1] = { id = c.id, count = 1, buyout = c.price, vendor = c.vendor, profit = c.edge,
+          approx = true }
+      end
+      if job.query then
+        DetailDone(job.query, false)
+      end
+      job.queue = {}
+      job.phase = nil
+      Publish(job.hits, job.seen, job.source, true)
+      return
+    end
+    local q = job.query
+    if q then
+      if (q.resend or q.more) and Ready() then
+        if q.resend then
+          q.resend = false
+          SendDetail(q)
+        else
+          q.more = false
+          q.sentAt = GetTime()
+          if q.commodity then
+            Lib.Call(C_AuctionHouse.RequestMoreCommoditySearchResults, q.c.id)
+          else
+            Lib.Call(C_AuctionHouse.RequestMoreItemSearchResults, q.c.key)
+          end
+        end
+      elseif GetTime() - q.sentAt > DETAIL_WAIT then
+        if q.read > 0 then
+          DetailDone(q, true)
+        elseif q.tries < DETAIL_TRIES and Ready() then
+          SendDetail(q)
+        else
+          DetailDone(q, false)
+        end
+      end
+    elseif Ready() then
+      NextDetail()
+    end
+  end
+end
+
+-- Browse events: always collected (Auctionator's full scan is one); our scan also pages on.
+local function OnBrowse(event, ...)
+  if event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" then
+    wipe(seen)
+    seenCount = 0
+    TakeBrowse(Lib.Call(C_AuctionHouse.GetBrowseResults))
+  elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
+    TakeBrowse(...)
+  elseif event == "AUCTION_HOUSE_BROWSE_FAILURE" and job.phase == "browse" then
+    F:Debug("browse failure: taking what came")
+    FromBrowse("your scan (cut short)")
+    return
+  end
+  if job.phase == "browse" then
+    job.pageAt = GetTime()
+    if Lib.Call(C_AuctionHouse.HasFullBrowseResults) == false then
+      job.more = true
+    else
+      FromBrowse("your scan")
+    end
+    Notify()
+  end
+end
+
+function S.Scan()
+  if job.phase then
+    return false, "a scan is already running"
+  end
+  if not AHOpen() then
+    return false, "open the auction house first"
+  end
+  wipe(seen)
+  seenCount = 0
+  local ok = pcall(C_AuctionHouse.SendBrowseQuery, { searchString = "", sorts = {}, filters = {},
+    itemClassFilters = {} })
+  if not ok then
+    return false, "the auction house refused the search"
+  end
+  job.phase, job.more, job.pageAt, job.stopped = "browse", false, GetTime(), nil
+  Diag().lastScan = date("%H:%M:%S")
+  F:Debug("our scan started")
+  Notify()
+  return true
+end
+
+-- Seen in the current browse (for the panel while scanning).
+function S.Seen()
+  return seenCount
+end
+
+-------------------------------------------------------------------------------
+-- The replicate list (Auctionator's "replicate scan" option)
+-------------------------------------------------------------------------------
+
+local function CheckReplicate(i, minProfit, me, meShort)
   local info = { Lib.Call(C_AuctionHouse.GetReplicateItemInfo, i) }
   local count, buyout, owner, ownerFull, id = info[3], info[10], info[14], info[15], info[17]
-  count, buyout, id = Lib.Plain(count), Lib.Plain(buyout), Lib.Plain(id)
   if not (id and count and count > 0 and buyout and buyout > 0) then
     return true
   end
-  owner, ownerFull = Lib.Plain(owner), Lib.Plain(ownerFull)
   if owner and (owner == me or owner == meShort or ownerFull == me) then
     return true
   end
   local vendor = VendorSell(id)
   if vendor == nil then
-    if C_Item and C_Item.RequestLoadItemDataByID then
-      Lib.Call(C_Item.RequestLoadItemDataByID, id)
-    end
     return nil
   end
   local profit = vendor * count - buyout
@@ -223,83 +616,81 @@ local function Check(i, minProfit, me, meShort)
   return true
 end
 
-local Step
-local function Retry()
-  if not job.running then
+local ReplicateStep
+local function ReplicateRetry()
+  if job.phase ~= "replicate" then
     return
   end
   if Lib.Call(C_AuctionHouse.GetNumReplicateItems) ~= job.total then
-    F:Debug("the list changed before the second pass: keeping what was read")
-    Finish("partial")
+    job.phase = nil
+    Publish(job.hits, job.total, job.source, true)
     return
   end
   local list = job.retry
   job.retry = {}
-  local minProfit = math.max(1, tonumber(F.db.minProfit) or 100)
-  local me, meShort = MyNames()
+  local minProfit, me, meShort = MinProfit(), MyNames()
   for _, i in ipairs(list) do
-    if not Check(i, minProfit, me, meShort) then
+    if not CheckReplicate(i, minProfit, me, meShort) then
       job.retry[#job.retry + 1] = i
     end
   end
   job.tries = job.tries + 1
   if #job.retry > 0 and job.tries < RETRIES then
-    F:After(RETRY_WAIT, Retry)
+    F:After(RETRY_WAIT, ReplicateRetry)
   else
-    Finish("done")
+    job.phase = nil
+    Publish(job.hits, job.total, job.source)
   end
 end
 
-Step = function()
-  if not job.running then
+ReplicateStep = function()
+  if job.phase ~= "replicate" then
     return
   end
   if Lib.Call(C_AuctionHouse.GetNumReplicateItems) ~= job.total then
-    F:Debug("the list changed or went away at %d of %d: keeping what was read", job.index, job.total)
-    Finish("partial")
+    F:Debug("the replicate list changed at %d of %d: keeping what was read", job.done, job.total)
+    job.phase = nil
+    Publish(job.hits, job.done, job.source, true)
     return
   end
-  local minProfit = math.max(1, tonumber(F.db.minProfit) or 100)
-  local me, meShort = MyNames()
-  local stop = math.min(job.total, job.index + SLICE)
-  for i = job.index, stop - 1 do
-    if not Check(i, minProfit, me, meShort) then
+  local minProfit, me, meShort = MinProfit(), MyNames()
+  local stop = math.min(job.total, job.done + SLICE)
+  for i = job.done, stop - 1 do
+    if not CheckReplicate(i, minProfit, me, meShort) then
       job.retry[#job.retry + 1] = i
     end
   end
-  job.index = stop
+  job.done = stop
   Notify()
-  if job.index < job.total then
-    F:After(0, Step)
+  if job.done < job.total then
+    F:After(0, ReplicateStep)
   elseif #job.retry > 0 then
-    F:Debug("%d auctions wait for their item data", #job.retry)
     job.tries = 0
-    F:After(RETRY_WAIT, Retry)
+    F:After(RETRY_WAIT, ReplicateRetry)
   else
-    Finish("done")
+    job.phase = nil
+    Publish(job.hits, job.total, job.source)
   end
 end
 
--- Read the replicate list the client holds (Auctionator's last full scan this session).
+-- Read the replicate list the client holds now.
 function S.Read(why)
-  if job.running then
-    return false, "already reading"
+  if job.phase then
+    return false, "a scan is already running"
   end
   if not (C_AuctionHouse and C_AuctionHouse.GetNumReplicateItems) then
-    return false, "this client has no full scan list"
+    return false, "this client has no replicate list"
   end
-  local n = Lib.Plain(Lib.Call(C_AuctionHouse.GetNumReplicateItems)) or 0
+  local n = Lib.Call(C_AuctionHouse.GetNumReplicateItems) or 0
   Diag().lastTry = ("%s %s: %d auctions"):format(date("%H:%M:%S"), tostring(why), n)
   if n <= 0 then
-    return false, "the game holds no full scan list right now: run a full scan in Auctionator (its Auctionator "
-      .. "tab) with Snipes on, and it's read as the auctions arrive"
+    return false, "the game holds no replicate list (that's only Auctionator's \"replicate scan\" option): use Scan"
   end
-  pending = nil
-  job.running, job.index, job.total, job.hits, job.retry, job.tries = true, 0, n, {}, {}, 0
-  job.partial = false
-  F:Debug("reading %d auctions (%s)", n, tostring(why))
+  pendingReplicate = false
+  job.phase, job.source, job.done, job.total, job.hits, job.retry, job.tries = "replicate", "the replicate list", 0,
+    n, {}, {}, 0
   Notify()
-  F:After(0, Step)
+  F:After(0, ReplicateStep)
   return true
 end
 
@@ -308,34 +699,53 @@ end
 -------------------------------------------------------------------------------
 
 -- Auctionator keeps every callback for the session (there's no unregister), so it's registered once and does
--- nothing while the feature is off or no full scan answer is waiting.
+-- nothing while the feature is off.
 local dbHooked = false
 
+local function OnAuctionatorDone()
+  if not F._active or job.phase then
+    return
+  end
+  if pendingReplicate then
+    S.Read("Auctionator's done")
+  elseif seenCount >= PASSIVE_MIN then
+    F:Debug("Auctionator finished a search over %d items: its full scan", seenCount)
+    FromBrowse("Auctionator's full scan")
+    wipe(seen)
+    seenCount = 0
+  end
+end
+
 function F:OnEnable()
-  job.running, pending = false, nil
+  job.phase, job.query, pendingReplicate = nil, nil, false
   wipe(sellMemo)
+  wipe(seen)
+  seenCount = 0
   if not dbHooked and AH.API() then
     dbHooked = AH.OnDBUpdate(function()
-      if F._active and pending and not job.running then
-        F:Debug("Auctionator finished its full scan and ours wasn't read yet: reading it")
-        S.Read("Auctionator's done")
-      end
+      ARLE.Debug.Call(F, OnAuctionatorDone)
+    end)
+  end
+  for _, ev in ipairs({ "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED",
+    "AUCTION_HOUSE_BROWSE_FAILURE" }) do
+    self:On(ev, function(_, event, ...)
+      OnBrowse(event, ...)
+    end)
+  end
+  for _, ev in ipairs({ "ITEM_SEARCH_RESULTS_UPDATED", "COMMODITY_SEARCH_RESULTS_UPDATED" }) do
+    self:On(ev, function(_, event, arg)
+      OnDetail(event, arg)
     end)
   end
   self:On("REPLICATE_ITEM_LIST_UPDATE", function()
-    local n = Lib.Plain(Lib.Call(C_AuctionHouse.GetNumReplicateItems)) or 0
+    local n = Lib.Call(C_AuctionHouse.GetNumReplicateItems) or 0
     Diag().lastAnswer = ("%s %d auctions"):format(date("%H:%M:%S"), n)
-    F:Debug("the server answered a full scan (%d auctions): reading it now", n)
-    if job.running and job.total == n then
-      return -- (the same answer again)
+    if job.phase == "replicate" and job.total == n then
+      return
     end
-    if job.running then
-      Finish("a new full scan")
-    end
-    pending = GetTime()
-    local ok, err = S.Read("the server's answer")
-    if not ok then
-      F:Debug("can't read the server's answer: %s", tostring(err))
+    pendingReplicate = true
+    if not job.phase then
+      S.Read("the server's answer")
     end
   end)
   self:On("AUCTION_HOUSE_SHOW", function()
@@ -344,18 +754,19 @@ function F:OnEnable()
     end
   end)
   self:On("AUCTION_HOUSE_CLOSED", function()
-    pending = nil
-    if job.running then
-      Finish("the auction house closed")
+    pendingReplicate = false
+    if job.phase == "browse" or job.phase == "replicate" then
+      Stop("the auction house closed")
     end
   end)
+  self:Ticker(PUMP, Pump)
   if ns.SnipesTab then
     ns.SnipesTab.Enable()
   end
 end
 
 function F:OnDisable()
-  job.running, pending = false, nil
+  job.phase, job.query, pendingReplicate = nil, nil, false
   if ns.SnipesTab then
     ns.SnipesTab.Disable()
   end
@@ -370,7 +781,20 @@ function F:main()
 end
 
 F.commands = {
-  { name = "read", help = "reads Auctionator's last full scan again (auction house open)", run = function(self)
+  { name = "scan", help = "scans the whole auction house for snipes (auction house open)", run = function(self)
+    local ok, err = S.Scan()
+    if not ok then
+      self:Print("can't scan: " .. err .. ".")
+    end
+  end },
+  { name = "stop", help = "stops a scan", run = function(self)
+    if job.phase then
+      Stop("stopped")
+    else
+      self:Print("no scan is running.")
+    end
+  end },
+  { name = "read", help = "reads Auctionator's replicate list (its \"replicate scan\" option)", run = function(self)
     local ok, err = S.Read("command")
     if not ok then
       self:Print("can't: " .. err .. ".")
@@ -380,10 +804,10 @@ F.commands = {
     local s = Store()
     local n = tonumber(rest) or 5
     if #s.rows == 0 then
-      self:Print("nothing yet: run a full scan in Auctionator with the auction house open.")
+      self:Print("nothing yet: open the auction house and Scan on the Snipes panel (ARL tab).")
       return
     end
-    self:Print(("last full scan %s ago:"):format(Lib.FormatDuration(time() - s.at)))
+    self:Print(("last scan %s ago:"):format(Lib.FormatDuration(time() - s.at)))
     for i, row in ipairs(s.rows) do
       if i > n then
         break
@@ -394,21 +818,29 @@ F.commands = {
   end },
 }
 
+-- What's happening, for the panel and the status line.
+function S.Doing()
+  if job.phase == "browse" then
+    return ("Scanning the auction house: %d items so far"):format(seenCount)
+  elseif job.phase == "check" then
+    return ("Checking %d items against vendor prices"):format(job.seen or 0)
+  elseif job.phase == "detail" then
+    return ("Looking up the cheap ones: %d / %d"):format(job.done or 0, math.max(job.total or 0, 1))
+  elseif job.phase == "replicate" then
+    return ("Reading the full scan: %d / %d auctions"):format(job.done or 0, math.max(job.total or 0, 1))
+  end
+end
+
 function F:GetStatus()
-  if not AH.API() then
-    return "Active · waiting for Auctionator"
-  end
-  if job.running then
-    return ("Active · reading the full scan: %d of %d"):format(job.index or 0, math.max(job.total or 0, 1))
-  end
-  if pending then
-    return "Active · the server answered a full scan: waiting for Auctionator to finish"
+  local doing = S.Doing()
+  if doing then
+    return "Active · " .. doing
   end
   local s = Store()
   if not s.at or s.at == 0 then
-    return "Active · no full scan yet: run one in Auctionator (its Auctionator tab)"
+    return "Active · no scan yet: auction house, ARL tab, Snipes, Scan (or Auctionator's full scan)"
   end
-  return ("Active · last full scan %s ago%s"):format(Lib.FormatDuration(time() - s.at),
+  return ("Active · last scan %s ago%s"):format(Lib.FormatDuration(time() - s.at),
     job.last and (" · " .. job.last) or (" · " .. #s.rows .. " items"))
 end
 
@@ -416,13 +848,14 @@ function F:ReportDetails()
   local s = Store()
   local d = type(F.char.diag) == "table" and F.char.diag or {}
   return {
-    ("Auctionator API: %s, DB callback: %s"):format(AH.API() and "yes" or "no", dbHooked and "yes" or "no"),
-    ("Server's last full scan answer: %s"):format(tostring(d.lastAnswer or "none seen")),
-    ("Last read try: %s · last end: %s"):format(tostring(d.lastTry or "-"), tostring(d.lastEnd or "-")),
-    ("Replicate list now: %s auctions"):format(tostring(C_AuctionHouse and Lib.Call(C_AuctionHouse.GetNumReplicateItems))),
-    ("Last read: %s, %d auctions, %d items, %d without item data"):format(
-      s.at and s.at > 0 and date("%Y-%m-%d %H:%M", s.at) or "never", s.total or 0, #s.rows, s.skipped or 0),
-    "Last: " .. tostring(job.last or "-"),
+    ("Auctionator API: %s, done callback: %s"):format(AH.API() and "yes" or "no", dbHooked and "yes" or "no"),
+    ("Now: %s · browse items seen %d"):format(S.Doing() or "idle", seenCount),
+    ("Last own scan started: %s · last full browse taken: %s"):format(tostring(d.lastScan or "-"),
+      tostring(d.lastBrowse or "-")),
+    ("Replicate answer: %s · read try: %s"):format(tostring(d.lastAnswer or "-"), tostring(d.lastTry or "-")),
+    ("Last result: %s"):format(tostring(d.lastEnd or "-")),
+    ("Stored: %s, %d items seen, %d rows, from %s"):format(s.at and s.at > 0 and date("%Y-%m-%d %H:%M", s.at)
+      or "never", s.total or 0, #s.rows, tostring(s.source or "-")),
   }
 end
 
